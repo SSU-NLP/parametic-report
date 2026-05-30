@@ -20,9 +20,11 @@ config_path() { "$PYTHON_BIN" "$CONFIG_GET" "$CONFIG_PATH" "$1" --path-root "$RE
 
 DATASET_NAME="${1:-$(config_get data.dataset_name)}"
 LANGUAGE_ARG="${2:-$(config_join data.languages " ")}"
-TOKENIZER_PATH="${3:-$(config_path data.tokenizer_path)}"
+TOKENIZER_PATH="${3:-$(config_get data.tokenizer_path)}"
 
-if [[ "$TOKENIZER_PATH" != /* ]]; then
+# Local tokenizer directories are resolved relative to the repo. Hugging Face IDs
+# such as Qwen/Qwen3-8B are passed through unchanged.
+if [[ "$TOKENIZER_PATH" != /* && -e "$REPO_ROOT/$TOKENIZER_PATH" ]]; then
     TOKENIZER_PATH="$REPO_ROOT/$TOKENIZER_PATH"
 fi
 
