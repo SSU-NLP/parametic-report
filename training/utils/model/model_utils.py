@@ -3,6 +3,7 @@
 
 # DeepSpeed Team
 import os
+from dotenv import load_dotenv
 import math
 import torch
 from transformers import (
@@ -10,9 +11,12 @@ from transformers import (
     AutoModel,
 )
 from huggingface_hub import snapshot_download
-from transformers.deepspeed import HfDeepSpeedConfig
+from transformers.integrations.deepspeed import HfDeepSpeedConfig
 
 from .reward_model import RewardModel
+
+load_dotenv()
+hf_token = os.getenv("HF_TOKEN")
 
 
 def create_hf_model(
@@ -24,7 +28,8 @@ def create_hf_model(
     disable_dropout=False,
     token=None,
 ):
-    model_config = AutoConfig.from_pretrained(model_name_or_path)
+    token = token or hf_token
+    model_config = AutoConfig.from_pretrained(model_name_or_path, token=token)
     if disable_dropout:
         model_config.dropout = 0.0
     # Note: dschf is defined in function scope to avoid global effects
@@ -45,7 +50,7 @@ def create_hf_model(
         )
 
     model.config.end_token_id = tokenizer.eos_token_id
-    model.config.pad_token_id = model.config.eos_token_id
+    model.config.pad_token_id = tokenizer.pad_token_id or tokenizer.eos_token_id
     model.resize_token_embeddings(
         int(8 * math.ceil(len(tokenizer) / 8.0))
     )  # make the vocab size multiple of 8
@@ -60,7 +65,9 @@ def create_critic_model(
     num_padding_at_beginning=0,
     rlhf_training=False,
     disable_dropout=False,
+    token=None,
 ):
+    token = token or hf_token
     # OPT model family always put a padding token at the beginning of the sequence,
     # we did not see this in other models but not sure if it is a general rule
     critic_model = create_hf_model(
@@ -70,6 +77,7 @@ def create_critic_model(
         ds_config,
         rlhf_training,
         disable_dropout,
+        token=token,
     )
     critic_model = RewardModel(
         critic_model, tokenizer, num_padding_at_beginning=num_padding_at_beginning
@@ -77,7 +85,7 @@ def create_critic_model(
 
     if rlhf_training:
         if not os.path.isdir(model_name_or_path):
-            model_name_or_path = snapshot_download(model_name_or_path)
+            model_name_or_path = snapshot_download(model_name_or_path, token=token)
         # critic model needs to load the weight here
         model_ckpt_path = os.path.join(model_name_or_path, "pytorch_model.bin")
         assert os.path.exists(

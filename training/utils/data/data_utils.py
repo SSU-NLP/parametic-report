@@ -9,13 +9,22 @@ import torch
 from torch.utils.data import Dataset, Subset, ConcatDataset
 from torch.nn.utils.rnn import pad_sequence
 import torch.nn.functional as F
-from datasets import load_dataset
+from datasets import load_dataset as hf_load_dataset
+from dotenv import load_dotenv
 import numpy as np
 import os
 import hashlib
 from itertools import chain
 from . import raw_datasets
 import copy
+
+load_dotenv()
+hf_token = os.getenv("HF_TOKEN")
+
+
+def load_dataset(*args, **kwargs):
+    kwargs.setdefault("token", hf_token)
+    return hf_load_dataset(*args, **kwargs)
 
 def get_raw_dataset(dataset_name, output_path, seed, local_rank):
     

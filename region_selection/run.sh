@@ -1,64 +1,37 @@
 #!/bin/bash
+set -euo pipefail
 
-# Array of models and their corresponding paths
-declare -A model_paths
-model_paths["llama-3.1-8b"]="meta-llama/Meta-Llama-3.1-8B-Instruct"
-model_paths["codellama-7b"]="meta-llama/CodeLlama-7b-Instruct-hf"
-model_paths["llama3.2-3b"]="meta-llama/Llama-3.2-3B-Instruct"
-# model_paths["codellama-13b"]="meta-llama/CodeLlama-13b-Instruct-hf"
+SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
+REPO_ROOT="$( cd "$SCRIPT_DIR/.." &> /dev/null && pwd )"
+CONFIG_PATH="${CONFIG_PATH:-$REPO_ROOT/config.json}"
+CONFIG_GET="$REPO_ROOT/scripts/config_get.py"
+if [[ -x "$REPO_ROOT/.venv/bin/python" ]]; then
+    PYTHON_BIN="$REPO_ROOT/.venv/bin/python"
+else
+    PYTHON_BIN="python"
+fi
 
-# Array of k values
-k_values=(0.005 0.01 0.03 0.05)
+config_get() { "$PYTHON_BIN" "$CONFIG_GET" "$CONFIG_PATH" "$1"; }
+config_join() { "$PYTHON_BIN" "$CONFIG_GET" "$CONFIG_PATH" "$1" --join "$2"; }
+config_json() { "$PYTHON_BIN" "$CONFIG_GET" "$CONFIG_PATH" "$1" --json; }
+config_path() { "$PYTHON_BIN" "$CONFIG_GET" "$CONFIG_PATH" "$1" --path-root "$REPO_ROOT"; }
 
-# Array of programming languages
-languages=("bash" "c#" "c++" "go" "java" "javascript" "julia" "ruby" "rust" "typescript")
+MODEL_NAME="$(config_get region_selection.model_name)"
+MODEL_PATH="$(config_get region_selection.original_model_path)"
+MODEL_OUTPUT_NAME="${MODEL_PATH##*/}"
+INPUT_ROOT="$(config_path region_selection.input_root)"
+REGION_OUTPUT_ROOT="$(config_path region_selection.output_root)"
+LANGUAGE_LIST_JSON="$(config_json data.languages)"
+K_VALUES_ARG="$(config_join region_selection.k_values " ")"
+SAMPLE_LIST_JSON="$(config_json region_selection.sample_list)"
 
-# Function to join array elements with commas, excluding a specific element
-join_array() {
-    local exclude=$1
-    shift
-    local result=()
-    for element in "$@"; do
-        if [[ "$element" != "$exclude" ]]; then
-            result+=("\"$element\"")
-        fi
-    done
-    local IFS=,
-    echo "'[${result[*]}]'"
-}
+read -r -a K_VALUES <<< "$K_VALUES_ARG"
 
+INPUT_DIR="$INPUT_ROOT/$MODEL_OUTPUT_NAME"
+mkdir -p "$REGION_OUTPUT_ROOT"
+cd "$REGION_OUTPUT_ROOT"
 
-# Loop through models
-for model in "${!model_paths[@]}"; do
-    model_path="${model_paths[$model]}"
-    input_dir="/data_x/junkim100/code-spot/training/further_training/${model_path##*/}"
-
-    # Loop through k values
-    for k in "${k_values[@]}"; do
-        # # Extract accumulated core linguistic region
-        # echo Executing: python extract_accumulated_core_linguistic_region.py --model_name="$model" --original_model_path="$model_path" --k="$k" --input_dir="$input_dir"
-        # python extract_accumulated_core_linguistic_region.py --model_name="$model" --original_model_path="$model_path" --k="$k" --input_dir="$input_dir"
-        # echo "////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////"
-
-        # # Extract spot for code
-        # echo Executing: python extract_spot.py --model_name="$model" --original_model_path="$model_path" --core_path "/data_x/junkim100/code-spot/region_selection/code-region/$model/top$k" --instruct_path "/data_x/junkim100/code-spot/region_selection/${model_path##*/}" --k="$k" --input_dir="$input_dir" --code_or_lang "code"
-        # python extract_spot.py --model_name="$model" --original_model_path="$model_path" --core_path "/data_x/junkim100/code-spot/region_selection/code-region/$model/top$k" --instruct_path "/data_x/junkim100/code-spot/region_selection/${model_path##*/}" --k="$k" --input_dir="$input_dir" --code_or_lang "code"
-        # echo "////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////"
-
-        # Loop through languages
-        for lang in "${languages[@]}"; do
-            # Create a comma-separated list of other languages
-            other_langs=$(join_array "$lang" "${languages[@]}")
-
-            # Extract accumulated monolingual region
-            # echo Executing: python extract_accumulated_monolingual_region.py --model_name="$model" --original_model_path="$model_path" --k="$k" --input_dir="$input_dir" --language_base "$lang" --language_others \'"$other_langs"\'
-            # python extract_accumulated_monolingual_region.py --model_name="$model" --original_model_path="$model_path" --k="$k" --input_dir="$input_dir" --language_base "$lang" --language_others $other_langs
-            # echo "////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////"
-
-            # Extract spot for language
-            echo
-            python extract_spot.py --model_name="$model" --original_model_path="$model_path" --core_path "/data_x/junkim100/code-spot/region_selection/lang-region/$model/$lang/top$k" --instruct_path "/data_x/junkim100/code-spot/region_selection/${model_path##*/}" --k="$k" --input_dir="$input_dir" --code_or_lang "$lang"
-            echo "////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////"
-        done
-    done
+for k in "${K_VALUES[@]}"; do
+    "$PYTHON_BIN" "$SCRIPT_DIR/extract_accumulated_core_linguistic_region.py"         --model_name="$MODEL_NAME"         --original_model_path="$MODEL_PATH"         --language_list="$LANGUAGE_LIST_JSON"         --sample_list="$SAMPLE_LIST_JSON"         --k="$k"         --input_dir="$INPUT_DIR"
+    echo "////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////"
 done

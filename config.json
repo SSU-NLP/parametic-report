@@ -1,0 +1,68 @@
+{
+  "data": {
+    "dataset_name": "tiny-codes-java-full",
+    "hf_dataset_name": "nampdn-ai/tiny-codes",
+    "total_examples": 1630000,
+    "train_ratio": 0.8,
+    "languages": [
+      "java"
+    ],
+    "tokenizer_path": "data_preprocess/tokenizers/llama-3.2",
+    "preprocess_seq_length": 2048,
+    "preprocess_num_workers": 16,
+    "do_keep_newlines": true,
+    "do_split_functions": false
+  },
+  "training": {
+    "gpu_ids": [
+      0
+    ],
+    "model_name_or_path": "meta-llama/Llama-3.2-3B-Instruct",
+    "output_root": "training/further_training_java_full",
+    "data_output_path": "/tmp/data_files/",
+    "pytorch_cuda_alloc_conf": "max_split_size_mb:128",
+    "max_seq_len": 1024,
+    "learning_rate": 5e-05,
+    "weight_decay": 0.001,
+    "num_train_epochs": 1,
+    "per_device_train_batch_size": 1,
+    "per_device_eval_batch_size": 2,
+    "gradient_accumulation_steps": 10000,
+    "lr_scheduler_type": "cosine",
+    "num_warmup_steps": 100,
+    "zero_stage": 2,
+    "offload": false,
+    "gradient_checkpointing": false,
+    "disable_dropout": false,
+    "lora_dim": 0,
+    "lora_module_name": "decoder.layers.",
+    "only_optimize_lora": false,
+    "seed": 1234,
+    "save_samples": [
+      10000
+    ],
+    "skip_eval": true,
+    "skip_final_model_save": true
+  },
+  "region_selection": {
+    "model_name": "llama-3.2-3b",
+    "original_model_path": "meta-llama/Llama-3.2-3B-Instruct",
+    "k_values": [
+      0.005,
+      0.01,
+      0.03,
+      0.05
+    ],
+    "sample_list": [
+      10000
+    ],
+    "input_root": "training/further_training_java_full",
+    "output_root": "region_selection_java_full",
+    "instruct_path": "region_selection/Llama-3.2-3B-Instruct"
+  },
+  "damage": {
+    "weights_path_template": "region_selection_java_full/code-region/{model}/top{k}",
+    "output_path_template": "damage/damaged_models/{model}/java-full/code/top{k}",
+    "include_language": false
+  }
+}

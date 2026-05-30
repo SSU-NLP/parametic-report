@@ -1,0 +1,23 @@
+# venv
+.venv
+
+# env
+.env
+# python
+__pycache__/
+*.py[cod]
+# generated data and model artifacts
+data_preprocess/dataset/
+region_selection/code-region/
+region_selection/code-spot/
+region_selection/lang-region/
+damage/damaged_models/
+*.pt
+*.bin
+*.idx
+*.dis
+*.tmp
+training/further_training/*/
+reports/
+training/further_training_java_full/
+region_selection_java_full/
