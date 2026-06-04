@@ -8,7 +8,11 @@ SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
 REPO_ROOT="$( cd "$SCRIPT_DIR/.." &> /dev/null && pwd )"
 CONFIG_PATH="${CONFIG_PATH:-$REPO_ROOT/config.json}"
 CONFIG_GET="$REPO_ROOT/scripts/config_get.py"
-if [[ -x "$REPO_ROOT/.venv/bin/python" ]]; then
+if [[ -n "${PARAMETIC_PYTHON_BIN:-}" ]]; then
+    PYTHON_BIN="$PARAMETIC_PYTHON_BIN"
+elif [[ -n "${PYTHON_BIN:-}" ]]; then
+    PYTHON_BIN="$PYTHON_BIN"
+elif [[ "${PARAMETIC_IGNORE_REPO_VENV:-0}" != "1" && -x "$REPO_ROOT/.venv/bin/python" ]]; then
     PYTHON_BIN="$REPO_ROOT/.venv/bin/python"
 else
     PYTHON_BIN="python"

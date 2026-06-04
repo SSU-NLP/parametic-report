@@ -1,0 +1,22 @@
+FROM pytorch/pytorch:2.12.0-cuda13.0-cudnn9-devel
+
+WORKDIR /workspace
+
+ENV PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_BREAK_SYSTEM_PACKAGES=1 \
+    PARAMETIC_IGNORE_REPO_VENV=1 \
+    PARAMETIC_RUNNER_PYTHON=/usr/bin/python
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        build-essential \
+        git \
+        ninja-build \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY requirements-platform.txt requirements-runner.txt /tmp/
+RUN /usr/bin/python -m pip install --upgrade pip \
+    && /usr/bin/python -m pip install -r /tmp/requirements-platform.txt -r /tmp/requirements-runner.txt
+
+CMD ["/usr/bin/python", "-m", "parametic_platform.runner", "--help"]

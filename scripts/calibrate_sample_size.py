@@ -23,21 +23,63 @@ def parse_tensor_name(path):
     return "", stem
 
 
-def load_score(path):
+def resolve_device(device_name):
+    if device_name == "auto":
+        return torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    device = torch.device(device_name)
+    if device.type == "cuda" and not torch.cuda.is_available():
+        raise SystemExit("CUDA was requested but torch.cuda.is_available() is false")
+    return device
+
+
+def load_score(path, device):
     tensor = torch.load(path, map_location="cpu")
     shape = tuple(tensor.shape)
-    score = tensor.abs().float().reshape(-1)
+    score = tensor.abs().float().reshape(-1).to(device)
+    del tensor
     return score, shape
 
 
 def top_indices(score, max_count):
     if max_count <= 0:
-        return torch.empty(0, dtype=torch.long)
-    return torch.topk(score, max_count, sorted=True).indices.cpu()
+        return torch.empty(0, dtype=torch.long, device=score.device)
+    return torch.topk(score, max_count, sorted=True).indices
 
 
-def make_mask(numel, indices, count):
-    mask = torch.zeros(numel, dtype=torch.bool)
+
+def selected_indices_by_k(score, counts, max_count, tie_mode):
+    if tie_mode == "native":
+        top = top_indices(score, max_count)
+        return {k: top[:count] for k, count in counts.items()}
+
+    if max_count <= 0:
+        empty = torch.empty(0, dtype=torch.long, device=score.device)
+        return {k: empty for k in counts}
+
+    top_values = torch.topk(score, max_count, sorted=True).values
+    selected = {}
+    for k, count in counts.items():
+        if count <= 0:
+            selected[k] = torch.empty(0, dtype=torch.long, device=score.device)
+            continue
+        if count >= score.numel():
+            selected[k] = torch.arange(score.numel(), dtype=torch.long, device=score.device)
+            continue
+
+        threshold = top_values[count - 1]
+        above = torch.nonzero(score > threshold, as_tuple=False).flatten()
+        needed = count - above.numel()
+        if needed <= 0:
+            selected[k] = above[:count]
+            continue
+        equal = torch.nonzero(score == threshold, as_tuple=False).flatten()
+        equal = equal.sort().values[:needed]
+        selected[k] = torch.cat([above, equal])
+    return selected
+
+
+def make_mask(numel, indices, count, device):
+    mask = torch.zeros(numel, dtype=torch.bool, device=device)
     if count > 0:
         mask[indices[:count]] = True
     return mask
@@ -176,6 +218,8 @@ def write_report(path, args, summary_rows):
         f"- Seeds: `{', '.join(str(seed) for seed in args.seeds)}`",
         f"- Sample sizes: `{', '.join(str(size) for size in args.sample_sizes)}`",
         f"- k values: `{', '.join(format_k(k) for k in args.k_values)}`",
+        f"- Device: `{args.resolved_device}`",
+        f"- Tie mode: `{args.tie_mode}`",
         "- Tensor scope: transformer layer tensors only",
         "",
         "## Summary",
@@ -216,7 +260,11 @@ def main():
     parser.add_argument("--k-values", nargs="+", type=float, default=[0.005, 0.01, 0.03, 0.05])
     parser.add_argument("--output-dir", required=True, type=Path)
     parser.add_argument("--include-non-layer", action="store_true")
+    parser.add_argument("--device", default="auto")
+    parser.add_argument("--tie-mode", choices=["native", "stable"], default="stable")
     args = parser.parse_args()
+    device = resolve_device(args.device)
+    args.resolved_device = str(device)
 
     if not args.full_checkpoint.exists():
         raise SystemExit(f"Full checkpoint does not exist: {args.full_checkpoint}")
@@ -237,11 +285,11 @@ def main():
 
     for tensor_idx, full_path in enumerate(full_files, 1):
         layer, module = parse_tensor_name(full_path)
-        full_score, full_shape = load_score(full_path)
+        full_score, full_shape = load_score(full_path, device)
         numel = full_score.numel()
         max_count = int(max_k * numel)
         counts = {format_k(k): int(k * numel) for k in k_values}
-        full_top = top_indices(full_score, max_count)
+        full_top_by_k = selected_indices_by_k(full_score, counts, max_count, args.tie_mode)
         del full_score
 
         for sample_size in args.sample_sizes:
@@ -250,20 +298,20 @@ def main():
                 approx_path = args.approx_root / f"seed_{seed}" / args.language / f"grad-mul-param_checkpoint_{sample_size}" / full_path.name
                 if not approx_path.exists():
                     raise FileNotFoundError(approx_path)
-                approx_score, approx_shape = load_score(approx_path)
+                approx_score, approx_shape = load_score(approx_path, device)
                 if approx_shape != full_shape:
                     raise ValueError(f"Shape mismatch for {full_path.name}: {approx_shape} != {full_shape}")
-                seed_top[seed] = top_indices(approx_score, max_count)
+                seed_top[seed] = selected_indices_by_k(approx_score, counts, max_count, args.tie_mode)
                 del approx_score
 
             for k in k_values:
                 k_label = format_k(k)
                 count = counts[k_label]
-                full_mask = make_mask(numel, full_top, count)
+                full_mask = make_mask(numel, full_top_by_k[k_label], count, device)
                 seed_masks = {}
-                for seed, indices in seed_top.items():
+                for seed, indices_by_k in seed_top.items():
                     seed_label = f"seed_{seed}"
-                    seed_mask = make_mask(numel, indices, count)
+                    seed_mask = make_mask(numel, indices_by_k[k_label], count, device)
                     seed_masks[seed] = seed_mask
                     metrics = mask_metrics(seed_mask, full_mask)
                     row = {
@@ -307,7 +355,9 @@ def main():
                 del full_mask
                 del seed_masks
             del seed_top
-        del full_top
+        del full_top_by_k
+        if device.type == "cuda":
+            torch.cuda.empty_cache()
 
         if tensor_idx % 25 == 0 or tensor_idx == len(full_files):
             print(f"processed {tensor_idx}/{len(full_files)} tensors", flush=True)
@@ -343,6 +393,8 @@ def main():
             "sample_sizes": args.sample_sizes,
             "k_values": [format_k(k) for k in k_values],
             "include_non_layer": args.include_non_layer,
+            "device": args.resolved_device,
+            "tie_mode": args.tie_mode,
         },
         "summary": summary_rows,
         "comparison_summary": comparison_rows,

@@ -1,0 +1,136 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Parametic Report</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <div class="shell">
+      <aside class="sidebar" aria-label="Workspace navigation">
+        <div class="brand">
+          <div class="brand-mark">P</div>
+          <div>
+            <strong>Parametic</strong>
+            <span>Spot Discovery</span>
+          </div>
+        </div>
+        <nav class="nav-list">
+          <button class="nav-item active" type="button"><span class="dot blue"></span> Analyses</button>
+          <button class="nav-item" type="button"><span class="dot green"></span> Reports</button>
+          <button class="nav-item" type="button"><span class="dot yellow"></span> Figures</button>
+          <button class="nav-item" type="button"><span class="dot red"></span> Metrics</button>
+        </nav>
+        <div class="sidebar-card">
+          <span class="eyebrow">Queue</span>
+          <strong id="queueState">Single GPU</strong>
+          <span id="queueMeta">Managed runner</span>
+        </div>
+      </aside>
+
+      <main class="workspace">
+        <header class="topbar">
+          <div class="view-tabs" role="tablist" aria-label="Views">
+            <button class="tab active" type="button">Grid</button>
+            <button class="tab" type="button">Report</button>
+            <button class="tab" type="button">Figures</button>
+          </div>
+          <div class="top-actions">
+            <button id="refreshButton" class="ghost-button" type="button">Refresh</button>
+            <button id="submitButton" class="primary-button" type="button">Run analysis</button>
+          </div>
+        </header>
+
+        <section class="board">
+          <div class="table-panel">
+            <div class="panel-head">
+              <div>
+                <span class="eyebrow">Requests</span>
+                <h1>Spot analyses</h1>
+              </div>
+              <div id="apiBadge" class="status-pill muted">API not checked</div>
+            </div>
+
+            <div class="field-grid" aria-label="New analysis request">
+              <label>
+                <span>Model</span>
+                <select id="modelSelect"></select>
+              </label>
+              <label>
+                <span>Area</span>
+                <select id="areaSelect"></select>
+              </label>
+              <label>
+                <span>Mode</span>
+                <select id="modeSelect"></select>
+              </label>
+              <label>
+                <span>Top-k</span>
+                <input id="kInput" inputmode="decimal" placeholder="0.01" />
+              </label>
+            </div>
+
+            <div class="grid-table" role="table" aria-label="Analysis status table">
+              <div class="grid-row grid-head" role="row">
+                <div role="columnheader">Request</div>
+                <div role="columnheader">Model</div>
+                <div role="columnheader">Area</div>
+                <div role="columnheader">Mode</div>
+                <div role="columnheader">Status</div>
+                <div role="columnheader">Cache</div>
+              </div>
+              <div id="requestRows" class="grid-body"></div>
+            </div>
+
+            <section class="result-panel" aria-label="Analysis results">
+              <div class="result-head">
+                <div>
+                  <span class="eyebrow">Customer view</span>
+                  <h2>Report and figures</h2>
+                </div>
+                <button id="loadArtifactsButton" class="ghost-button small" type="button">Load results</button>
+              </div>
+              <div class="result-grid">
+                <div class="result-section">
+                  <h3>Report</h3>
+                  <pre id="reportText" class="report-text">No report loaded</pre>
+                </div>
+                <div class="result-section">
+                  <h3>Metrics</h3>
+                  <div id="metricBox" class="metric-box">No metrics loaded</div>
+                </div>
+              </div>
+              <div class="result-section">
+                <h3>Figures</h3>
+                <div id="figureGrid" class="figure-grid">No figures loaded</div>
+              </div>
+            </section>
+          </div>
+
+          <aside class="record-panel" aria-label="Selected analysis detail">
+            <div class="record-header">
+              <span class="eyebrow">Selected record</span>
+              <h2 id="detailTitle">No request yet</h2>
+              <p id="detailSubtitle">Create or refresh an analysis to inspect customer-visible outputs.</p>
+            </div>
+
+            <dl class="detail-list">
+              <div><dt>Status</dt><dd id="detailStatus">-</dd></div>
+              <div><dt>Cache key</dt><dd id="detailCache">-</dd></div>
+              <div><dt>Storage</dt><dd id="detailStorage">Managed</dd></div>
+            </dl>
+
+            <div class="artifact-box">
+              <div class="artifact-head">
+                <span>Visible artifacts</span>
+              </div>
+              <ul id="artifactList"></ul>
+            </div>
+          </aside>
+        </section>
+      </main>
+    </div>
+    <script src="./app.js"></script>
+  </body>
+</html>

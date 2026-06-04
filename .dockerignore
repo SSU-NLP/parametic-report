@@ -1,0 +1,31 @@
+.git
+.venv
+.env
+__pycache__/
+*.py[cod]
+*.pt
+*.bin
+*.idx
+*.dis
+*.tmp
+
+# generated data, checkpoints, reports, and platform runtime state
+data_preprocess/dataset/
+reports/
+training/further_training/*/
+training/further_training_java_full/
+training/sample_calibration_*/
+region_selection/code-region/
+region_selection/code-spot/
+region_selection/lang-region/
+region_selection_java_full/
+region_selection_qwen3_8b_sample1024/
+damage/damaged_models/
+platform_artifacts/
+platform_artifacts_smoke/
+platform_scratch/
+platform_scratch_smoke/
+logs.json
+
+# local papers and scratch assets
+*.pdf

@@ -109,3 +109,48 @@ Note: BigCode appends the task name to the generation output filename.
 - `multiple-java` raw completion was unsuitable for this instruct model; `humanevalsynthesize-java --prompt codellama` produced meaningful smoke-test results.
 - Sandbox `bwrap` errors may occur for local tooling; rerun necessary commands with approved escalation when they are blocked by namespace creation.
 - Generated datasets, checkpoints, masks, and damaged models are large and should remain uncommitted.
+
+# Handoff: Spot Discovery Platform MVP
+
+## Product Goal
+
+The productization goal is to provide Coding Spot discovery as a single-tenant managed service operated by us. Customers use the web UI to submit catalog-based analyses and inspect report, metrics, and figures. Docker, GPU runners, Hugging Face tokens, raw masks, logs, scratch cleanup, and artifact storage are internal operational concerns.
+
+## Current Platform State
+
+- API package: `parametic_platform/`.
+- Static UI: `parametic_platform/web/`.
+- Managed-service runbook: `docs/platform_mvp.md`.
+- Runner image: `Dockerfile.runner`.
+- Host API dependencies: `requirements-platform.txt`.
+- GPU runner dependencies: `requirements-runner.txt`.
+- Job storage: Postgres via Compose or direct `docker run`.
+- Current catalog: models `llama-3.2-3b`, `qwen3-8b`; area `java-code`; customer mode `approx-1024`; internal validation mode `approx-smoke`.
+
+The platform flow is API request -> deterministic spec/cache key -> DB request/job -> host worker claim -> Docker runner -> standardized artifact directory -> customer-safe artifact view.
+
+## Latest Platform Changes
+
+- Added Basic auth support controlled by `PARAMETIC_BASIC_AUTH_USER` and `PARAMETIC_BASIC_AUTH_PASSWORD`.
+- Restricted public artifact listing and file access to `report.md`, `metrics/*.json`, and `figures/**/*`.
+- Hid internal artifact root and manifest paths from public analysis responses.
+- Added `approx-smoke` mode for fast lifecycle validation.
+- Updated UI to display customer-visible report, metrics, and figures instead of raw artifact roots.
+- Added runner dependency manifest in `requirements-runner.txt`.
+- Updated `Dockerfile.runner` to install platform and research-pipeline dependencies.
+- Updated runner and existing bash scripts to avoid hard-coded host `.venv` use inside runner containers.
+
+## Next Platform Work
+
+1. Build `parametic-runner:latest` and confirm dependency imports.
+2. Run API auth smoke tests with Basic auth env enabled.
+3. Run host worker `--once` against a queued `approx-smoke` request and verify `job_spec.json`, `logs/worker.log`, and DB state transitions.
+4. Run `approx-smoke` end to end and confirm customer-safe artifacts render in the UI.
+5. Keep custom model/dataset input out of MVP until catalog-first lifecycle is stable.
+
+## Known Platform Risks
+
+- Full runner Docker build has not been verified after adding `requirements-runner.txt`.
+- End-to-end worker execution still depends on Docker, NVIDIA runtime, CUDA availability, Hugging Face access, and correct host paths.
+- The service is single-tenant MVP; shared multi-tenant auth, quota, billing, and object storage are intentionally out of scope for now.
+

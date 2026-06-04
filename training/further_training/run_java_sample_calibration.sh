@@ -13,12 +13,20 @@ SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
 REPO_ROOT="$( cd "$SCRIPT_DIR/../.." &> /dev/null && pwd )"
 CONFIG_PATH="${CONFIG_PATH:-$REPO_ROOT/config.json}"
 CONFIG_GET="$REPO_ROOT/scripts/config_get.py"
-if [[ -x "$REPO_ROOT/.venv/bin/deepspeed" ]]; then
+if [[ -n "${PARAMETIC_DEEPSPEED_BIN:-}" ]]; then
+    DEEPSPEED_BIN="$PARAMETIC_DEEPSPEED_BIN"
+elif [[ -n "${DEEPSPEED_BIN:-}" ]]; then
+    DEEPSPEED_BIN="$DEEPSPEED_BIN"
+elif [[ "${PARAMETIC_IGNORE_REPO_VENV:-0}" != "1" && -x "$REPO_ROOT/.venv/bin/deepspeed" ]]; then
     DEEPSPEED_BIN="$REPO_ROOT/.venv/bin/deepspeed"
 else
     DEEPSPEED_BIN="deepspeed"
 fi
-if [[ -x "$REPO_ROOT/.venv/bin/python" ]]; then
+if [[ -n "${PARAMETIC_PYTHON_BIN:-}" ]]; then
+    PYTHON_BIN="$PARAMETIC_PYTHON_BIN"
+elif [[ -n "${PYTHON_BIN:-}" ]]; then
+    PYTHON_BIN="$PYTHON_BIN"
+elif [[ "${PARAMETIC_IGNORE_REPO_VENV:-0}" != "1" && -x "$REPO_ROOT/.venv/bin/python" ]]; then
     PYTHON_BIN="$REPO_ROOT/.venv/bin/python"
 else
     PYTHON_BIN="python"
@@ -57,6 +65,9 @@ LORA_MODULE_NAME="$(config_get training.lora_module_name)"
 CALIBRATION_SEEDS="${CALIBRATION_SEEDS:-1234 5678}"
 CALIBRATION_SAVE_SAMPLES="${CALIBRATION_SAVE_SAMPLES:-512 1024 2048}"
 CALIBRATION_OUTPUT_ROOT="${CALIBRATION_OUTPUT_ROOT:-$REPO_ROOT/training/sample_calibration_java}"
+if [[ "$CALIBRATION_OUTPUT_ROOT" != /* ]]; then
+    CALIBRATION_OUTPUT_ROOT="$REPO_ROOT/$CALIBRATION_OUTPUT_ROOT"
+fi
 CALIBRATION_EXPECTED_TENSORS="${CALIBRATION_EXPECTED_TENSORS:-254}"
 read -r -a SEEDS <<< "$CALIBRATION_SEEDS"
 read -r -a SAVE_SAMPLES <<< "$CALIBRATION_SAVE_SAMPLES"
@@ -140,5 +151,7 @@ $PYTHON_BIN $REPO_ROOT/scripts/calibrate_sample_size.py \\
   --seeds ${SEEDS[*]} \\
   --sample-sizes ${SAVE_SAMPLES[*]} \\
   --k-values $(config_join region_selection.k_values " ") \\
-  --output-dir $REPO_ROOT/reports/java_sample_calibration
+  --output-dir $REPO_ROOT/reports/java_sample_calibration \\
+  --device auto \\
+  --tie-mode stable
 MSG

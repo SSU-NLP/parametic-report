@@ -22,3 +22,5 @@ reports/
 training/further_training_java_full/
 region_selection_java_full/
 training/sample_calibration_*/
+platform_artifacts/
+platform_scratch/
