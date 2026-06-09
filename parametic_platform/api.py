@@ -7,6 +7,7 @@ from urllib.parse import quote
 
 from fastapi import Depends, FastAPI, HTTPException, Request
 from pydantic import BaseModel, Field
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 from starlette.responses import FileResponse, RedirectResponse, Response
 from starlette.staticfiles import StaticFiles
@@ -39,6 +40,17 @@ class AnalysisResponse(BaseModel):
     artifact_root: str | None
     manifest_path: str | None
     error: str | None
+
+
+class AnalysisListItem(BaseModel):
+    request_id: str
+    model_id: str
+    area_id: str
+    mode: str
+    status: str
+    cache_key: str
+    error: str | None
+    created_at: str
 
 
 def get_session():
@@ -184,6 +196,26 @@ def create_analysis(payload: AnalysisCreate, session: Session = Depends(get_sess
     session.commit()
 
     return public_analysis_response(request, cache_hit=False, job=job, key=key)
+
+
+@app.get("/analyses", response_model=list[AnalysisListItem])
+def list_analyses(limit: int = 50, session: Session = Depends(get_session)) -> list[AnalysisListItem]:
+    limit = max(1, min(limit, 200))
+    stmt = select(AnalysisRequest).order_by(AnalysisRequest.created_at.desc()).limit(limit)
+    rows = session.execute(stmt).scalars().all()
+    return [
+        AnalysisListItem(
+            request_id=row.id,
+            model_id=row.model_id,
+            area_id=row.area_id,
+            mode=row.mode,
+            status=row.status,
+            cache_key=row.cache_key,
+            error=row.error,
+            created_at=row.created_at.isoformat(),
+        )
+        for row in rows
+    ]
 
 
 @app.get("/analyses/{request_id}", response_model=AnalysisResponse)

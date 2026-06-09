@@ -82,6 +82,11 @@ function selectRow(row, options = {}) {
   byId("detailStorage").textContent = "Managed";
   if (!same || !options.preserveResults) resetResults();
   renderRows();
+  // Auto-load customer results once the analysis is finished, so the report and
+  // figures appear without a manual "Load results" click (and only fetch once).
+  if (state.selected.status === "succeeded" && !state.artifacts.length) {
+    loadArtifacts().catch((error) => setBadge(false, error.message));
+  }
 }
 
 async function loadCatalog() {
@@ -94,6 +99,28 @@ async function loadCatalog() {
   fillSelect("modeSelect", modes);
   byId("kInput").value = "0.01";
   setBadge(true, "API connected");
+}
+
+function catalogLabel(collection, id) {
+  const item = state[collection].find((entry) => entry.id === id);
+  return item ? item.display_name || item.id : id;
+}
+
+// Load existing analyses from the server so the table is populated on boot and
+// survives reloads (rows are otherwise only held in memory for this session).
+async function loadAnalyses() {
+  const list = await api("/analyses");
+  state.rows = list.map((row) => ({
+    request_id: row.request_id,
+    status: row.status,
+    cache_key: row.cache_key,
+    error: row.error,
+    cache_hit: row.status === "succeeded",
+    model_label: catalogLabel("models", row.model_id),
+    area_label: catalogLabel("areas", row.area_id),
+    mode_label: catalogLabel("modes", row.mode),
+  }));
+  renderRows();
 }
 
 async function submitAnalysis() {
@@ -277,7 +304,7 @@ async function loadArtifacts() {
 async function boot() {
   try {
     await loadCatalog();
-    renderRows();
+    await loadAnalyses();
   } catch (error) {
     setBadge(false, "API unavailable");
     byId("detailSubtitle").textContent = error.message;
