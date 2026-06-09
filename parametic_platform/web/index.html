@@ -83,27 +83,16 @@
               <div id="requestRows" class="grid-body"></div>
             </div>
 
-            <section class="result-panel" aria-label="Analysis results">
+            <section class="result-panel" aria-label="Spot discovery results">
               <div class="result-head">
                 <div>
-                  <span class="eyebrow">Customer view</span>
-                  <h2>Report and figures</h2>
+                  <span class="eyebrow">Coding Spot</span>
+                  <h2 id="storyTitle">Select a finished analysis</h2>
                 </div>
-                <button id="loadArtifactsButton" class="ghost-button small" type="button">Load results</button>
+                <button id="loadArtifactsButton" class="ghost-button small" type="button">Reload</button>
               </div>
-              <div class="result-grid">
-                <div class="result-section">
-                  <h3>Report</h3>
-                  <div id="reportText" class="report-text">No report loaded</div>
-                </div>
-                <div class="result-section">
-                  <h3>Metrics</h3>
-                  <div id="metricBox" class="metric-box">No metrics loaded</div>
-                </div>
-              </div>
-              <div class="result-section">
-                <h3>Figures</h3>
-                <div id="figureGrid" class="figure-grid">No figures loaded</div>
+              <div id="spotStory" class="spot-story">
+                <p class="story-empty">Run or select a succeeded analysis to see where the coding spot lives, what it is, whether it is stable, and what removing it does.</p>
               </div>
             </section>
           </div>
@@ -118,12 +107,14 @@
             <dl class="detail-list">
               <div><dt>Status</dt><dd id="detailStatus">-</dd></div>
               <div><dt>Cache key</dt><dd id="detailCache">-</dd></div>
-              <div><dt>Storage</dt><dd id="detailStorage">Managed</dd></div>
             </dl>
+
+            <div class="spec-card" id="specCard" aria-label="Reproducibility spec"></div>
 
             <div class="artifact-box">
               <div class="artifact-head">
-                <span>Visible artifacts</span>
+                <span>All artifacts</span>
+                <span class="eyebrow" id="artifactCount"></span>
               </div>
               <ul id="artifactList"></ul>
             </div>
