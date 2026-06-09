@@ -26,6 +26,7 @@ class AreaSpec:
     total_examples: int
     train_ratio: float
     revision: str = "streaming-main"
+    public: bool = True
 
 
 @dataclass(frozen=True)
@@ -73,6 +74,16 @@ AREA_CATALOG: dict[str, AreaSpec] = {
         hf_dataset_name="nampdn-ai/tiny-codes",
         total_examples=1_630_000,
         train_ratio=0.8,
+    ),
+    "java-code-smoke": AreaSpec(
+        id="java-code-smoke",
+        display_name="Java code spot (smoke)",
+        language="java",
+        dataset_name="tiny-codes-java-smoke",
+        hf_dataset_name="nampdn-ai/tiny-codes",
+        total_examples=4_000,
+        train_ratio=0.8,
+        public=False,
     ),
 }
 
@@ -139,7 +150,7 @@ def public_models() -> list[dict[str, Any]]:
 
 
 def public_areas() -> list[dict[str, Any]]:
-    return [asdict(item) for item in AREA_CATALOG.values()]
+    return [asdict(item) for item in AREA_CATALOG.values() if item.public]
 
 
 def public_modes() -> list[dict[str, Any]]:
