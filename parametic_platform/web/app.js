@@ -134,6 +134,67 @@ function renderArtifactList(items) {
   }
 }
 
+function escapeHtml(text) {
+  return text.replace(/[&<>"']/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[ch]));
+}
+
+function renderInline(text) {
+  // text is already HTML-escaped; apply a minimal, safe inline markdown subset.
+  return text
+    .replace(/`([^`]+)`/g, (_, code) => `<code>${code}</code>`)
+    .replace(/\*\*([^*]+)\*\*/g, (_, bold) => `<strong>${bold}</strong>`)
+    .replace(/_([^_]+)_/g, (_, em) => `<em>${em}</em>`);
+}
+
+// Minimal markdown renderer for our own generated report.md. Relative image
+// paths are rewritten to the authenticated artifact endpoint so figures embedded
+// in the report render inline alongside the customer view.
+function renderReportMarkdown(markdown, artifactBase) {
+  const html = [];
+  let listOpen = false;
+  const closeList = () => {
+    if (listOpen) {
+      html.push("</ul>");
+      listOpen = false;
+    }
+  };
+  for (const rawLine of markdown.split("\n")) {
+    const line = rawLine.trimEnd();
+    const image = line.match(/^!\[([^\]]*)\]\(([^)]+)\)\s*$/);
+    if (image) {
+      closeList();
+      const alt = escapeHtml(image[1]);
+      const src = /^https?:\/\//.test(image[2]) ? image[2] : artifactBase + image[2].replace(/^\.?\//, "");
+      html.push(`<figure class="report-figure"><img src="${encodeURI(src)}" alt="${alt}" loading="lazy" /></figure>`);
+      continue;
+    }
+    const heading = line.match(/^(#{1,6})\s+(.*)$/);
+    if (heading) {
+      closeList();
+      const level = heading[1].length;
+      html.push(`<h${level}>${renderInline(escapeHtml(heading[2]))}</h${level}>`);
+      continue;
+    }
+    const item = line.match(/^[-*]\s+(.*)$/);
+    if (item) {
+      if (!listOpen) {
+        html.push("<ul>");
+        listOpen = true;
+      }
+      html.push(`<li>${renderInline(escapeHtml(item[1]))}</li>`);
+      continue;
+    }
+    if (!line) {
+      closeList();
+      continue;
+    }
+    closeList();
+    html.push(`<p>${renderInline(escapeHtml(line))}</p>`);
+  }
+  closeList();
+  return html.join("\n");
+}
+
 function renderMetricTable(value) {
   const box = byId("metricBox");
   box.innerHTML = "";
@@ -170,7 +231,14 @@ async function renderArtifacts(items) {
   const metrics = items.filter((item) => item.kind === "metric");
   const figures = items.filter((item) => item.kind === "figure");
 
-  byId("reportText").textContent = report ? await apiText(report.url) : "No report available";
+  const reportBox = byId("reportText");
+  if (report) {
+    const markdown = await apiText(report.url);
+    const artifactBase = `/analyses/${state.selected.request_id}/artifacts/`;
+    reportBox.innerHTML = renderReportMarkdown(markdown, artifactBase);
+  } else {
+    reportBox.textContent = "No report available";
+  }
   if (metrics.length) {
     const metricValue = await api(metrics[0].url);
     renderMetricTable(metricValue);

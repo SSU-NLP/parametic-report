@@ -55,6 +55,15 @@ button, input, select { font: inherit; }
 .result-section:last-child { border-right: 0; }
 .result-section h3 { margin: 0 0 10px; font-size: 13px; color: var(--muted); letter-spacing: 0; }
 .report-text, .metric-box pre { margin: 0; max-height: 360px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--ink); font-family: "JetBrains Mono", "SFMono-Regular", monospace; font-size: 12px; line-height: 1.55; }
+.report-text { white-space: normal; }
+.report-text h1 { font-size: 15px; margin: 0 0 10px; }
+.report-text h2 { font-size: 13px; margin: 16px 0 8px; color: var(--muted); }
+.report-text h3 { font-size: 12px; margin: 12px 0 6px; color: var(--ink); letter-spacing: 0; }
+.report-text p { margin: 6px 0; }
+.report-text ul { margin: 6px 0; padding-left: 18px; }
+.report-text code { background: var(--surface-2); border-radius: 4px; padding: 1px 4px; }
+.report-figure { margin: 8px 0 4px; }
+.report-figure img { width: 100%; max-width: 520px; object-fit: contain; border: 1px solid var(--line); border-radius: 7px; background: white; }
 .metric-box { max-height: 360px; overflow: auto; color: var(--muted); font-size: 12px; }
 .metric-box table { width: 100%; border-collapse: collapse; font-size: 12px; }
 .metric-box th, .metric-box td { padding: 7px 8px; border: 1px solid var(--line); text-align: left; white-space: nowrap; }

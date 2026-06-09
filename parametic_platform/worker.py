@@ -95,6 +95,29 @@ def docker_command(settings, job: Job, runner_spec_path: Path) -> list[str]:
     return cmd
 
 
+def read_failure_detail(artifact_root: Path, rc: int) -> str:
+    """Surface which runner stage failed, from the error.json breadcrumb."""
+    fallback = f"runner exited with code {rc}"
+    error_path = artifact_root / "error.json"
+    if not error_path.exists():
+        return fallback
+    try:
+        import json
+
+        data = json.loads(error_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return fallback
+    error = data.get("error") or {}
+    stage = error.get("stage")
+    message = error.get("message")
+    if stage:
+        detail = f"stage '{stage}' failed"
+        if message:
+            detail += f": {message.strip().splitlines()[-1][:300]}"
+        return f"{detail} (exit code {rc})"
+    return fallback
+
+
 def run_job(settings, session, job: Job) -> None:
     request = session.get(AnalysisRequest, job.request_id)
     if request is None:
@@ -125,7 +148,7 @@ def run_job(settings, session, job: Job) -> None:
     else:
         job.status = "failed"
         job.stage = "failed"
-        job.error = f"runner exited with code {rc}"
+        job.error = read_failure_detail(artifact_root, rc)
         request.status = "failed"
         request.error = job.error
         if not settings.keep_scratch_on_failure:

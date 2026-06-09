@@ -423,11 +423,11 @@ def main():
     manifest.extend([
         "",
         "## Figures",
-        "- spot_importance_atlas_k0.01.png: tensor-internal importance intensity.",
-        "- spot_mask_atlas_k0.01.png: tensor-internal top-k mask density; this is the closest figure to 'where the spot is'.",
+        f"- spot_importance_atlas_k{format_k(args.k)}.png: tensor-internal importance intensity.",
+        f"- spot_mask_atlas_k{format_k(args.k)}.png: tensor-internal top-k mask density; this is the closest figure to 'where the spot is'.",
         "- spot_layer_module_importance_sum.png: layer/module total importance, size-sensitive.",
         "- spot_layer_module_importance_mean.png: layer/module average importance, size-normalized.",
-        "- spot_importance_bubble_map_k0.01.png: layer/module total-importance bubble map.",
+        f"- spot_importance_bubble_map_k{format_k(args.k)}.png: layer/module total-importance bubble map.",
     ])
     args.output_dir.mkdir(parents=True, exist_ok=True)
     (args.output_dir / "README.md").write_text("\n".join(manifest) + "\n", encoding="utf-8")

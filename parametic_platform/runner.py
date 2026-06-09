@@ -35,14 +35,34 @@ def resolve_deepspeed() -> str:
     return shutil.which("deepspeed") or "deepspeed"
 
 
+def write_error_breadcrumb(manifest: dict[str, Any], stage: str, message: str) -> None:
+    """Persist a failure summary so the worker can surface which stage broke.
+
+    A successful run writes manifest.json; on failure we instead drop error.json
+    (manifest.json stays the success signal the worker checks for)."""
+    root = manifest.get("_artifact_root")
+    if not root:
+        return
+    snapshot = {key: value for key, value in manifest.items() if key != "_artifact_root"}
+    snapshot["status"] = "failed"
+    snapshot["error"] = {"stage": stage, "message": message[-4000:]}
+    snapshot["finished_at"] = datetime.utcnow().isoformat()
+    try:
+        Path(root, "error.json").write_text(json.dumps(snapshot, indent=2), encoding="utf-8")
+    except OSError:
+        pass
+
+
 def run_step(name: str, cmd: list[str], *, cwd: Path, env: dict[str, str] | None, manifest: dict[str, Any]) -> None:
     print(f"\n== {name} ==", flush=True)
     manifest["stages"].append({"name": name, "status": "running", "started_at": datetime.utcnow().isoformat()})
     try:
         subprocess.run(cmd, cwd=cwd, env=env, check=True)
-    except Exception:
+    except Exception as exc:
         manifest["stages"][-1]["status"] = "failed"
         manifest["stages"][-1]["finished_at"] = datetime.utcnow().isoformat()
+        print(f"\n!! stage '{name}' failed: {exc}", file=sys.stderr, flush=True)
+        write_error_breadcrumb(manifest, name, str(exc))
         raise
     manifest["stages"][-1]["status"] = "succeeded"
     manifest["stages"][-1]["finished_at"] = datetime.utcnow().isoformat()
@@ -68,7 +88,13 @@ def path_exists_all(paths: list[Path]) -> bool:
     return all(path.exists() for path in paths)
 
 
-def write_report(artifact_root: Path, manifest: dict[str, Any], ppl_path: Path | None) -> None:
+def format_k(k: float) -> str:
+    """Match the figure filename suffix used by the plotting scripts."""
+    return f"{float(k):g}"
+
+
+def write_report(artifact_root: Path, manifest: dict[str, Any], ppl_path: Path | None, k: float) -> None:
+    kf = format_k(k)
     lines = [
         "# Spot Discovery Report",
         "",
@@ -81,15 +107,41 @@ def write_report(artifact_root: Path, manifest: dict[str, Any], ppl_path: Path |
         f"- method: `1024-sample approximate grad * parameter`",
         f"- seeds: `{', '.join(str(seed) for seed in manifest['analysis']['mode']['seeds'])}`",
         f"- k: `{manifest['analysis']['k']}`",
-        "",
-        "## Outputs",
-        "",
-        "- `figures/approx_spot/spot_mask_atlas_k0.01.png`",
-        "- `figures/approx_spot/spot_importance_atlas_k0.01.png`",
-        "- `figures/seed_agreement/seed_agreement_atlas_k0.01.png`",
-        "- `figures/seed_agreement/seed_disagreement_atlas_k0.01.png`",
-        "- `metrics/ppl_damage.json`",
     ]
+
+    # Embed each figure inline as a markdown image with a caption, but only if the
+    # plotting stage actually produced the file (so a skipped/failed plot does not
+    # leave a broken image in the report). Paths track the requested k.
+    figures = [
+        (
+            f"figures/approx_spot/spot_mask_atlas_k{kf}.png",
+            f"Top-{k:g} mask density per tensor — the closest view of where the coding spot lives.",
+        ),
+        (
+            f"figures/approx_spot/spot_importance_atlas_k{kf}.png",
+            "Tensor-internal grad * parameter importance intensity.",
+        ),
+        (
+            f"figures/seed_agreement/seed_agreement_atlas_k{kf}.png",
+            "Per-tensor agreement between the two calibration seeds (spot stability).",
+        ),
+        (
+            f"figures/seed_agreement/seed_disagreement_atlas_k{kf}.png",
+            "Per-tensor seed disagreement (where the approximate spot is least stable).",
+        ),
+    ]
+    present = [(rel, caption) for rel, caption in figures if (artifact_root / rel).exists()]
+    if present:
+        lines.extend(["", "## Coding Spot Figures", ""])
+        for rel, caption in present:
+            title = Path(rel).stem
+            lines.append(f"### {title}")
+            lines.append("")
+            lines.append(f"![{caption}]({rel})")
+            lines.append("")
+            lines.append(f"_{caption}_")
+            lines.append("")
+
     if ppl_path and ppl_path.exists():
         rows = json.loads(ppl_path.read_text(encoding="utf-8"))
         lines.extend(["", "## PPL Damage Summary", ""])
@@ -119,6 +171,7 @@ def main() -> None:
     (artifact_root / "figures").mkdir(exist_ok=True)
     (artifact_root / "metrics").mkdir(exist_ok=True)
     (artifact_root / "masks").mkdir(exist_ok=True)
+    (artifact_root / "error.json").unlink(missing_ok=True)
 
     manifest: dict[str, Any] = {
         "request_id": spec["request_id"],
@@ -129,6 +182,7 @@ def main() -> None:
         "status": "running",
         "stages": [],
         "artifacts": {},
+        "_artifact_root": str(artifact_root),
     }
 
     python_bin = resolve_python(repo_root)
@@ -334,7 +388,8 @@ def main() -> None:
         manifest=manifest,
     )
 
-    write_report(artifact_root, manifest, ppl_path)
+    write_report(artifact_root, manifest, ppl_path, k)
+    manifest.pop("_artifact_root", None)
     manifest["status"] = "succeeded"
     manifest["finished_at"] = datetime.utcnow().isoformat()
     manifest["artifacts"] = {
