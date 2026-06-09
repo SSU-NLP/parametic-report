@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import secrets
 from pathlib import Path, PurePosixPath
 from typing import Any
@@ -233,24 +234,28 @@ def safe_artifact_path(value: str) -> str:
     return path.as_posix()
 
 
-def is_customer_artifact(relative_path: str) -> bool:
-    path = safe_artifact_path(relative_path)
-    if path == "report.md":
-        return True
-    if path.startswith("figures/"):
-        return True
-    if path.startswith("metrics/") and path.endswith(".json"):
-        return True
-    return False
+def is_listable_artifact(relative_path: str) -> bool:
+    # Researcher platform: full transparency. Any path that passes the traversal
+    # guard is listable/servable; safe_artifact_path raises on unsafe input.
+    safe_artifact_path(relative_path)
+    return True
 
 
 def artifact_kind(relative_path: str) -> str:
     if relative_path == "report.md":
         return "report"
-    if relative_path.startswith("figures/"):
-        return "figure"
+    if relative_path == "manifest.json":
+        return "spec"
     if relative_path.startswith("metrics/"):
         return "metric"
+    if relative_path.startswith("masks/"):
+        return "mask"
+    if relative_path.startswith("logs/"):
+        return "log"
+    if relative_path.endswith(".csv"):
+        return "table"
+    if relative_path.startswith("figures/"):
+        return "figure"
     return "artifact"
 
 
@@ -267,14 +272,21 @@ def request_artifact_root(request_id: str, session: Session) -> Path:
 def get_artifacts(request_id: str, session: Session = Depends(get_session)) -> dict[str, Any]:
     root = request_artifact_root(request_id, session)
     if not root.exists():
-        return {"artifacts": [], "items": []}
+        return {"artifacts": [], "items": [], "masks": []}
     files = []
+    mask_counts: dict[str, int] = {}
     for path in root.rglob("*"):
         if not path.is_file():
             continue
         relative_path = path.relative_to(root).as_posix()
-        if is_customer_artifact(relative_path):
-            files.append(relative_path)
+        if not is_listable_artifact(relative_path):
+            continue
+        # Masks are 700+ per-tensor files; summarize by region instead of listing each.
+        if relative_path.startswith("masks/"):
+            region = path.parent.relative_to(root).as_posix()
+            mask_counts[region] = mask_counts.get(region, 0) + 1
+            continue
+        files.append(relative_path)
     files = sorted(files)
     return {
         "artifacts": files,
@@ -286,13 +298,37 @@ def get_artifacts(request_id: str, session: Session = Depends(get_session)) -> d
             }
             for path in files
         ],
+        "masks": [
+            {"path": region, "kind": "mask", "count": count}
+            for region, count in sorted(mask_counts.items())
+        ],
+    }
+
+
+@app.get("/analyses/{request_id}/spec")
+def get_spec(request_id: str, session: Session = Depends(get_session)) -> dict[str, Any]:
+    """Structured reproducibility spec parsed from the run manifest (full transparency)."""
+    root = request_artifact_root(request_id, session)
+    manifest_path = root / "manifest.json"
+    if not manifest_path.is_file():
+        raise HTTPException(status_code=404, detail="spec not available")
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise HTTPException(status_code=404, detail="spec not available") from exc
+    return {
+        "analysis": manifest.get("analysis", {}),
+        "status": manifest.get("status"),
+        "created_at": manifest.get("created_at"),
+        "finished_at": manifest.get("finished_at"),
+        "stages": manifest.get("stages", []),
     }
 
 
 @app.get("/analyses/{request_id}/artifacts/{artifact_path:path}")
 def get_artifact_file(request_id: str, artifact_path: str, session: Session = Depends(get_session)) -> FileResponse:
     relative_path = safe_artifact_path(artifact_path)
-    if not is_customer_artifact(relative_path):
+    if not is_listable_artifact(relative_path):
         raise HTTPException(status_code=404, detail="artifact not found")
     root = request_artifact_root(request_id, session)
     full_path = (root / relative_path).resolve()

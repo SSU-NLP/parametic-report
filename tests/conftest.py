@@ -55,22 +55,56 @@ _Top-0.01 mask density per tensor._
 """
 
 
+MANIFEST = {
+    "request_id": "req-test",
+    "job_id": "job-test",
+    "cache_key": "ck-test",
+    "status": "succeeded",
+    "created_at": "2026-06-09T06:48:44",
+    "finished_at": "2026-06-09T06:54:16",
+    "analysis": {
+        "model": {"id": "llama-3.2-3b", "display_name": "Llama 3.2 3B Instruct", "hf_model_id": "meta-llama/Llama-3.2-3B-Instruct"},
+        "area": {"id": "java-code-smoke", "language": "java", "display_name": "Java code spot (smoke)"},
+        "mode": {"id": "approx-smoke", "seeds": [1234, 5678], "sample_size": 8, "k": 0.01, "random_seeds": [1], "tile_size": 16},
+        "k": 0.01,
+        "pipeline_version": "approx-mri-v1",
+    },
+    "stages": [{"name": "create_masks", "status": "succeeded"}, {"name": "evaluate_ppl_damage", "status": "succeeded"}],
+}
+
+MODULE_SUMMARY_CSV = (
+    "module,numel,selected,importance_sum,importance_share,importance_mean,mask_density\n"
+    "mlp.down_proj.weight,704643072,7046424,88.3,0.2799,1.25e-07,0.01\n"
+    "mlp.up_proj.weight,704643072,7046424,80.2,0.2542,1.14e-07,0.01\n"
+)
+
+PPL_DAMAGE = [
+    {"model": "original", "loss": 1.20, "ppl": 3.31, "tokens": 615},
+    {"model": "code_top0.01", "loss": 11.8, "ppl": 133269.85, "tokens": 615, "mask_tensors": 252, "zeroed_params": 28187320},
+    {"model": "bottom_top0.01", "loss": 1.22, "ppl": 3.40, "tokens": 615, "mask_tensors": 252, "zeroed_params": 28187320},
+    {"model": "random_seed1_top0.01", "loss": 1.22, "ppl": 3.40, "tokens": 615, "mask_tensors": 252, "zeroed_params": 28187320},
+]
+
+
 def build_success_tree(artifact_root: Path) -> None:
-    """Write the customer-visible + internal artifact tree a successful runner produces."""
+    """Write the full artifact tree a successful runner produces (researcher-visible)."""
     artifact_root = Path(artifact_root)
     (artifact_root / "figures" / "approx_spot").mkdir(parents=True, exist_ok=True)
+    (artifact_root / "figures" / "seed_agreement").mkdir(parents=True, exist_ok=True)
     (artifact_root / "metrics").mkdir(parents=True, exist_ok=True)
-    (artifact_root / "masks" / "code-region").mkdir(parents=True, exist_ok=True)
+    (artifact_root / "masks" / "code-region" / "llama-3.2-3b" / "top0.01").mkdir(parents=True, exist_ok=True)
     (artifact_root / "logs").mkdir(parents=True, exist_ok=True)
 
     (artifact_root / "report.md").write_text(REPORT_MARKDOWN, encoding="utf-8")
     (artifact_root / "figures" / "approx_spot" / "spot_mask_atlas_k0.01.png").write_bytes(_PNG_BYTES)
-    (artifact_root / "metrics" / "ppl_damage.json").write_text(
-        json.dumps([{"model": "original", "ppl": 3.93, "loss": 1.37}]), encoding="utf-8"
-    )
-    # Internal-only artifacts that the customer endpoint must hide.
-    (artifact_root / "manifest.json").write_text(json.dumps({"status": "succeeded"}), encoding="utf-8")
-    (artifact_root / "masks" / "code-region" / "layer0.pt").write_bytes(b"\x00")
+    (artifact_root / "figures" / "seed_agreement" / "seed_agreement_atlas_k0.01.png").write_bytes(_PNG_BYTES)
+    (artifact_root / "figures" / "approx_spot" / "spot_module_summary.csv").write_text(MODULE_SUMMARY_CSV, encoding="utf-8")
+    (artifact_root / "metrics" / "ppl_damage.json").write_text(json.dumps(PPL_DAMAGE), encoding="utf-8")
+    (artifact_root / "manifest.json").write_text(json.dumps(MANIFEST), encoding="utf-8")
+    (artifact_root / "logs" / "worker.log").write_text("ok\n", encoding="utf-8")
+    # 252-tensor spot mask set (represented by a couple of files in tests)
+    for i in range(2):
+        (artifact_root / "masks" / "code-region" / "llama-3.2-3b" / "top0.01" / f"layer{i}.pt").write_bytes(b"\x00")
 
 
 @pytest.fixture(scope="session", autouse=True)
