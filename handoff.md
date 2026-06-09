@@ -154,3 +154,37 @@ The platform flow is API request -> deterministic spec/cache key -> DB request/j
 - End-to-end worker execution still depends on Docker, NVIDIA runtime, CUDA availability, Hugging Face access, and correct host paths.
 - The service is single-tenant MVP; shared multi-tenant auth, quota, billing, and object storage are intentionally out of scope for now.
 
+# Handoff: Web→Result Loop + Researcher "Spot Story" UI + TDD (2026-06-09)
+
+## What shipped this session (branch `experiment/qwen3-8b-calibration`)
+
+Commits (newest first): `c88fb87` Spot Story UI · `a7ed8e6` transparency + /spec · `ac39696` web loop + pytest harness · `9f6d35a` java-code-smoke area · `486ff20` inline figures + failure surfacing.
+
+1. **Full Docker E2E proven** on GPU: web submit → host worker → sibling runner container → real spot discovery → artifacts → `succeeded`. Validated with `llama-3.2-3b` + `approx-smoke`.
+2. **Web request→result loop wired**: added `GET /analyses` (list, newest-first, `?limit`); `web/app.js boot()` loads the list; results auto-load when a row reaches `succeeded` (no manual click). Closed the "submit → stuck queued, report never shows" gaps.
+3. **Persistent worker daemon** is what makes UI submissions actually run on GPU (run it, do not use `--once`).
+4. **Full-transparency artifacts** (researcher direction): `is_listable_artifact` exposes the whole tree (manifest/masks/logs/CSV); masks summarized by region in the listing (756 files → 3 groups of 252) but each still downloadable. New `GET /analyses/{id}/spec` returns structured reproducibility spec from the manifest.
+5. **Researcher "Spot Story" UI**: single-run hero that narrates a spot in four acts — Where (mask atlas) → What (module importance-share ranking from CSV + layer/module figures) → Stable (seed agreement) → Causal (PPL damage: spot vs equal-size controls), led by a headline collapse ratio. Figures matched by name substring (k-agnostic), click-to-zoom. Right panel = reproducibility spec card + full artifact download list.
+6. **First automated tests**: `tests/` (pytest + httpx TestClient, SQLite — no Postgres/Docker/GPU). Runner faked by monkeypatching `worker.subprocess.Popen`. 16 passing: catalog/auth, list endpoint, artifact transparency, worker lifecycle, `/spec`, full web-path integration. Run: `/opt/conda/bin/python -m pytest tests/ -q`. Deps: `requirements-dev.txt`.
+
+## OPEN — UI needs a major rework
+
+The Spot Story is a first pass; the user wants a **대대적 (substantial) UI redesign**. Treat the current `web/` as a working baseline / data-contract proof, not the final design. Revisit layout, IA, and visual design next.
+
+## Operational restart (this DooD container)
+
+- Python with platform deps: **`/opt/conda/bin/python`** (the bare `/usr/bin/python3` has no pip). Runner image already built: `parametic-runner:latest`. `docker` CLI installed; socket mounted.
+- **DooD path rule (critical)**: all `PARAMETIC_*` roots must use the host-identical path `/home/ssunlp/workspace/seonghyeon/parametic-report/...` (host `/home/ssunlp/workspace` is bind-mounted at the same path here). The `/workspace` alias does NOT exist on the host daemon.
+- Env file: `/tmp/parametic.env` (DATABASE_URL points at gateway `172.17.0.1:5432`, NOT localhost; Basic auth `demo`/`demo`; `PARAMETIC_ALLOW_INTERNAL_MODES=1`; HF_TOKEN loaded from `.env`).
+- Restart sequence:
+  1. `docker start parametic-postgres` (container stopped, data preserved).
+  2. `set -a; source /tmp/parametic.env; set +a`
+  3. API: `setsid /opt/conda/bin/python -m uvicorn parametic_platform.api:app --host 0.0.0.0 --port 8000 &` (host:8000 is published).
+  4. Worker daemon: `setsid /opt/conda/bin/python -m parametic_platform.worker --init-db --poll-seconds 5 &`
+- UI: `http://<host>:8000/app/` (demo/demo). Existing succeeded runs persist in Postgres (e.g. `272fd225…` java k=0.03 shows PPL 3.31→187,905, ×56,751 — the most dramatic).
+- Fast smoke run for the daemon: submit `{model_id:llama-3.2-3b, area_id:java-code-smoke, mode:approx-smoke, k:<new>}` (~4 min on GPU). Vary `k` to avoid the cache hit.
+
+## Roadmap (agreed out-of-scope this session)
+
+Multi-run **comparison** view · **intervention** actions (the professor's "부분 극대/극소": ablate/amplify/export a selected layer/module spot — module rows are already structured as the selectable unit) · user **model upload** / self-serve · more languages.
+
