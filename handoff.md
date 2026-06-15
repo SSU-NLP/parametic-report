@@ -404,3 +404,51 @@ N params {value, gradient, score} + global score quantiles for threshold(K)) fro
   `/shared/seonghyeon/parametic/hf-cache` (0-byte snapshots from the symlink bug) is unused now that
   the cache lives on `/work` — safe to delete. The good `/work` HF cache is warm (model cached).
 
+# 2026-06-15 (later) — UI redesign shipped + experiment handoff
+
+The frontend redesign is **done** on branch `ui/redesign`. Done locally against the seed bundle
+(`seed/`, see `seed/RUN_LOCALLY.md`); backend untouched except one authorized line (routing, below).
+
+**Shipped (commits `1a1d2ce`…`34b9af7`, routing `a5567e0`):**
+- Buildless **Preact + htm** rewrite of `web/` (importmap via esm.sh, no build step). Split into
+  `api.js` / `format.js` / `store.js` / `spotdata.js` / `ui/{common,gallery,report,acts,details,viz}.js`.
+- **IA = two routes:** Gallery (`#/`) and Report (`#/a/:id`), hash-routed.
+- **Report is tabbed** (not scroll): a pinned hero = the layer×module importance **heatmap with a
+  top-K% threshold slider** (dims cells below the cut) + by-depth profile — all drawn in-browser
+  from `spot_parameter_summary.csv`. Tabs: What it is · What removing it does · Reproducibility ·
+  Artifacts. The "Is it stable?" seed-agreement figures were **dropped** (near-uniform rasters, no
+  numeric artifact to redraw them).
+- New-analysis request opens in a **modal**. Gallery is a workspace (top bar + "Analyses" toolbar),
+  no marketing hero.
+- **Landing page at `/`** (`web/landing.html` + `landing.css`), Artificial-Analysis-style: pill nav
+  (`Analyses · Paper`), serif hero (Spectral, matches the "Parametic Report" wordmark logo), LATEST/
+  METHOD cards, Highlights cards (causal collapse / module concentration / footprint heatmap, real
+  numbers), action cards + Recent. CTAs → `/app/`.
+- **Routing (the one backend line, authorized):** `api.py` `root()` now serves `landing.html`
+  instead of redirecting to `/app/`. So **`/` = landing, `/app/` = app**. Landing is still behind
+  basic auth (middleware guards all but `/health`).
+
+**Stack/identity decisions locked:** buildless Preact+htm; serif display (Spectral) is the landing
+identity only — the app stays sans. Logo = "Parametic Report" wordmark (the user's artwork is the
+real logo; the landing currently approximates it as serif text — swap for the SVG when provided).
+"Coding Spot" naming dropped.
+
+**Remaining work to hand to the experiment/data side (UI is ready and waiting):**
+1. **per-parameter scatter dump** — emit `metrics/param_scatter.json` (sample of N params
+   `{value, gradient, score}` + score quantiles) from the runner near
+   `scripts/create_approx_spot_masks.py`; **one GPU run**. Then the K%-slider hero can become the
+   real per-parameter scatter (`docs/image.png`) instead of the (layer×module) heatmap stand-in —
+   UI side is ~one `spotdata.js` matcher + a scatter component.
+2. **Public-model spot gallery (landing "Analyses")** — searchable card list of pre-computed spots
+   across many public models; needs the spot computations + a public list endpoint. Reuses
+   `ui/gallery.js` cards. Plan only.
+3. **Landing auth** — public marketing page would need `/` and its `/app/*` assets exempted from the
+   basic-auth middleware; left behind auth for now (the user will revisit).
+4. **Real-data smoke check** — verify on a real server run (not seed) that figure-name substring
+   matching, empty masks (default), spec fields, and `spot_parameter_summary.csv` still render.
+5. **CDN reachability** — Spectral (`fonts.googleapis.com`) + Preact/htm (`esm.sh`) load from CDNs;
+   confirm the demo environment can reach them, else self-host.
+
+**Git state:** `ui/redesign` pushed to `origin`. (It carries the prior unpushed
+`experiment/qwen3-8b-calibration` commits in its history.)
+
