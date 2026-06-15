@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Parametic Report</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Spectral:wght@400;500;600;700&display=swap" />
+    <link rel="stylesheet" href="./styles.css" />
+    <link rel="stylesheet" href="./landing.css" />
+  </head>
+  <body>
+    <div class="landing">
+      <nav class="l-nav">
+        <a class="l-brand" href="/">Parametic Report</a>
+        <div class="l-nav-right">
+          <a href="#method">Method</a>
+          <a href="#" >Paper</a>
+          <a class="l-cta" href="/app/">Open app →</a>
+        </div>
+      </nav>
+
+      <header class="l-hero">
+        <div>
+          <span class="l-eyebrow">EMNLP demo · mechanistic interpretability</span>
+          <h1>An LLM's coding ability hides in about 1% of its weights.</h1>
+          <p>Parametic Report finds the spot — the tiny set of parameters that, when zeroed,
+            collapses code modeling while equal-size random and bottom controls barely move.
+            Discover it, visualize it, and causally verify it in one click.</p>
+          <div class="l-hero-actions">
+            <a class="l-cta" href="/app/">Explore analyses →</a>
+            <a class="l-cta ghost" href="#method">See the method</a>
+          </div>
+        </div>
+        <div class="l-spotcard">
+          <div class="cols"><span>q</span><span>k</span><span>v</span><span>o</span><span class="l-hm-gap"></span><span>gate</span><span>up</span><span>down</span></div>
+          <div class="l-hm" id="hm"></div>
+          <p class="l-spotcaption">the spot — top-1.6%, concentrated in early MLP layers</p>
+        </div>
+      </header>
+
+      <section class="l-result">
+        <div class="l-stat"><p class="label">Zero the spot → code PPL</p><p class="value bad">×66,901</p></div>
+        <div class="l-stat"><p class="label">Equal-size controls</p><p class="value good">×1.02 flat</p></div>
+        <div class="l-stat"><p class="label">Of all parameters</p><p class="value">1.6%</p></div>
+      </section>
+
+      <section class="l-section" id="method">
+        <h2>How it works</h2>
+        <div class="l-steps">
+          <div class="l-step">
+            <span class="num">1</span>
+            <h3>Rank</h3>
+            <p>Score every weight by grad × parameter importance on code data.</p>
+          </div>
+          <div class="l-step">
+            <span class="num">2</span>
+            <h3>Zero the top-k%</h3>
+            <p>Mask out the highest-scoring parameters — the candidate spot.</p>
+          </div>
+          <div class="l-step last">
+            <span class="num">3</span>
+            <h3>Measure the damage</h3>
+            <p>Coding collapses; equal-size random / bottom controls stay flat. Causal.</p>
+          </div>
+        </div>
+      </section>
+
+      <section class="l-closing">
+        <h2>Run your own analysis</h2>
+        <p>Pick a model, area, and k — get the spot, the figures, and the causal payoff.</p>
+        <a class="l-cta" href="/app/">Open the app →</a>
+      </section>
+
+      <footer class="l-foot">
+        <span>Parametic Report</span>
+        <span><a href="#">Paper</a> · <a href="#">Repository</a></span>
+      </footer>
+    </div>
+
+    <script>
+      // Mini spot heatmap: early-MLP cells dark, the rest faded — the same story
+      // the report hero tells, at a glance.
+      (function () {
+        var host = document.getElementById("hm");
+        if (!host) return;
+        var rows = 10;
+        for (var r = 0; r < rows; r++) {
+          var line = document.createElement("div");
+          line.className = "l-hm-row";
+          for (var c = 0; c < 8; c++) {
+            if (c === 4) { var g = document.createElement("div"); g.className = "l-hm-gap"; line.appendChild(g); continue; }
+            var cell = document.createElement("div");
+            cell.className = "l-hm-cell";
+            var isMLP = c > 4;
+            var early = r < 5;
+            cell.style.background = (isMLP && early) ? "#185fa5" : (isMLP ? "#9bc0ec" : "#e6f1fb");
+            line.appendChild(cell);
+          }
+          host.appendChild(line);
+        }
+      })();
+    </script>
+  </body>
+</html>
