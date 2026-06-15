@@ -188,3 +188,93 @@ The Spot Story is a first pass; the user wants a **대대적 (substantial) UI re
 
 Multi-run **comparison** view · **intervention** actions (the professor's "부분 극대/극소": ablate/amplify/export a selected layer/module spot — module rows are already structured as the selectable unit) · user **model upload** / self-serve · more languages.
 
+# 2026-06-15 — GPU dispatch migrated to VESSL Cloud
+
+## What changed
+
+GPU dispatch moved from **Docker-out-of-Docker (DooD)** — a sibling runner container on the host
+Docker daemon — to **VESSL Cloud batch jobs**, reusing the lab's vendored harness in
+`scripts/vessl/` (`config.sh`, `push.sh`, `submit.sh`, `watch.sh`, wrapping `vesslctl`). The worker
+no longer builds/runs a Docker image; `docker_command()` is gone. GPU dispatch is now isolated in
+`worker.py` in four functions: `write_job_spec()`, `vessl_submit()` (shells out to
+`scripts/vessl/submit.sh`, parses the `job-...` slug), `vessl_wait()` (polls `vesslctl job show`
+until terminal, captures `vesslctl job logs`), and `vessl_fetch_artifacts()`
+(`vesslctl volume download`).
+
+Flow: `push.sh` uploads repo code to `/shared/${NS}/code` (S3 object volume); `submit.sh` syncs it
+to fast SSD `/work/${NS}/code` and runs the runner there. Container paths:
+`artifact_root=/shared/${NS}/results/<cache_key>`, `scratch_root=/work/${NS}/scratch/<job_id>`,
+HF cache `=/shared/${NS}/hf-cache`. After the job reaches a terminal state, the worker downloads
+`/shared/${NS}/results/<cache_key>` back to the host-local artifact_root, so the **API still serves
+artifacts from local disk, unchanged**. `HF_TOKEN` is passed to the job via submit.sh's
+`--env HF_TOKEN=...` (the code push excludes `.env`).
+
+**Success contract unchanged:** success ⇔ VESSL job state `succeeded` AND `manifest.json` present
+in the (downloaded) artifact_root; failure ⇔ `error.json` breadcrumb `{stage, message}`.
+
+**KEY BENEFIT:** the old DooD path-aliasing gotcha (host-identical paths, must run from
+`/home/ssunlp/workspace/...`) is **eliminated** — VESSL volume mounts are clean, no host-real-path
+requirement.
+
+## VESSL conventions (from `scripts/vessl/config.sh`)
+
+| Setting | Value |
+|---|---|
+| Org / team | `SSU-NLPLab` / `Default` |
+| GPU spec | `resourcespec-a100x1` (A100 SXM 80GB, $1.55/hr, betelgeuse cluster) |
+| Image | stock `pytorch/pytorch:2.3.0-cuda12.1-cudnn8-devel` + `pip install -r requirements-runner.txt` at job start (no custom registry image) |
+| Object volume | `objvol-gsvyr0eu87wt` → `/shared` (S3-backed, cross-cluster, downloadable) |
+| Cluster volume | `clustervol-r922i766wr02` → `/work` (fast SSD, betelgeuse-local) |
+| Namespace | `VESSL_NS=seonghyeon/parametic` (set in repo-root `.vesslrc`) |
+
+## Operational runbook
+
+- After code changes, push to the object volume: `bash scripts/vessl/push.sh`.
+- The worker daemon then **submits / watches / downloads automatically** for each queued job — no
+  local Docker or GPU needed on the host.
+- To debug a single job manually:
+
+  ```bash
+  bash scripts/vessl/submit.sh --name <n> --gpus 1 \
+    --pip "-r requirements-runner.txt" \
+    --env HF_TOKEN=... \
+    --cmd "..."
+  bash scripts/vessl/watch.sh <job-slug>
+  ```
+
+- **Prerequisites:** `vesslctl auth status` must be valid, and `.vesslrc` must be present at the
+  repo root (defines `VESSL_NS`).
+
+## Status as of this session (2026-06-15)
+
+**Code: DONE.** All migration code is written and unit-tested; nothing committed yet (branch
+`experiment/qwen3-8b-calibration`).
+
+- `parametic_platform/config.py` — DooD settings replaced with VESSL settings; reads `.vesslrc`
+  (same env names as `scripts/vessl/config.sh`) so the shell harness and Python stay single-sourced.
+- `parametic_platform/worker.py` — `docker_command()` removed; `vessl_submit()` / `vessl_wait()` /
+  `vessl_fetch_artifacts()` added; `run_job()` wraps dispatch in try/except (any dispatch error ⇒
+  job failed). `vessl_fetch_artifacts()` downloads into a temp dir, locates the result root by its
+  `manifest.json`/`error.json` marker, then materializes it at the host-local artifact_root.
+- `tests/conftest.py` — `fake_runner` now monkeypatches the three `vessl_*` seams (not
+  `subprocess.Popen`), writing the artifact tree into the local artifact_root. **16 tests green**
+  (`/opt/conda/bin/python -m pytest tests/ -q`), no GPU/Docker/Postgres/VESSL needed.
+- `scripts/vessl/{config,push,submit,watch}.sh` vendored from the `vessl-job` plugin; `submit.sh`
+  extended with a repeatable `--env KEY=VALUE` passthrough (for `HF_TOKEN`). `.vesslrc` added.
+
+**Live plumbing smoke: GREEN** (validated end-to-end on VESSL, no GPU):
+1. `bash scripts/vessl/push.sh` → uploaded 90 files / 11.9 MB to `objvol-...:seonghyeon/parametic/code`.
+2. CPU job (`ubuntu:22.04`, `resourcespec-a100cpu`) succeeded: `/shared` + `/work` mounts present,
+   code synced `/shared`→`/work`, sentinel `manifest.json` written to `/shared/.../results/`.
+3. `vesslctl volume download ... --remote-prefix <p>` lands files **flat** under the local dir
+   (prefix stripped) — matches `vessl_fetch_artifacts()` + `_locate_result_root()`.
+
+**Permissions:** `.claude/settings.local.json` (gitignored) allows `Bash(bash scripts/vessl/*)`
+and `Bash(vesslctl *)` so the harness runs without the auto-mode classifier gating it.
+
+**REMAINING — real GPU E2E (not yet run):** an `approx-smoke` analysis on A100×1 through the full
+web→worker→download path (run API+worker against a **SQLite** `DATABASE_URL` here, since this host
+has no local Docker/Postgres). **Watch the cold-start risk:** the job does `pip install -r
+requirements-runner.txt` at start, which includes **deepspeed** — slow/possibly flaky to build on
+the stock image. If it bites, the fix is a prebuilt venv on the volume or a custom image (roadmap).
+
