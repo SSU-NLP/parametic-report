@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Parametic Report</title>
+    <title>Parametic Report — independent analysis of LLM internals</title>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Spectral:wght@400;500;600;700&display=swap" />
@@ -13,88 +13,124 @@
   <body>
     <div class="landing">
       <nav class="l-nav">
-        <a class="l-brand" href="/">Parametic Report</a>
-        <div class="l-nav-right">
+        <a class="l-brand" href="/"><span class="dot"></span> Parametic Report</a>
+        <div class="l-navgroup">
+          <a href="/app/">Analyses</a>
           <a href="#method">Method</a>
-          <a href="#" >Paper</a>
-          <a class="l-cta" href="/app/">Open app →</a>
+          <a href="#highlights">Highlights</a>
+          <a href="#">Paper</a>
         </div>
+        <span class="l-nav-spacer"></span>
+        <a class="l-cta ghost" href="#">Log in</a>
+        <a class="l-cta" href="/app/">Open app →</a>
       </nav>
 
       <header class="l-hero">
         <div>
-          <span class="l-eyebrow">EMNLP demo · mechanistic interpretability</span>
-          <h1>An LLM's coding ability hides in about 1% of its weights.</h1>
-          <p>Parametic Report finds the spot — the tiny set of parameters that, when zeroed,
-            collapses code modeling while equal-size random and bottom controls barely move.
-            Discover it, visualize it, and causally verify it in one click.</p>
+          <h1>Independent analysis of LLM internals</h1>
+          <p class="sub">Parametic Report locates the spot — the tiny set of parameters that runs a
+            model's coding ability — and causally verifies it. One click: discover it, visualize it,
+            measure what removing it does.</p>
           <div class="l-hero-actions">
             <a class="l-cta" href="/app/">Explore analyses →</a>
             <a class="l-cta ghost" href="#method">See the method</a>
           </div>
         </div>
-        <div class="l-spotcard">
-          <div class="cols"><span>q</span><span>k</span><span>v</span><span>o</span><span class="l-hm-gap"></span><span>gate</span><span>up</span><span>down</span></div>
-          <div class="l-hm" id="hm"></div>
-          <p class="l-spotcaption">the spot — top-1.6%, concentrated in early MLP layers</p>
+        <div class="l-news">
+          <a href="/app/">
+            <span class="arr" aria-hidden="true">↗</span>
+            <div class="eyebrow">LATEST</div>
+            <div class="l-news-title">Llama-3.2-3B · java spot</div>
+            <p>Zeroing the top-1.6% spot collapses code PPL ×66,901 — controls stay flat.</p>
+          </a>
+          <a href="#method">
+            <span class="arr" aria-hidden="true">↗</span>
+            <div class="eyebrow">METHOD</div>
+            <div class="l-news-title">grad × parameter calibration</div>
+            <p>Sample-calibrated importance, two seeds, per-tensor masks — fast and reproducible.</p>
+          </a>
         </div>
       </header>
 
-      <section class="l-result">
-        <div class="l-stat"><p class="label">Zero the spot → code PPL</p><p class="value bad">×66,901</p></div>
-        <div class="l-stat"><p class="label">Equal-size controls</p><p class="value good">×1.02 flat</p></div>
-        <div class="l-stat"><p class="label">Of all parameters</p><p class="value">1.6%</p></div>
-      </section>
+      <div class="l-label" id="highlights">Highlights</div>
+      <section class="l-cards3">
+        <div class="l-card">
+          <div class="l-card-head"><span class="l-sq red"></span><h3>Causal collapse</h3></div>
+          <p class="cap">Code perplexity after zeroing each equal-size region · log scale</p>
+          <div class="bars">
+            <div class="bar-row"><span class="bn">Original</span><span class="bt"><span style="width:9%"></span></span><span class="bv">3.31</span></div>
+            <div class="bar-row hot"><span class="bn">Spot</span><span class="bt"><span style="width:100%"></span></span><span class="bv">2.2e5</span></div>
+            <div class="bar-row flat"><span class="bn">Bottom</span><span class="bt"><span style="width:9%"></span></span><span class="bv">3.37</span></div>
+            <div class="bar-row flat"><span class="bn">Random</span><span class="bt"><span style="width:9%"></span></span><span class="bv">3.37</span></div>
+          </div>
+        </div>
 
-      <section class="l-section" id="method">
-        <h2>How it works</h2>
-        <div class="l-steps">
-          <div class="l-step">
-            <span class="num">1</span>
-            <h3>Rank</h3>
-            <p>Score every weight by grad × parameter importance on code data.</p>
+        <div class="l-card">
+          <div class="l-card-head"><span class="l-sq blue"></span><h3>Where it lives</h3></div>
+          <p class="cap">Share of importance by weight-module type</p>
+          <div class="bars">
+            <div class="bar-row"><span class="bn">mlp.down</span><span class="bt"><span style="width:100%"></span></span><span class="bv">28.0%</span></div>
+            <div class="bar-row"><span class="bn">mlp.up</span><span class="bt"><span style="width:91%"></span></span><span class="bv">25.4%</span></div>
+            <div class="bar-row"><span class="bn">mlp.gate</span><span class="bt"><span style="width:73%"></span></span><span class="bv">20.5%</span></div>
+            <div class="bar-row"><span class="bn">attn.o</span><span class="bt"><span style="width:41%"></span></span><span class="bv">11.5%</span></div>
+            <div class="bar-row"><span class="bn">attn.q</span><span class="bt"><span style="width:20%"></span></span><span class="bv">5.6%</span></div>
           </div>
-          <div class="l-step">
-            <span class="num">2</span>
-            <h3>Zero the top-k%</h3>
-            <p>Mask out the highest-scoring parameters — the candidate spot.</p>
+        </div>
+
+        <div class="l-card">
+          <div class="l-card-head"><span class="l-sq purple"></span><h3>Footprint</h3></div>
+          <p class="cap">Top-1.6% per tensor — densest in early MLP layers</p>
+          <div class="hm-mini">
+            <div class="cols"><span>q</span><span>k</span><span>v</span><span>o</span><span></span><span>gate</span><span>up</span><span>down</span></div>
+            <div class="hm-mini-grid" id="hm"></div>
           </div>
-          <div class="l-step last">
-            <span class="num">3</span>
-            <h3>Measure the damage</h3>
-            <p>Coding collapses; equal-size random / bottom controls stay flat. Causal.</p>
+          <div class="foot-stat">
+            <div><div class="v">1.6%</div><div class="k">of params</div></div>
+            <div><div class="v">252</div><div class="k">tensors</div></div>
           </div>
         </div>
       </section>
 
-      <section class="l-closing">
-        <h2>Run your own analysis</h2>
-        <p>Pick a model, area, and k — get the spot, the figures, and the causal payoff.</p>
-        <a class="l-cta" href="/app/">Open the app →</a>
+      <section class="l-bottom" id="method">
+        <a class="l-action" href="/app/">
+          <span class="arr blue" aria-hidden="true">↗</span>
+          <h3>Run your own analysis</h3>
+          <p>Pick a model, area, and k. Get the spot, the figures, and the causal payoff.</p>
+        </a>
+        <a class="l-action" href="/app/">
+          <span class="arr green" aria-hidden="true">↗</span>
+          <h3>Browse analyses</h3>
+          <p>Every succeeded and failed run, with its full reproducibility spec.</p>
+        </a>
+        <div class="l-changelog">
+          <h3>Recent</h3>
+          <div class="l-feed">
+            <div class="l-feed-item"><span class="meta">Llama-3.2-3B · java · top-0.0163</span><span class="title"><span class="pill ok">succeeded</span> ×66,901 collapse</span></div>
+            <div class="l-feed-item"><span class="meta">Llama-3.2-3B · java · top-0.0151</span><span class="title"><span class="pill ok">succeeded</span> ×61,598 collapse</span></div>
+            <div class="l-feed-item"><span class="meta">Llama-3.2-3B · java · approx-smoke</span><span class="title"><span class="pill bad">failed</span> accumulate_grad_mul_param</span></div>
+          </div>
+        </div>
       </section>
 
       <footer class="l-foot">
         <span>Parametic Report</span>
-        <span><a href="#">Paper</a> · <a href="#">Repository</a></span>
+        <span><a href="#">Paper</a> · <a href="#">Repository</a> · <a href="/app/">App</a></span>
       </footer>
     </div>
 
     <script>
-      // Mini spot heatmap: early-MLP cells dark, the rest faded — the same story
-      // the report hero tells, at a glance.
+      // Footprint mini heatmap: early-MLP cells dark, the rest faded.
       (function () {
         var host = document.getElementById("hm");
         if (!host) return;
-        var rows = 10;
-        for (var r = 0; r < rows; r++) {
+        for (var r = 0; r < 9; r++) {
           var line = document.createElement("div");
-          line.className = "l-hm-row";
+          line.className = "hm-mini-row";
           for (var c = 0; c < 8; c++) {
-            if (c === 4) { var g = document.createElement("div"); g.className = "l-hm-gap"; line.appendChild(g); continue; }
+            if (c === 4) { var g = document.createElement("div"); line.appendChild(g); continue; }
             var cell = document.createElement("div");
-            cell.className = "l-hm-cell";
-            var isMLP = c > 4;
-            var early = r < 5;
+            cell.className = "hm-mini-cell";
+            var isMLP = c > 4, early = r < 5;
             cell.style.background = (isMLP && early) ? "#185fa5" : (isMLP ? "#9bc0ec" : "#e6f1fb");
             line.appendChild(cell);
           }
