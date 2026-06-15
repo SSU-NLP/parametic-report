@@ -278,3 +278,82 @@ has no local Docker/Postgres). **Watch the cold-start risk:** the job does `pip 
 requirements-runner.txt` at start, which includes **deepspeed** — slow/possibly flaky to build on
 the stock image. If it bites, the fix is a prebuilt venv on the volume or a custom image (roadmap).
 
+# 2026-06-15 (later) — real GPU E2E PASSED ✅ (4 bugs fixed; uncommitted)
+
+The full web→worker→VESSL-A100→download→API-serve loop is **proven green** with
+`llama-3.2-3b` + `java-code-smoke` + `approx-smoke` (k=0.0151):
+
+| Model | PPL |
+|---|---:|
+| original | 3.31 |
+| **code spot top0.0151** | **203,927.76** (×61,600) |
+| bottom top0.0151 | 3.35 |
+| random_seed1 top0.0151 | 3.38 |
+
+11 figures + 756 masks + metrics + manifest round-tripped to the host-local `artifact_root`;
+API serves a figure (HTTP 200 PNG 2247×3205) and `/spec`; DB request → `succeeded`. Ran API +
+worker daemon against **SQLite** (`DATABASE_URL=sqlite:////tmp/parametic_e2e.db`,
+`PARAMETIC_ALLOW_INTERNAL_MODES=1`, basic auth demo/demo) — no Postgres/Docker on host. Env saved
+at `/tmp/parametic_e2e.env`. The cold-start fear was a non-issue: **deepspeed pip install ~50s, fine.**
+
+**The staged de-risk caught 4 real bugs that full-send would have buried.** All fixes are
+host-side or container-code and **not yet committed** (branch `experiment/qwen3-8b-calibration`):
+
+1. **Stale base image.** Team-default `VESSL_IMAGE=pytorch/pytorch:2.3.0-cuda12.1-cudnn8-devel`
+   (torch 2.3) is too old for the *unpinned* latest `deepspeed`/`transformers` in
+   `requirements-runner.txt` (transformers jumped to **5.x**, needs torch ≥2.4; deepspeed import
+   hit `torch.library.custom_op` missing). **Fix:** pin `VESSL_IMAGE=` to the DooD-validated
+   `pytorch/pytorch:2.12.0-cuda13.0-cudnn9-devel` (same as `Dockerfile.runner`) in **`.vesslrc`**
+   — single-sources it for both `config.sh` (sourced) and `config.py` (`vget`).
+2. **`submit.sh` pip + tag.** The torch-2.12 image is Debian **PEP-668 externally-managed** → pip
+   needs `--break-system-packages` (added to the harness pip line). Also its default `--tag` was
+   hardcoded `omni-cons` (vendoring leftover) → now derives from `VESSL_NS` (`${VESSL_NS##*/}`).
+   *(Real worker jobs already pass `--tag parametic` explicitly via `worker.py`.)*
+3. **`worker.py vessl_submit` slug parse.** `re.search(r"job-[a-z0-9]+", out)` greedily matched
+   **`job-spec`** from the echoed `--job-spec` arg, so the worker polled a nonexistent job →
+   marked the request false-failed while the **real GPU job ran orphaned**. **Fix:** anchor on
+   submit.sh's authoritative `slug: job-...` line (`re.findall(r"slug:\s*(job-[a-z0-9]+)")[-1]`).
+4. **HF cache on `/shared` breaks symlinks.** `worker.py vessl_container_paths` put `hf_cache` on
+   the S3-backed object volume `/shared`. HuggingFace stores files as `blobs/<sha>` **symlinked**
+   into `snapshots/<rev>/`, and the S3 FUSE mount can't resolve symlinks → snapshot entries are
+   dead **0-byte files** → `OSError: config.json not valid JSON`. **Fix:** move `hf_cache` to
+   `/work` (real SSD fs, symlinks work, betelgeuse-local so still persists across jobs).
+
+**Files touched (uncommitted):** `.vesslrc`, `scripts/vessl/submit.sh`, `parametic_platform/worker.py`.
+16 unit tests still green. **Leftover cleanup (optional):** corrupt `~6GB` HF cache at
+`/shared/seonghyeon/parametic/hf-cache` (0-byte snapshots + real blobs) is now unused — safe to
+delete on the volume; a few `failed` test rows in the SQLite DB are throwaway.
+
+**Operational note:** to restart the host loop here — `set -a; source /tmp/parametic_e2e.env; set +a`,
+then `setsid /opt/conda/bin/python -m parametic_platform.worker --init-db --poll-seconds 5 &` and
+`setsid /opt/conda/bin/python -m uvicorn parametic_platform.api:app --host 0.0.0.0 --port 8000 &`.
+Submit with a **fresh `k`** each time to dodge the cache (e.g. `k=0.0161`).
+
+## IO optimization — masks off the slow S3 volume (verified, 2.3× faster)
+
+The first green VESSL run took ~20 min vs ~4.3 min for the prior local Pro-6000 run. Cause
+(from `manifest.json` stage timings, NOT the GPU): the ~8GB of raw mask `.pt` files were written
+by `create_masks` to and re-read 4× by `evaluate_ppl_damage` from the **S3-backed `/shared`**
+artifact_root. GPU compute (`accumulate`) was identical (~130s) — A100 vs Pro-6000 doesn't matter
+for this tiny workload; it was all mask IO.
+
+**Fix (`parametic_platform/runner.py`):** masks now compute on `scratch_root` (`/work` SSD) and
+`evaluate_ppl_damage` reads them there. By **default they are NOT published** to artifact_root (the
+UI renders only figures/metrics/report) — flip on with `PARAMETIC_PUBLISH_MASKS=1` or a mode
+`publish_masks: true`, which runs a `publish_masks` stage that copies them to artifact_root. Added a
+`stage()` context manager (times the publish step + drops the failure breadcrumb); `run_step` reuses it.
+
+**Measured (approx-smoke, warm model cache):**
+
+| stage | before (/shared) | after (/work) |
+|---|---:|---:|
+| accumulate_grad_mul_param | 130s | 129s |
+| create_masks | 329s | 206s |
+| evaluate_ppl_damage | **606s** | **60s** |
+| **TOTAL (stages)** | **1189s (~20m)** | **518s (~8.6m)** |
+
+Host download dropped **7.9GB → 1.8MB** (masks no longer fetched by default). Result unchanged:
+code-spot ×66,900 collapse, controls flat. Remaining gap vs local (~257s) is `create_masks` writing
+8GB to the cluster SSD (~38MB/s); pushing masks to container-local `/tmp` could shave it but risks
+space — not worth it. 16 unit tests green.
+

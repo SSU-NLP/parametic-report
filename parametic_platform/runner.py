@@ -6,6 +6,7 @@ import os
 import shutil
 import subprocess
 import sys
+from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -53,11 +54,16 @@ def write_error_breadcrumb(manifest: dict[str, Any], stage: str, message: str) -
         pass
 
 
-def run_step(name: str, cmd: list[str], *, cwd: Path, env: dict[str, str] | None, manifest: dict[str, Any]) -> None:
+@contextmanager
+def stage(name: str, manifest: dict[str, Any]):
+    """Record a timed stage in the manifest, dropping an error breadcrumb on failure.
+
+    Use for in-process work (e.g. publishing artifacts); run_step wraps it for
+    subprocess steps."""
     print(f"\n== {name} ==", flush=True)
     manifest["stages"].append({"name": name, "status": "running", "started_at": datetime.utcnow().isoformat()})
     try:
-        subprocess.run(cmd, cwd=cwd, env=env, check=True)
+        yield
     except Exception as exc:
         manifest["stages"][-1]["status"] = "failed"
         manifest["stages"][-1]["finished_at"] = datetime.utcnow().isoformat()
@@ -66,6 +72,11 @@ def run_step(name: str, cmd: list[str], *, cwd: Path, env: dict[str, str] | None
         raise
     manifest["stages"][-1]["status"] = "succeeded"
     manifest["stages"][-1]["finished_at"] = datetime.utcnow().isoformat()
+
+
+def run_step(name: str, cmd: list[str], *, cwd: Path, env: dict[str, str] | None, manifest: dict[str, Any]) -> None:
+    with stage(name, manifest):
+        subprocess.run(cmd, cwd=cwd, env=env, check=True)
 
 
 def ensure_cuda(repo_root: Path, python_bin: str, manifest: dict[str, Any]) -> None:
@@ -170,8 +181,17 @@ def main() -> None:
     scratch_root.mkdir(parents=True, exist_ok=True)
     (artifact_root / "figures").mkdir(exist_ok=True)
     (artifact_root / "metrics").mkdir(exist_ok=True)
-    (artifact_root / "masks").mkdir(exist_ok=True)
     (artifact_root / "error.json").unlink(missing_ok=True)
+
+    # Masks are ~8GB/run of raw .pt tensors the UI never renders. Compute them on the
+    # fast cluster SSD (scratch_root=/work) so create_masks writes and the 4×
+    # evaluate_ppl_damage reads don't hit the slow S3-backed artifact_root (/shared) —
+    # that IO was the whole gap vs local runs. Only publish them to artifact_root (and
+    # thus download to the host) when explicitly asked, via PARAMETIC_PUBLISH_MASKS=1 or
+    # a mode `publish_masks: true`.
+    publish_masks = bool_env("PARAMETIC_PUBLISH_MASKS", False) or bool(mode.get("publish_masks", False))
+    mask_root = scratch_root / "masks"
+    mask_root.mkdir(parents=True, exist_ok=True)
 
     manifest: dict[str, Any] = {
         "request_id": spec["request_id"],
@@ -276,8 +296,8 @@ def main() -> None:
         / f"grad-mul-param_checkpoint_{mode['sample_size']}"
         for seed in mode["seeds"]
     ]
-    code_mask = artifact_root / "masks" / "code-region" / model["id"] / k_label
-    control_root = artifact_root / "masks" / "control-region" / model["id"]
+    code_mask = mask_root / "code-region" / model["id"] / k_label
+    control_root = mask_root / "control-region" / model["id"]
     run_step(
         "create_masks",
         [
@@ -388,6 +408,10 @@ def main() -> None:
         manifest=manifest,
     )
 
+    if publish_masks:
+        with stage("publish_masks", manifest):
+            shutil.copytree(mask_root, artifact_root / "masks", dirs_exist_ok=True)
+
     write_report(artifact_root, manifest, ppl_path, k)
     manifest.pop("_artifact_root", None)
     manifest["status"] = "succeeded"
@@ -396,9 +420,10 @@ def main() -> None:
         "report": "report.md",
         "manifest": "manifest.json",
         "ppl_damage": "metrics/ppl_damage.json",
-        "masks": "masks",
         "figures": "figures",
     }
+    if publish_masks:
+        manifest["artifacts"]["masks"] = "masks"
     (artifact_root / "manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
     print(f"wrote {artifact_root / 'manifest.json'}", flush=True)
 
