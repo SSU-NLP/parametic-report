@@ -157,19 +157,13 @@ code { font-family: "JetBrains Mono", "SFMono-Regular", ui-monospace, monospace;
 }
 .hero-sub { margin: 4px 0 0; color: var(--muted); font-size: 13px; }
 
-/* reserved K%-scatter hero slot */
+/* spot-map unavailable placeholder (run without a per-tensor summary) */
 .scatter-slot {
-  position: relative; margin-top: 22px; min-height: 300px;
+  position: relative; margin-top: 22px; min-height: 200px;
   border: 1.5px dashed var(--line-2); border-radius: var(--radius-lg);
-  background:
-    linear-gradient(var(--surface-2) 0 0) padding-box,
-    repeating-linear-gradient(0deg, transparent 0 39px, var(--line) 39px 40px),
-    repeating-linear-gradient(90deg, transparent 0 39px, var(--line) 39px 40px);
+  background: var(--surface-2);
   display: grid; place-items: center; overflow: hidden;
 }
-.scatter-axes { position: absolute; inset: 0; pointer-events: none; }
-.axis-y { position: absolute; top: 14px; left: 16px; color: var(--muted); font-size: 12px; }
-.axis-x { position: absolute; bottom: 12px; right: 18px; color: var(--muted); font-size: 12px; }
 .scatter-center { text-align: center; padding: 24px; }
 .scatter-ic { font-size: 30px; color: var(--blue); opacity: .55; letter-spacing: 4px; }
 .scatter-title { margin: 8px 0 2px; font-size: 15px; font-weight: 700; }
@@ -276,14 +270,10 @@ code { font-family: "JetBrains Mono", "SFMono-Regular", ui-monospace, monospace;
 .concentration .stack { display: flex; height: 30px; border-radius: 8px; overflow: hidden; margin-bottom: 20px; }
 .concentration .seg { height: 100%; }
 
-/* D — tensor scatter */
-.scatter { margin-top: 4px; }
-.hero-scatter { margin-top: 22px; }
+/* D — hero spot atlas (heatmap + slider + depth) */
+.atlas { margin-top: 4px; }
+.hero-atlas { margin-top: 22px; }
 .sc-top { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; margin-bottom: 12px; }
-.sc-leg { display: flex; align-items: center; gap: 14px; font-size: 12px; color: var(--muted); }
-.sc-leg .sw { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 6px; vertical-align: -1px; }
-.sc-leg .sw.blue { background: var(--blue); }
-.sc-leg .sw.gray { background: #8a97a6; }
 .sc-slider { display: flex; align-items: center; gap: 10px; margin-left: auto; font-family: "JetBrains Mono", monospace; font-size: 12px; color: var(--muted); }
 .sc-slider input[type=range] { width: 180px; accent-color: var(--blue); }
 .sc-slider b { color: var(--blue); min-width: 34px; }

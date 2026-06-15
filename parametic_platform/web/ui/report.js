@@ -8,7 +8,7 @@ import { shortId, fmtCompact, fmtRatio } from "../format.js";
 import { deriveHero } from "../spotdata.js";
 import { STORY_TABS, StoryPanel } from "./acts.js";
 import { SpecPanel, ArtifactPanel } from "./details.js";
-import { TensorScatter } from "./viz.js";
+import { SpotAtlas } from "./viz.js";
 
 // Story acts + reproducibility + artifacts, all in one tab bar.
 const REPORT_TABS = [...STORY_TABS, { id: "repro", label: "Reproducibility" }, { id: "artifacts", label: "Artifacts" }];
@@ -24,17 +24,13 @@ function reportMeta(spec, listRow, catalog) {
   return { model, lang, k };
 }
 
-function ScatterPlaceholder() {
+function AtlasPlaceholder() {
   return html`
-    <div class="scatter-slot" role="img" aria-label="K-percent parameter scatter — coming soon">
-      <div class="scatter-axes">
-        <span class="axis-y">gradient ↑</span>
-        <span class="axis-x">value →</span>
-      </div>
+    <div class="scatter-slot" role="img" aria-label="Spot map unavailable">
       <div class="scatter-center">
-        <span class="scatter-ic" aria-hidden="true">⋰</span>
-        <p class="scatter-title">K%-slider parameter scatter</p>
-        <p class="scatter-sub">Hero slot reserved — needs a per-parameter dump (follow-up run)</p>
+        <span class="scatter-ic" aria-hidden="true">⊞</span>
+        <p class="scatter-title">Spot map unavailable</p>
+        <p class="scatter-sub">This run did not emit a per-tensor parameter summary.</p>
       </div>
     </div>`;
 }
@@ -59,9 +55,9 @@ function Hero({ meta, spot }) {
             (${hero.maskTensors} tensors) removed</p>` : null}
       ` : html`<p class="hero-sub">Damage metrics unavailable for this run.</p>`}
       ${matrix
-        ? html`<div class="hero-scatter"><${TensorScatter} data=${matrix}
-            foot=${`Aggregated to ${matrix.points.length} tensors (layer × module). The per-parameter scatter (docs/image.png) drops in here once that dump exists.`} /></div>`
-        : html`<${ScatterPlaceholder} />`}
+        ? html`<div class="hero-atlas"><${SpotAtlas} data=${matrix}
+            foot=${`Aggregated to ${matrix.points.length} tensors (layer × module). A per-parameter view (docs/image.png) can replace this once that dump exists.`} /></div>`
+        : html`<${AtlasPlaceholder} />`}
     </section>`;
 }
 
@@ -100,7 +96,7 @@ function PendingState({ status }) {
 // Succeeded report: hero pinned on top, the rest behind a single tab bar.
 function SucceededReport({ analysis, meta }) {
   const { artifacts, masks, spec, spot } = analysis;
-  const [tab, setTab] = useState("where");
+  const [tab, setTab] = useState(REPORT_TABS[0].id);
   const panel = tab === "repro" ? html`<${SpecPanel} spec=${spec} />`
     : tab === "artifacts" ? html`<${ArtifactPanel} items=${artifacts} masks=${masks} />`
     : html`<${StoryPanel} id=${tab} spot=${spot} />`;

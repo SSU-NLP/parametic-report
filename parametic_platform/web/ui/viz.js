@@ -17,15 +17,16 @@ function heat(v, max) {
   return `rgb(${r | 0},${g | 0},${b | 0})`;
 }
 
-// A — the model's anatomy: importance per (layer × module).
-export function SpotHeatmap({ data }) {
+// A — the model's anatomy: importance per (layer × module). With `threshold`
+// set, cells below the top-K% cut dim out so the surviving spot stands alone.
+export function SpotHeatmap({ data, threshold }) {
   if (!data) return null;
   const head = ["q", "k", "v", "o", null, "gate", "up", "down"];
   const order = [0, 1, 2, 3, -1, 4, 5, 6]; // -1 = gap between attention and MLP
   const last = data.layers.length - 1;
+  const cellFill = (v) => (threshold != null && v < threshold) ? "#e9eef4" : heat(v, data.cellMax);
   return html`
     <div class="heatmap">
-      <div class="hm-legend"><span>low</span><i class="hm-scale"></i><span>high</span></div>
       <div class="hm-cols">
         ${head.map((c) => html`<div class=${c ? "hm-col" : "hm-gap"}>${c || ""}</div>`)}
       </div>
@@ -37,7 +38,7 @@ export function SpotHeatmap({ data }) {
               ? html`<div class="hm-gap"></div>`
               : html`<div class="hm-cell"
                   title=${`layer ${L} · ${data.modules[j]} · ${data.cells[i][j].toFixed(2)}`}
-                  style=${`background:${heat(data.cells[i][j], data.cellMax)}`}></div>`)}
+                  style=${`background:${cellFill(data.cells[i][j])}`}></div>`)}
           </div>
         </div>`)}
       <div class="hm-axis"><span>attention</span><span>MLP</span></div>
@@ -69,47 +70,28 @@ export function DepthProfile({ data }) {
     </svg>`;
 }
 
-// D — the spot as a field: every tensor at (depth, importance), sized by params,
-// with a top-K% threshold slider. The interaction the per-parameter hero reuses.
-export function TensorScatter({ data, foot }) {
+// D — the hero spot map: the layer×module heatmap with a top-K% threshold
+// slider (dims everything below the cut) plus the by-depth profile underneath.
+export function SpotAtlas({ data, foot }) {
   const [k, setK] = useState(20);
   if (!data || !data.points.length) return null;
-  const W = 920, H = 300, pl = 42, pr = 16, pt = 14, pb = 28, iw = W - pl - pr, ih = H - pt - pb;
-  const last = data.layers.length - 1;
-  const ymax = data.pointMax * 1.05;
-  const xf = (L) => pl + iw * L / last, yf = (v) => pt + ih * (1 - v / ymax);
-  const rf = (s) => 3 + 6 * Math.sqrt((s || 0) / (data.selMax || 1));
   const sorted = [...data.points].sort((a, b) => b.v - a.v);
   const nOn = Math.max(1, Math.round(data.points.length * k / 100));
   const thr = sorted[nOn - 1].v;
-  const grid = [0, 1, 2, 3];
-  const ticks = [0, 7, 14, 21, last];
   return html`
-    <div class="scatter">
+    <div class="atlas">
       <div class="sc-top">
-        <div class="sc-leg">
-          <span><i class="sw blue"></i>MLP</span>
-          <span><i class="sw gray"></i>attention</span>
-        </div>
+        <div class="hm-legend"><span>low</span><i class="hm-scale"></i><span>high</span></div>
         <label class="sc-slider">top
           <input type="range" min="2" max="60" step="1" value=${k}
             onInput=${(e) => setK(+e.target.value)} aria-label="top K percent" />
           <b>${k}%</b>
         </label>
       </div>
-      <svg class="chart" viewBox=${`0 0 ${W} ${H}`} role="img" aria-label="Tensor importance scatter">
-        ${grid.map((g) => { const y = pt + ih * g / 3; return html`
-          <line class="gl" x1=${pl} y1=${y} x2=${W - pr} y2=${y} />
-          <text class="ax" x=${pl - 6} y=${y + 3} text-anchor="end">${(ymax * (1 - g / 3)).toFixed(1)}</text>`; })}
-        ${ticks.map((L) => html`<text class="ax" x=${xf(L)} y=${H - 9} text-anchor="middle">L${L}</text>`)}
-        ${data.points.map((p) => {
-          const on = p.v >= thr;
-          const fill = on ? (p.mlp ? "var(--blue)" : "#8a97a6") : "#dde3ea";
-          return html`<circle cx=${xf(p.L)} cy=${yf(p.v)} r=${rf(p.sel)} fill=${fill} fill-opacity=${on ? 0.9 : 0.5}>
-            <title>${`layer ${p.L} · ${p.m} · imp ${p.v.toFixed(2)} · ${p.sel.toLocaleString()} params`}</title></circle>`;
-        })}
-      </svg>
+      <${SpotHeatmap} data=${data} threshold=${thr} />
       <p class="sc-read"><b>${nOn.toLocaleString()}</b> of ${data.points.length} tensors above the top-${k}% importance cut · threshold ≥ ${thr.toFixed(2)}</p>
+      <div class="act-subhead">Same signal, by depth</div>
+      <${DepthProfile} data=${data} />
       ${foot ? html`<p class="sc-foot">${foot}</p>` : null}
     </div>`;
 }

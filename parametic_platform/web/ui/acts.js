@@ -4,16 +4,16 @@
 import { html } from "./common.js";
 import { fmtCompact } from "../format.js";
 import { deriveCausal } from "../spotdata.js";
-import { SpotHeatmap, DepthProfile, ModuleConcentration } from "./viz.js";
+import { ModuleConcentration } from "./viz.js";
 
+// "Where it lives" now anchors the hero (heatmap + depth); the tabs carry the
+// rest of the story.
 export const STORY_TABS = [
-  { id: "where", label: "Where it lives" },
   { id: "what", label: "What it is" },
   { id: "damage", label: "What removing it does" },
 ];
 
 const DESC = {
-  where: "Importance across all 28 layers × 7 weight modules, drawn live from the run — the three MLP columns are the spine, and it is densest in the earliest layers.",
   what: "Share of importance by module type. Roughly three-quarters of the spot lives in the MLP feed-forward weights; attention contributes mostly through o_proj.",
   damage: "Zero the spot vs. an equal-size random/bottom region, then measure code perplexity. Only the spot breaks coding — the causal payoff.",
 };
@@ -36,24 +36,11 @@ function CausalChart({ ppl }) {
 
 // One story act rendered as a tab panel (header line + its in-browser viz).
 export function StoryPanel({ id, spot }) {
-  const matrix = spot && spot.matrix;
   const csv = spot && spot.csv;
   const ppl = spot && spot.ppl;
-
-  let body;
-  if (id === "where") {
-    body = matrix
-      ? html`
-        <${SpotHeatmap} data=${matrix} />
-        <div class="act-subhead">Same signal, by depth</div>
-        <${DepthProfile} data=${matrix} />`
-      : html`<p class="muted-note">Per-tensor matrix unavailable for this run.</p>`;
-  } else if (id === "what") {
-    body = html`<${ModuleConcentration} csv=${csv} />`;
-  } else {
-    body = html`<${CausalChart} ppl=${ppl} />`;
-  }
-
+  const body = id === "what"
+    ? html`<${ModuleConcentration} csv=${csv} />`
+    : html`<${CausalChart} ppl=${ppl} />`;
   return html`
     <div class="panel">
       <p class="panel-desc">${DESC[id]}</p>
