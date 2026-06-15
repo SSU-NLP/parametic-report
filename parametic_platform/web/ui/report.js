@@ -1,10 +1,13 @@
 // Report route (#/a/:id). Stage 2: back bar + hero (punchline + reserved K%
 // scatter slot) + first-class failed/running/queued states. The four-act spot
 // story, reproducibility, and artifacts arrive in later stages.
+import { useState } from "preact/hooks";
 import { html, StatusPill, Spinner } from "./common.js";
 import { navigate, catalogLabel } from "../store.js";
 import { shortId, fmtCompact, fmtRatio } from "../format.js";
 import { deriveHero } from "../spotdata.js";
+import { SpotStory, ZoomOverlay } from "./acts.js";
+import { TensorScatter } from "./viz.js";
 
 // Title/meta resolved from spec when present, else from the list row labels.
 function reportMeta(spec, listRow, catalog) {
@@ -34,6 +37,7 @@ function ScatterPlaceholder() {
 
 function Hero({ meta, spot }) {
   const hero = deriveHero(spot && spot.ppl);
+  const matrix = spot && spot.matrix;
   const kLabel = meta.k != null ? `top-${meta.k}` : "the spot";
   const lang = meta.lang || "code";
 
@@ -50,7 +54,10 @@ function Hero({ meta, spot }) {
           <p class="hero-sub">${Number(hero.zeroedParams).toLocaleString()} params
             (${hero.maskTensors} tensors) removed</p>` : null}
       ` : html`<p class="hero-sub">Damage metrics unavailable for this run.</p>`}
-      <${ScatterPlaceholder} />
+      ${matrix
+        ? html`<div class="hero-scatter"><${TensorScatter} data=${matrix}
+            foot=${`Aggregated to ${matrix.points.length} tensors (layer × module). The per-parameter scatter (docs/image.png) drops in here once that dump exists.`} /></div>`
+        : html`<${ScatterPlaceholder} />`}
     </section>`;
 }
 
@@ -87,10 +94,11 @@ function PendingState({ status }) {
 }
 
 export function Report({ id, analysis, listRow, catalog }) {
-  const { row, spec, spot, loading, error } = analysis;
+  const { row, artifacts, spec, spot, loading, error } = analysis;
   const status = (row && row.status) || (listRow && listRow.status);
   const meta = reportMeta(spec, listRow, catalog);
   const titleBits = [meta.model, meta.lang, meta.k != null ? `top-${meta.k}` : null].filter(Boolean);
+  const [zoom, setZoom] = useState(null);
 
   return html`
     <div class="report">
@@ -103,9 +111,14 @@ export function Report({ id, analysis, listRow, catalog }) {
       <div class="report-body">
         ${loading && !row ? html`<${Spinner} label="Loading analysis…" />` : null}
         ${error ? html`<p class="banner bad">${error}</p>` : null}
-        ${row && status === "succeeded" ? html`<${Hero} meta=${meta} spot=${spot} />` : null}
+        ${row && status === "succeeded" ? html`
+          <${Hero} meta=${meta} spot=${spot} />
+          <${SpotStory} items=${artifacts} spot=${spot} onZoom=${(url, caption) => setZoom({ url, caption })} />
+        ` : null}
         ${row && status === "failed" ? html`<${FailedState} row=${row} spec=${spec} />` : null}
         ${row && (status === "queued" || status === "running") ? html`<${PendingState} status=${status} />` : null}
       </div>
+
+      <${ZoomOverlay} zoom=${zoom} onClose=${() => setZoom(null)} />
     </div>`;
 }

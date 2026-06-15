@@ -197,6 +197,98 @@ code { font-family: "JetBrains Mono", "SFMono-Regular", ui-monospace, monospace;
 }
 .stage.failed { background: var(--red-soft); color: #c0263a; border-color: #f2c4cb; font-weight: 700; }
 
+/* ---------- spot story (acts) ---------- */
+.spot-story { margin-top: 12px; }
+.act { padding: 32px 0; border-top: 1px solid var(--line); }
+.act-head { display: flex; gap: 14px; align-items: flex-start; }
+.act-num {
+  flex: none; display: grid; place-items: center; width: 30px; height: 30px; border-radius: 9px;
+  background: var(--blue-soft); color: var(--blue); font-weight: 800; font-size: 15px;
+}
+.act-head h2 { margin: 2px 0 4px; font-size: 19px; font-weight: 700; }
+.act-head p { margin: 0; color: var(--ink-2); font-size: 14px; line-height: 1.6; max-width: 640px; }
+.act-body { margin-top: 18px; padding-left: 44px; }
+.muted-note { color: var(--muted); font-size: 13px; }
+
+.fig-grid { display: grid; gap: 16px; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); }
+.figure { margin: 0; display: grid; gap: 8px; }
+.figure img {
+  width: 100%; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface);
+  cursor: zoom-in; transition: border-color .12s, box-shadow .12s;
+}
+.figure img:hover { border-color: var(--line-2); box-shadow: var(--shadow); }
+.figure figcaption { color: var(--muted); font-size: 12px; }
+
+.module-rank { display: grid; gap: 9px; margin-bottom: 22px; }
+.mod-row { display: grid; grid-template-columns: minmax(120px, 220px) 1fr 52px; gap: 12px; align-items: center; font-size: 13px; }
+.mod-name { font-family: "JetBrains Mono", monospace; color: var(--ink-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mod-bar { height: 12px; border-radius: 6px; background: var(--surface-2); overflow: hidden; }
+.mod-bar > span { display: block; height: 100%; background: var(--blue); border-radius: 6px; }
+.mod-val { text-align: right; color: var(--muted); font-variant-numeric: tabular-nums; }
+
+.damage-chart { display: grid; gap: 10px; }
+.dmg-row { display: grid; grid-template-columns: minmax(120px, 190px) 1fr 120px; gap: 12px; align-items: center; font-size: 13px; }
+.dmg-name { color: var(--ink-2); }
+.dmg-bar { height: 16px; border-radius: 8px; background: var(--surface-2); overflow: hidden; }
+.dmg-bar > span { display: block; height: 100%; background: var(--green); border-radius: 8px; }
+.dmg-row.spot .dmg-name { color: var(--red); font-weight: 700; }
+.dmg-row.spot .dmg-bar > span { background: var(--red); }
+.dmg-row.spot .dmg-val { color: var(--red); font-weight: 700; }
+.dmg-val { text-align: right; font-variant-numeric: tabular-nums; color: var(--ink); }
+.dmg-note { margin: 14px 0 0; color: var(--muted); font-size: 12px; line-height: 1.6; max-width: 620px; }
+
+/* zoom overlay */
+.zoom-overlay { position: fixed; inset: 0; z-index: 50; display: none; place-items: center; padding: 36px; background: rgba(12,18,32,.84); cursor: zoom-out; }
+.zoom-overlay.open { display: grid; }
+.zoom-overlay img { max-width: 94vw; max-height: 84vh; border-radius: var(--radius); background: #fff; }
+.zoom-cap { margin-top: 14px; color: #e8eef8; font-size: 13px; text-align: center; }
+
+/* ---------- in-browser spot visualizations ---------- */
+.act-subhead { margin: 22px 0 10px; font-size: 12px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; color: var(--muted); }
+
+/* shared SVG chart bits */
+.chart { display: block; width: 100%; height: auto; overflow: visible; }
+.chart .gl { stroke: var(--line); stroke-width: 1; }
+.chart .ax { font-family: "JetBrains Mono", monospace; font-size: 10.5px; fill: var(--muted); }
+
+/* A — heatmap */
+.heatmap { --hm-cols: repeat(4, 1fr) 12px repeat(3, 1fr); }
+.hm-legend { display: flex; align-items: center; justify-content: flex-end; gap: 8px; margin-bottom: 10px; font-family: "JetBrains Mono", monospace; font-size: 11px; color: var(--muted); }
+.hm-scale { display: inline-block; width: 80px; height: 9px; border-radius: 5px; background: linear-gradient(90deg, #eaf1fc, #2d6cdf, #15356f); }
+.hm-cols { display: grid; grid-template-columns: var(--hm-cols); gap: 3px; margin: 0 0 5px 30px; }
+.hm-col { font-family: "JetBrains Mono", monospace; font-size: 11px; color: var(--muted); text-align: center; }
+.hm-line { display: grid; grid-template-columns: 30px 1fr; gap: 0; align-items: center; }
+.hm-rlab { font-family: "JetBrains Mono", monospace; font-size: 10px; color: var(--muted); text-align: right; padding-right: 6px; }
+.hm-row { display: grid; grid-template-columns: var(--hm-cols); gap: 3px; padding: 1.5px 0; }
+.hm-cell { height: 13px; border-radius: 3px; }
+.hm-gap { }
+.hm-axis { display: flex; justify-content: space-between; margin: 9px 0 0 30px; font-family: "JetBrains Mono", monospace; font-size: 11px; color: var(--muted); }
+
+/* C — module concentration */
+.concentration .stack { display: flex; height: 30px; border-radius: 8px; overflow: hidden; margin-bottom: 20px; }
+.concentration .seg { height: 100%; }
+
+/* D — tensor scatter */
+.scatter { margin-top: 4px; }
+.hero-scatter { margin-top: 22px; }
+.sc-top { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; margin-bottom: 12px; }
+.sc-leg { display: flex; align-items: center; gap: 14px; font-size: 12px; color: var(--muted); }
+.sc-leg .sw { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 6px; vertical-align: -1px; }
+.sc-leg .sw.blue { background: var(--blue); }
+.sc-leg .sw.gray { background: #8a97a6; }
+.sc-slider { display: flex; align-items: center; gap: 10px; margin-left: auto; font-family: "JetBrains Mono", monospace; font-size: 12px; color: var(--muted); }
+.sc-slider input[type=range] { width: 180px; accent-color: var(--blue); }
+.sc-slider b { color: var(--blue); min-width: 34px; }
+.sc-read { margin: 10px 0 0; font-family: "JetBrains Mono", monospace; font-size: 12.5px; color: var(--ink-2); }
+.sc-read b { color: var(--blue); }
+.sc-foot { margin: 6px 0 0; font-size: 12px; color: var(--muted); line-height: 1.6; max-width: 640px; }
+
+@media (max-width: 720px) {
+  .act-body { padding-left: 0; }
+  .sc-slider { margin-left: 0; }
+  .sc-slider input[type=range] { width: 130px; }
+}
+
 @media (max-width: 720px) {
   .gallery { padding: 32px 16px 60px; }
   .gallery-head h1 { font-size: 27px; }

@@ -24,6 +24,65 @@ export function findPplItem(items) {
 export function findModuleCsvItem(items) {
   return (items || []).find((i) => i.kind === "table" && i.path.includes("module_summary"));
 }
+export function findParamCsvItem(items) {
+  return (items || []).find((i) => i.path.includes("spot_parameter_summary"));
+}
+
+// The 7 weight modules we render in the atlas/scatter, in attention→MLP order.
+export const CORE_MODULES = [
+  { key: "self_attn.q_proj.weight", short: "q", mlp: false },
+  { key: "self_attn.k_proj.weight", short: "k", mlp: false },
+  { key: "self_attn.v_proj.weight", short: "v", mlp: false },
+  { key: "self_attn.o_proj.weight", short: "o", mlp: false },
+  { key: "mlp.gate_proj.weight", short: "gate", mlp: true },
+  { key: "mlp.up_proj.weight", short: "up", mlp: true },
+  { key: "mlp.down_proj.weight", short: "down", mlp: true },
+];
+
+// Turn spot_parameter_summary.csv (per layer × module) into the in-browser
+// atlas data: a heatmap matrix, a depth profile, and scatter points — replacing
+// the static PNG figures with live SVG/DOM the report draws itself.
+export function parseSpotMatrix(csvText) {
+  let rows;
+  try { rows = parseCsv(csvText); } catch { return null; }
+  const byKey = new Map();
+  const layerSet = new Set();
+  const profileMap = new Map(); // profile sums ALL modules (incl. layernorms)
+  for (const r of rows) {
+    if (r.layer == null || !r.module) continue;
+    const L = parseInt(r.layer, 10);
+    if (Number.isNaN(L)) continue;
+    layerSet.add(L);
+    byKey.set(`${L}|${r.module}`, r);
+    profileMap.set(L, (profileMap.get(L) || 0) + (parseFloat(r.importance_sum) || 0));
+  }
+  const layers = [...layerSet].sort((a, b) => a - b);
+  if (!layers.length) return null;
+
+  const cells = [], points = [];
+  let cellMax = 0, selMax = 0;
+  for (const L of layers) {
+    const row = [];
+    for (const m of CORE_MODULES) {
+      const r = byKey.get(`${L}|${m.key}`);
+      const v = r ? parseFloat(r.importance_sum) || 0 : 0;
+      const sel = r ? parseInt(r.selected, 10) || 0 : 0;
+      row.push(v);
+      if (v > cellMax) cellMax = v;
+      if (sel > selMax) selMax = sel;
+      points.push({ L, m: m.short, v, sel, mlp: m.mlp });
+    }
+    cells.push(row);
+  }
+  const profile = layers.map((L) => profileMap.get(L) || 0);
+  return {
+    layers,
+    modules: CORE_MODULES.map((m) => m.short),
+    cells, cellMax,
+    profile, profileMax: Math.max(...profile, 1),
+    points, pointMax: cellMax, selMax,
+  };
+}
 
 // The headline: zeroing the spot multiplies PPL by `ratio`.
 export function deriveHero(ppl) {
@@ -69,14 +128,17 @@ export function deriveModules(csvText, limit = 8) {
   }));
 }
 
-// Fetch metric JSON + module CSV for a succeeded run's artifact list.
+// Fetch metric JSON + module CSV + the per-(layer,module) matrix for a
+// succeeded run's artifact list.
 export async function loadSpotData(items) {
   const pplItem = findPplItem(items);
   const csvItem = findModuleCsvItem(items);
-  let ppl = null, csv = null;
+  const paramItem = findParamCsvItem(items);
+  let ppl = null, csv = null, matrix = null;
   try { if (pplItem) ppl = await api(pplItem.url); } catch { ppl = null; }
   try { if (csvItem) csv = await apiText(csvItem.url); } catch { csv = null; }
-  return { ppl, csv };
+  try { if (paramItem) matrix = parseSpotMatrix(await apiText(paramItem.url)); } catch { matrix = null; }
+  return { ppl, csv, matrix };
 }
 
 // Card-level hook: fetch just the collapse ratio for a succeeded row.
