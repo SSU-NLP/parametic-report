@@ -89,23 +89,35 @@ code { font-family: "JetBrains Mono", "SFMono-Regular", ui-monospace, monospace;
 .gallery-head h1 { font-size: 34px; font-weight: 800; letter-spacing: -.02em; margin: 18px 0 8px; }
 .lede { max-width: 640px; margin: 0; color: var(--ink-2); font-size: 15px; line-height: 1.65; }
 
-.launcher { margin: 8px 0 28px; }
-.launcher.closed .btn { color: var(--ink-2); }
-.launcher.open {
-  display: grid; gap: 12px; align-items: end;
-  grid-template-columns: 1.4fr 1fr 1fr 110px auto;
-  background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius-lg);
-  padding: 16px; box-shadow: var(--shadow);
+.gallery-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 8px 0 22px; }
+.toolbar-count { color: var(--muted); font-size: 13px; font-weight: 600; }
+.launcher-err { margin: 14px 0 0; color: #c0263a; font-size: 13px; }
+
+/* modal */
+.modal-backdrop {
+  position: fixed; inset: 0; z-index: 60; display: grid; place-items: start center;
+  padding: 12vh 20px 20px; background: rgba(12, 18, 32, .42); animation: fade .14s ease;
 }
-.launcher label { display: grid; gap: 6px; min-width: 0; }
-.launcher label span { color: var(--muted); font-size: 12px; font-weight: 600; }
-.launcher select, .launcher input {
+.modal {
+  width: 100%; max-width: 440px; background: var(--surface);
+  border: 1px solid var(--line); border-radius: var(--radius-lg); box-shadow: 0 24px 64px rgba(12,18,32,.24);
+  animation: pop .16s ease;
+}
+@keyframes pop { from { opacity: 0; transform: translateY(6px) scale(.99); } to { opacity: 1; transform: none; } }
+.modal-head { display: flex; align-items: center; justify-content: space-between; padding: 16px 18px; border-bottom: 1px solid var(--line); }
+.modal-head h2 { font-size: 16px; font-weight: 700; }
+.modal-x { border: 0; background: none; cursor: pointer; color: var(--muted); font-size: 15px; padding: 4px 8px; border-radius: 7px; }
+.modal-x:hover { background: var(--surface-2); color: var(--ink); }
+.modal-body { padding: 18px; }
+.modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 20px; }
+.form-grid { display: grid; gap: 14px; }
+.form-grid label { display: grid; gap: 6px; }
+.form-grid label span { color: var(--muted); font-size: 12px; font-weight: 600; }
+.form-grid select, .form-grid input {
   width: 100%; height: 38px; border: 1px solid var(--line-2); border-radius: 8px;
   background: var(--surface); padding: 0 11px;
 }
-.launcher select:focus, .launcher input:focus { outline: none; border-color: var(--blue); box-shadow: 0 0 0 3px var(--blue-soft); }
-.launcher-actions { display: flex; gap: 8px; }
-.launcher-err { grid-column: 1 / -1; margin: 0; color: #c0263a; font-size: 13px; }
+.form-grid select:focus, .form-grid input:focus { outline: none; border-color: var(--blue); box-shadow: 0 0 0 3px var(--blue-soft); }
 
 .card-grid {
   display: grid; gap: 14px;

@@ -1,12 +1,13 @@
 // Gallery route (#/): big title, a collapsible new-analysis launcher, and a
 // responsive grid of analysis cards. Card click → Report (#/a/:id).
 import { useState } from "preact/hooks";
-import { html, Brand, StatusPill } from "./common.js";
+import { html, Brand, StatusPill, Modal } from "./common.js";
 import { catalogLabel, navigate } from "../store.js";
 import { createAnalysis } from "../api.js";
 import { shortId, fmtRatio } from "../format.js";
 import { useDamageRatio } from "../spotdata.js";
 
+// New-analysis launcher: a primary button that opens the request form in a modal.
 function Launcher({ catalog, onSubmitted }) {
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -19,42 +20,40 @@ function Launcher({ catalog, onSubmitted }) {
   const mode = form.mode || catalog.modes[0]?.id || "";
 
   const set = (key) => (e) => setForm((f) => ({ ...f, [key]: e.target.value }));
+  const close = () => { setOpen(false); setErr(null); };
 
   async function submit() {
     setBusy(true); setErr(null);
     try {
       const row = await createAnalysis({ model_id, area_id, mode, k: form.k });
       onSubmitted && onSubmitted(row);
-      setOpen(false);
+      close();
     } catch (e) { setErr(e.message); }
     finally { setBusy(false); }
-  }
-
-  if (!open) {
-    return html`
-      <div class="launcher closed">
-        <button class="btn ghost" onClick=${() => setOpen(true)}>＋ New analysis</button>
-      </div>`;
   }
 
   const opt = (items) => items.map((it) => html`<option value=${it.id}>${it.display_name || it.id}</option>`);
 
   return html`
-    <div class="launcher open">
-      <label><span>Model</span>
-        <select value=${model_id} onChange=${set("model_id")}>${opt(catalog.models)}</select></label>
-      <label><span>Area</span>
-        <select value=${area_id} onChange=${set("area_id")}>${opt(catalog.areas)}</select></label>
-      <label><span>Mode</span>
-        <select value=${mode} onChange=${set("mode")}>${opt(catalog.modes)}</select></label>
-      <label class="k"><span>Top-k</span>
-        <input inputmode="decimal" value=${form.k} placeholder="0.01" onInput=${set("k")} /></label>
-      <div class="launcher-actions">
-        <button class="btn run" disabled=${busy} onClick=${submit}>${busy ? "Running…" : "Run analysis"}</button>
-        <button class="btn ghost small" onClick=${() => setOpen(false)}>Cancel</button>
-      </div>
-      ${err ? html`<p class="launcher-err">${err}</p>` : null}
-    </div>`;
+    <button class="btn run" onClick=${() => setOpen(true)}>＋ New analysis</button>
+    ${open ? html`
+      <${Modal} title="New analysis" onClose=${close}>
+        <div class="form-grid">
+          <label><span>Model</span>
+            <select value=${model_id} onChange=${set("model_id")}>${opt(catalog.models)}</select></label>
+          <label><span>Area</span>
+            <select value=${area_id} onChange=${set("area_id")}>${opt(catalog.areas)}</select></label>
+          <label><span>Mode</span>
+            <select value=${mode} onChange=${set("mode")}>${opt(catalog.modes)}</select></label>
+          <label><span>Top-k</span>
+            <input inputmode="decimal" value=${form.k} placeholder="0.01" onInput=${set("k")} /></label>
+        </div>
+        ${err ? html`<p class="launcher-err">${err}</p>` : null}
+        <div class="modal-actions">
+          <button class="btn ghost" onClick=${close}>Cancel</button>
+          <button class="btn run" disabled=${busy} onClick=${submit}>${busy ? "Running…" : "Run analysis"}</button>
+        </div>
+      </${Modal}>` : null}`;
 }
 
 function AnalysisCard({ row, catalog }) {
@@ -96,7 +95,10 @@ export function Gallery({ catalog, rows, error, refresh }) {
         ${catalog.ok === false ? html`<p class="banner bad">API unavailable — ${catalog.error}</p>` : null}
       </header>
 
-      <${Launcher} catalog=${catalog} onSubmitted=${refresh} />
+      <div class="gallery-toolbar">
+        <span class="toolbar-count">${rows.length} ${rows.length === 1 ? "analysis" : "analyses"}</span>
+        <${Launcher} catalog=${catalog} onSubmitted=${refresh} />
+      </div>
 
       ${error ? html`<p class="banner bad">${error}</p>` : null}
       ${rows.length === 0 ? html`<p class="empty">No analyses yet. Run one to start.</p>` : html`
