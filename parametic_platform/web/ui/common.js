@@ -20,6 +20,16 @@ export function Spinner({ label }) {
   return html`<div class="loading"><span class="spin" aria-hidden="true"></span>${label || "Loading…"}</div>`;
 }
 
+// Underline-style tab bar. `tabs` = [{id, label}], `active` = id.
+export function TabBar({ tabs, active, onSelect }) {
+  return html`
+    <div class="tab-bar" role="tablist">
+      ${tabs.map((t) => html`
+        <button class="tab-btn ${t.id === active ? "active" : ""}" role="tab"
+          aria-selected=${t.id === active} onClick=${() => onSelect(t.id)}>${t.label}</button>`)}
+    </div>`;
+}
+
 // Brand lockup used in both routes.
 export function Brand({ tagline }) {
   return html`

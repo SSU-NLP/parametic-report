@@ -197,17 +197,22 @@ code { font-family: "JetBrains Mono", "SFMono-Regular", ui-monospace, monospace;
 }
 .stage.failed { background: var(--red-soft); color: #c0263a; border-color: #f2c4cb; font-weight: 700; }
 
-/* ---------- spot story (acts) ---------- */
-.spot-story { margin-top: 12px; }
-.act { padding: 32px 0; border-top: 1px solid var(--line); }
-.act-head { display: flex; gap: 14px; align-items: flex-start; }
-.act-num {
-  flex: none; display: grid; place-items: center; width: 30px; height: 30px; border-radius: 9px;
-  background: var(--blue-soft); color: var(--blue); font-weight: 800; font-size: 15px;
+/* ---------- report tabs + panels ---------- */
+.tab-bar {
+  display: flex; gap: 4px; flex-wrap: wrap; margin: 26px 0 0;
+  border-bottom: 1px solid var(--line);
 }
-.act-head h2 { margin: 2px 0 4px; font-size: 19px; font-weight: 700; }
-.act-head p { margin: 0; color: var(--ink-2); font-size: 14px; line-height: 1.6; max-width: 640px; }
-.act-body { margin-top: 18px; padding-left: 44px; }
+.tab-btn {
+  border: 0; background: none; cursor: pointer; color: var(--muted);
+  font-size: 14px; font-weight: 600; padding: 10px 14px; border-radius: 8px 8px 0 0;
+  border-bottom: 2px solid transparent; margin-bottom: -1px; transition: color .12s, border-color .12s;
+}
+.tab-btn:hover { color: var(--ink-2); background: var(--surface-2); }
+.tab-btn.active { color: var(--blue); border-bottom-color: var(--blue); }
+.tab-panel { padding: 26px 0 8px; }
+.panel { animation: fade .16s ease; }
+@keyframes fade { from { opacity: 0; transform: translateY(3px); } to { opacity: 1; transform: none; } }
+.panel-desc { margin: 0 0 20px; color: var(--ink-2); font-size: 14px; line-height: 1.65; max-width: 660px; }
 .muted-note { color: var(--muted); font-size: 13px; }
 
 .module-rank { display: grid; gap: 9px; margin-bottom: 22px; }
@@ -227,6 +232,24 @@ code { font-family: "JetBrains Mono", "SFMono-Regular", ui-monospace, monospace;
 .dmg-row.spot .dmg-val { color: var(--red); font-weight: 700; }
 .dmg-val { text-align: right; font-variant-numeric: tabular-nums; color: var(--ink); }
 .dmg-note { margin: 14px 0 0; color: var(--muted); font-size: 12px; line-height: 1.6; max-width: 620px; }
+
+/* reproducibility spec */
+.spec-list { display: grid; gap: 10px; margin: 0; max-width: 560px; }
+.spec-list div { display: grid; grid-template-columns: 110px minmax(0, 1fr); gap: 14px; align-items: baseline; }
+.spec-list dt { color: var(--muted); font-size: 13px; }
+.spec-list dd { margin: 0; font-family: "JetBrains Mono", monospace; font-size: 13px; color: var(--ink); overflow-wrap: anywhere; }
+.spec-stages { margin-top: 18px; padding-top: 16px; border-top: 1px solid var(--line); color: var(--muted); font-size: 12px; line-height: 1.7; font-family: "JetBrains Mono", monospace; }
+
+/* artifacts */
+.art-count { margin-left: 8px; padding: 2px 8px; border-radius: 999px; background: var(--surface-2); color: var(--muted); font-size: 12px; }
+.artifact-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.artifact-list li { font-family: "JetBrains Mono", monospace; font-size: 12.5px; color: var(--ink-2); overflow-wrap: anywhere; }
+.art-group { margin-top: 12px; }
+.art-group:first-child { margin-top: 0; }
+.art-kind { font-family: inherit; font-size: 11px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; color: var(--muted); }
+.artifact-list li a { color: var(--blue); text-decoration: none; }
+.artifact-list li a:hover { text-decoration: underline; }
+.artifact-list li.mask-row { color: var(--ink); }
 
 /* ---------- in-browser spot visualizations ---------- */
 .act-subhead { margin: 22px 0 10px; font-size: 12px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; color: var(--muted); }
@@ -269,7 +292,6 @@ code { font-family: "JetBrains Mono", "SFMono-Regular", ui-monospace, monospace;
 .sc-foot { margin: 6px 0 0; font-size: 12px; color: var(--muted); line-height: 1.6; max-width: 640px; }
 
 @media (max-width: 720px) {
-  .act-body { padding-left: 0; }
   .sc-slider { margin-left: 0; }
   .sc-slider input[type=range] { width: 130px; }
 }
