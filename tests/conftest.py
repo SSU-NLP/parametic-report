@@ -23,7 +23,6 @@ os.environ["PARAMETIC_SCRATCH_ROOT"] = str(_ROOT / "scratch")
 os.environ["PARAMETIC_BASIC_AUTH_USER"] = "demo"
 os.environ["PARAMETIC_BASIC_AUTH_PASSWORD"] = "demo"
 os.environ["PARAMETIC_ALLOW_INTERNAL_MODES"] = "1"
-os.environ["PARAMETIC_RUNNER_IMAGE"] = "parametic-runner:test"
 # Keep scratch so failed-run assertions can inspect it deterministically.
 os.environ["PARAMETIC_KEEP_SCRATCH_ON_SUCCESS"] = "1"
 os.environ["PARAMETIC_KEEP_SCRATCH_ON_FAILURE"] = "1"
@@ -168,32 +167,38 @@ def settings(api_module):
 
 @pytest.fixture
 def fake_runner(monkeypatch):
-    """Install a fake docker runner: replaces worker.subprocess.Popen.
+    """Fake the VESSL dispatch seams (no vesslctl, no GPU, no network).
 
-    On wait() it writes the artifact tree into `artifact_root` and returns rc.
-    `succeed=False` writes an error.json breadcrumb and returns rc=1.
+    Patches worker.vessl_submit / vessl_wait / vessl_fetch_artifacts so the full
+    web→worker→artifact loop runs locally: fetch writes the artifact tree into
+    `artifact_root` (the host-local path the API serves), mirroring a real
+    `vesslctl volume download`. `succeed=False` writes an error.json breadcrumb and
+    reports a failed job state.
     """
     import parametic_platform.worker as worker
 
     def install(artifact_root, *, succeed=True, stage="create_masks", message="boom\nOOM at layer 3"):
         target = Path(artifact_root)
 
-        class FakeProcess:
-            def __init__(self, cmd, stdout=None, stderr=None, **kwargs):
-                self._stdout = stdout
+        def _submit(settings, request, job, host_spec_path, cp, worker_log):
+            return "job-faketest123"
 
-            def wait(self):
-                target.mkdir(parents=True, exist_ok=True)
-                if succeed:
-                    build_success_tree(target)
-                    return 0
+        def _wait(settings, slug, worker_log):
+            return "succeeded" if succeed else "failed"
+
+        def _fetch(settings, request, worker_log):
+            target.mkdir(parents=True, exist_ok=True)
+            if succeed:
+                build_success_tree(target)
+            else:
                 (target / "error.json").write_text(
                     json.dumps({"status": "failed", "error": {"stage": stage, "message": message}}),
                     encoding="utf-8",
                 )
-                return 1
 
-        monkeypatch.setattr(worker.subprocess, "Popen", FakeProcess)
+        monkeypatch.setattr(worker, "vessl_submit", _submit)
+        monkeypatch.setattr(worker, "vessl_wait", _wait)
+        monkeypatch.setattr(worker, "vessl_fetch_artifacts", _fetch)
 
     return install
 

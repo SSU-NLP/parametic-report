@@ -1,0 +1,2 @@
+VESSL_NS="seonghyeon/parametic"
+VESSL_PUSH_EXCLUDES="platform_artifacts platform_scratch data_preprocess/dataset reports logs.json"
