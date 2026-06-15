@@ -86,17 +86,18 @@ function AnalysisCard({ row, catalog }) {
 
 export function Gallery({ catalog, rows, error, refresh }) {
   return html`
+    <header class="app-topbar">
+      <a class="brand-link" href="/">
+        <${Brand} />
+      </a>
+    </header>
+
     <div class="gallery">
-      <header class="gallery-head">
-        <${Brand} tagline="Coding Spot discovery" />
-        <h1>LLM Coding Spot</h1>
-        <p class="lede">The tiny set of parameters that, when zeroed, collapses coding ability.
-          Pick a run to see where the spot lives, what it is, whether it is stable, and what removing it does.</p>
-        ${catalog.ok === false ? html`<p class="banner bad">API unavailable — ${catalog.error}</p>` : null}
-      </header>
+      ${catalog.ok === false ? html`<p class="banner bad">API unavailable — ${catalog.error}</p>` : null}
 
       <div class="gallery-toolbar">
-        <span class="toolbar-count">${rows.length} ${rows.length === 1 ? "analysis" : "analyses"}</span>
+        <h1 class="gallery-title">Analyses
+          <span class="toolbar-count">${rows.length}</span></h1>
         <${Launcher} catalog=${catalog} onSubmitted=${refresh} />
       </div>
 

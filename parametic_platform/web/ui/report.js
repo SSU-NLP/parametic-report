@@ -43,7 +43,7 @@ function Hero({ meta, spot }) {
 
   return html`
     <section class="hero">
-      <h1 class="hero-h1">The ${lang} coding spot</h1>
+      <h1 class="hero-h1">The ${lang} spot</h1>
       ${hero ? html`
         <p class="hero-punch">
           Zeroing the ${kLabel} coding spot collapses ${lang} modeling — PPL${" "}
