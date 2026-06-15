@@ -357,3 +357,50 @@ code-spot ×66,900 collapse, controls flat. Remaining gap vs local (~257s) is `c
 8GB to the cluster SSD (~38MB/s); pushing masks to container-local `/tmp` could shave it but risks
 space — not worth it. 16 unit tests green.
 
+# 2026-06-15 (later) — Frontend dev workflow decided + seed bundle shipped
+
+**Motivation:** the user works over SSH on the server, where computer-use (visual/browser
+iteration) isn't available, so UI work is hard. Decision: do UI work **locally** against real
+data; backend (`api.py`/`worker.py`/`runner.py`) + GPU/DB stay on the server; only `web/` flows
+back via git.
+
+**Decisions (user-confirmed):**
+- **Dev env:** seed bundle — server tars real run data → user downloads → local `uvicorn` renders
+  real-data UI → local Claude edits `web/` (computer-use works) → `git push` → server pulls.
+- **Stack for the redesign:** **buildless reactive** (Preact+htm or Alpine via CDN/esm.sh; scatter
+  as SVG/canvas). No bundler/`dist/` — FastAPI keeps serving `web/` static. Deploy stays `git pull`.
+- **Sequencing:** **full IA/layout redesign first** (from existing data); the K%-slider scatter
+  spot-finder (`docs/image.png`) is a follow-up because it needs a new artifact (below).
+
+**Shipped this session:**
+- `parametic-frontend-seed.tar.gz` (2.9MB) delivered to the user. Contents: `seed/parametic.db`
+  (4 real rows: 2 succeeded `573f63d8`/`f537dfa9`, 2 failed), `seed/platform_artifacts/<key>/`
+  (figures+metrics+report, **masks stripped**), `seed/seed_db.py` (rewrites the stored server-
+  absolute `artifact_root`/`manifest_path` to the bundle's own local paths — stdlib only,
+  idempotent; **required** because `api.py` serves from the stored absolute path), `seed/RUN_LOCALLY.md`.
+  Verified end-to-end on the server: seeded API serves `/analyses`, figure (HTTP 200 PNG), `/spec`,
+  `/app/` all 200. Local recipe: `python seed/seed_db.py` then `uvicorn` with
+  `DATABASE_URL=sqlite:///$PWD/seed/parametic.db`, `PARAMETIC_ALLOW_INTERNAL_MODES=1`, demo/demo.
+- `docs/frontend_dev.md` (committed `60713c6`) — local loop, stack decision, full API data contract
+  (endpoints, row/artifact shapes, figure-name matching, masks now opt-in/empty-by-default).
+
+**FOLLOW-UP — scatter spot-finder (not started, needs server+GPU):** the existing CSVs are
+aggregated per (layer, module); there is **no per-individual-parameter sample** anywhere. The
+scatter needs each point = a sampled param at (x=value, y=gradient), blue if score |grad·param| in
+top-K%, with a live client-side K% slider. Plan: emit a new `metrics/param_scatter.json` (sample of
+N params {value, gradient, score} + global score quantiles for threshold(K)) from the runner near
+`scripts/create_approx_spot_masks.py`, one GPU run to produce it; slider then re-colors client-side
+(no GPU). Do after the IA redesign settles.
+
+## Session git/runtime state (read before resuming)
+
+- Branch `experiment/qwen3-8b-calibration` is **12 commits ahead of `origin` — NOTHING PUSHED** (the
+  entire DooD→VESSL migration `96f5cda` onward, plus this session's `c7caab1` E2E fixes, `5d6548e`
+  IO perf, `60713c6` frontend guide). Working tree clean. **Ask before pushing.**
+- All server processes are **stopped** (API + worker daemon killed). No VESSL jobs running (all
+  terminal). To restart the host loop, see the "Operational note" above (SQLite env at
+  `/tmp/parametic_e2e.env`).
+- Leftover on volumes (optional cleanup): the corrupt ~6GB HF cache at
+  `/shared/seonghyeon/parametic/hf-cache` (0-byte snapshots from the symlink bug) is unused now that
+  the cache lives on `/work` — safe to delete. The good `/work` HF cache is warm (model cached).
+
