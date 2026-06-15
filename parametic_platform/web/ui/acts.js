@@ -1,21 +1,10 @@
-// The four-act "spot story" for a succeeded run: where the spot lives, what it
-// is, whether it is stable, and what removing it does. Pure presentation over
-// the derivations in spotdata.js. Figures open a zoom overlay via onZoom.
+// The spot story for a succeeded run: where the spot lives, what it is, and what
+// removing it does. Pure presentation over the derivations in spotdata.js — all
+// drawn in-browser from the run's CSV/metrics (no static figures).
 import { html } from "./common.js";
 import { fmtCompact } from "../format.js";
-import { figure, deriveCausal } from "../spotdata.js";
+import { deriveCausal } from "../spotdata.js";
 import { SpotHeatmap, DepthProfile, ModuleConcentration } from "./viz.js";
-
-function Figure({ item, caption, onZoom }) {
-  if (!item) return null;
-  const cap = caption || item.path.split("/").pop();
-  const url = encodeURI(item.url);
-  return html`
-    <figure class="figure">
-      <img src=${url} alt=${cap} loading="lazy" onClick=${() => onZoom(url, cap)} />
-      <figcaption>${cap}</figcaption>
-    </figure>`;
-}
 
 function Act({ num, title, desc, children }) {
   return html`
@@ -44,7 +33,7 @@ function CausalChart({ ppl }) {
       only the discovered spot is causally responsible for coding.</p>`;
 }
 
-export function SpotStory({ items, spot, onZoom }) {
+export function SpotStory({ spot }) {
   const ppl = spot && spot.ppl;
   const csv = spot && spot.csv;
   const matrix = spot && spot.matrix;
@@ -64,26 +53,9 @@ export function SpotStory({ items, spot, onZoom }) {
         <${ModuleConcentration} csv=${csv} />
       </${Act}>
 
-      <${Act} num="3" title="Is it stable?"
-        desc="Two independent calibration seeds. Agreement means the spot is real signal, not noise.">
-        <div class="fig-grid">
-          <${Figure} item=${figure(items, "seedAgreement")} caption="Seed agreement" onZoom=${onZoom} />
-          <${Figure} item=${figure(items, "seedDisagreement")} caption="Seed disagreement" onZoom=${onZoom} />
-        </div>
-      </${Act}>
-
-      <${Act} num="4" title="What removing it does"
+      <${Act} num="3" title="What removing it does"
         desc="Zero the spot vs. an equal-size random/bottom region, then measure code perplexity. Only the spot breaks coding — the causal payoff.">
         <${CausalChart} ppl=${ppl} />
       </${Act}>
-    </div>`;
-}
-
-export function ZoomOverlay({ zoom, onClose }) {
-  if (!zoom) return null;
-  return html`
-    <div class="zoom-overlay open" onClick=${onClose}>
-      <img src=${zoom.url} alt=${zoom.caption || ""} />
-      <div class="zoom-cap">${zoom.caption || ""}</div>
     </div>`;
 }

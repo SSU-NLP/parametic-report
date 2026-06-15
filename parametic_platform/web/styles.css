@@ -210,15 +210,6 @@ code { font-family: "JetBrains Mono", "SFMono-Regular", ui-monospace, monospace;
 .act-body { margin-top: 18px; padding-left: 44px; }
 .muted-note { color: var(--muted); font-size: 13px; }
 
-.fig-grid { display: grid; gap: 16px; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); }
-.figure { margin: 0; display: grid; gap: 8px; }
-.figure img {
-  width: 100%; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface);
-  cursor: zoom-in; transition: border-color .12s, box-shadow .12s;
-}
-.figure img:hover { border-color: var(--line-2); box-shadow: var(--shadow); }
-.figure figcaption { color: var(--muted); font-size: 12px; }
-
 .module-rank { display: grid; gap: 9px; margin-bottom: 22px; }
 .mod-row { display: grid; grid-template-columns: minmax(120px, 220px) 1fr 52px; gap: 12px; align-items: center; font-size: 13px; }
 .mod-name { font-family: "JetBrains Mono", monospace; color: var(--ink-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -236,12 +227,6 @@ code { font-family: "JetBrains Mono", "SFMono-Regular", ui-monospace, monospace;
 .dmg-row.spot .dmg-val { color: var(--red); font-weight: 700; }
 .dmg-val { text-align: right; font-variant-numeric: tabular-nums; color: var(--ink); }
 .dmg-note { margin: 14px 0 0; color: var(--muted); font-size: 12px; line-height: 1.6; max-width: 620px; }
-
-/* zoom overlay */
-.zoom-overlay { position: fixed; inset: 0; z-index: 50; display: none; place-items: center; padding: 36px; background: rgba(12,18,32,.84); cursor: zoom-out; }
-.zoom-overlay.open { display: grid; }
-.zoom-overlay img { max-width: 94vw; max-height: 84vh; border-radius: var(--radius); background: #fff; }
-.zoom-cap { margin-top: 14px; color: #e8eef8; font-size: 13px; text-align: center; }
 
 /* ---------- in-browser spot visualizations ---------- */
 .act-subhead { margin: 22px 0 10px; font-size: 12px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; color: var(--muted); }

@@ -1,12 +1,11 @@
 // Report route (#/a/:id). Stage 2: back bar + hero (punchline + reserved K%
 // scatter slot) + first-class failed/running/queued states. The four-act spot
 // story, reproducibility, and artifacts arrive in later stages.
-import { useState } from "preact/hooks";
 import { html, StatusPill, Spinner } from "./common.js";
 import { navigate, catalogLabel } from "../store.js";
 import { shortId, fmtCompact, fmtRatio } from "../format.js";
 import { deriveHero } from "../spotdata.js";
-import { SpotStory, ZoomOverlay } from "./acts.js";
+import { SpotStory } from "./acts.js";
 import { TensorScatter } from "./viz.js";
 
 // Title/meta resolved from spec when present, else from the list row labels.
@@ -94,11 +93,10 @@ function PendingState({ status }) {
 }
 
 export function Report({ id, analysis, listRow, catalog }) {
-  const { row, artifacts, spec, spot, loading, error } = analysis;
+  const { row, spec, spot, loading, error } = analysis;
   const status = (row && row.status) || (listRow && listRow.status);
   const meta = reportMeta(spec, listRow, catalog);
   const titleBits = [meta.model, meta.lang, meta.k != null ? `top-${meta.k}` : null].filter(Boolean);
-  const [zoom, setZoom] = useState(null);
 
   return html`
     <div class="report">
@@ -113,12 +111,10 @@ export function Report({ id, analysis, listRow, catalog }) {
         ${error ? html`<p class="banner bad">${error}</p>` : null}
         ${row && status === "succeeded" ? html`
           <${Hero} meta=${meta} spot=${spot} />
-          <${SpotStory} items=${artifacts} spot=${spot} onZoom=${(url, caption) => setZoom({ url, caption })} />
+          <${SpotStory} spot=${spot} />
         ` : null}
         ${row && status === "failed" ? html`<${FailedState} row=${row} spec=${spec} />` : null}
         ${row && (status === "queued" || status === "running") ? html`<${PendingState} status=${status} />` : null}
       </div>
-
-      <${ZoomOverlay} zoom=${zoom} onClose=${() => setZoom(null)} />
     </div>`;
 }
