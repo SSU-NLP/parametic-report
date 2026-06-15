@@ -26,7 +26,11 @@
   --shadow: 0 1px 2px rgba(20, 30, 60, .04), 0 8px 30px rgba(20, 30, 60, .05);
   --maxw: 1080px;
 
-  font-family: "Inter", "Söhne", -apple-system, "Helvetica Neue", system-ui, sans-serif;
+  /* Serif display (matches the Parametic Report wordmark) + sans for UI/data. */
+  --font-serif: "Spectral", "Times New Roman", Georgia, serif;
+  --font-sans: "Inter", "Söhne", -apple-system, "Helvetica Neue", system-ui, sans-serif;
+
+  font-family: var(--font-sans);
   color: var(--ink);
 }
 
@@ -62,18 +66,14 @@ code { font-family: "JetBrains Mono", "SFMono-Regular", ui-monospace, monospace;
 .btn.ghost { background: var(--surface); border-color: var(--line-2); color: var(--ink); }
 .btn.ghost:hover { background: var(--surface-2); }
 .btn.ghost.small { min-height: 32px; padding: 0 12px; font-weight: 500; }
-.btn.run { background: var(--green); color: #fff; box-shadow: 0 6px 16px rgba(24,178,74,.22); }
-.btn.run:hover { background: #149a40; }
-.btn.run:disabled { opacity: .6; cursor: default; box-shadow: none; }
+.btn.run { background: var(--ink); color: #fff; }
+.btn.run:hover { background: #0c1426; }
+.btn.run:disabled { opacity: .5; cursor: default; }
 
-.brand { display: flex; align-items: center; gap: 9px; color: var(--muted); font-size: 13px; }
-.brand-mark {
-  display: grid; place-items: center; width: 22px; height: 22px; border-radius: 6px;
-  background: var(--ink); color: #fff; font-weight: 800; font-size: 12px;
-}
-.brand-name { font-weight: 700; color: var(--ink); }
-.brand-sub { color: var(--muted); }
-.brand-sub::before { content: "·"; margin-right: 8px; color: var(--line-2); }
+.brand { display: flex; align-items: baseline; gap: 10px; color: var(--muted); font-size: 13px; }
+.brand-name { font-family: var(--font-serif); font-weight: 500; font-size: 19px; letter-spacing: .01em; color: var(--ink); }
+.brand-sub { color: var(--muted); font-size: 12px; }
+.brand-sub::before { content: "·"; margin-right: 9px; color: var(--line-2); }
 
 .banner { margin: 12px 0 0; padding: 10px 14px; border-radius: var(--radius); font-size: 13px; }
 .banner.bad { background: var(--red-soft); color: #c0263a; }
@@ -86,8 +86,8 @@ code { font-family: "JetBrains Mono", "SFMono-Regular", ui-monospace, monospace;
 /* ---------- gallery ---------- */
 .gallery { max-width: var(--maxw); margin: 0 auto; padding: 48px 24px 80px; }
 .gallery-head { margin-bottom: 28px; }
-.gallery-head h1 { font-size: 34px; font-weight: 800; letter-spacing: -.02em; margin: 18px 0 8px; }
-.lede { max-width: 640px; margin: 0; color: var(--ink-2); font-size: 15px; line-height: 1.65; }
+.gallery-head h1 { font-family: var(--font-serif); font-size: 40px; font-weight: 500; letter-spacing: 0; margin: 16px 0 10px; }
+.lede { max-width: 640px; margin: 0; color: var(--ink-2); font-size: 15px; line-height: 1.7; }
 
 .gallery-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 8px 0 22px; }
 .toolbar-count { color: var(--muted); font-size: 13px; font-weight: 600; }
@@ -158,7 +158,7 @@ code { font-family: "JetBrains Mono", "SFMono-Regular", ui-monospace, monospace;
 
 /* hero */
 .hero { margin-bottom: 8px; }
-.hero-h1 { font-size: 30px; font-weight: 800; letter-spacing: -.02em; margin: 0 0 14px; }
+.hero-h1 { font-family: var(--font-serif); font-size: 34px; font-weight: 500; letter-spacing: 0; margin: 0 0 14px; }
 .hero-punch { font-size: 19px; line-height: 1.55; margin: 0 0 6px; color: var(--ink); }
 .hero-punch b { font-weight: 800; }
 .hero-punch b.bad { color: var(--red); }
@@ -186,7 +186,7 @@ code { font-family: "JetBrains Mono", "SFMono-Regular", ui-monospace, monospace;
 .state-card.bad { border-color: #f2c4cb; background: #fffafa; }
 .state-card.warn { border-color: #f0dca6; background: #fffdf6; }
 .state-head { display: flex; gap: 12px; align-items: flex-start; }
-.state-head h2 { margin: 0 0 4px; font-size: 17px; }
+.state-head h2 { font-family: var(--font-serif); font-weight: 500; margin: 0 0 4px; font-size: 19px; }
 .state-head p { margin: 0; color: var(--ink-2); font-size: 13px; }
 .state-head p code, .state-error code { background: var(--surface-2); border-radius: 4px; padding: 1px 5px; }
 .state-ic { flex: none; display: grid; place-items: center; width: 24px; height: 24px; border-radius: 7px; background: var(--red); color: #fff; font-weight: 800; }

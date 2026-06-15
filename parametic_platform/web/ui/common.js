@@ -53,12 +53,11 @@ export function TabBar({ tabs, active, onSelect }) {
     </div>`;
 }
 
-// Brand lockup used in both routes.
+// Brand lockup — the "Parametic Report" serif wordmark (matches the logo).
 export function Brand({ tagline }) {
   return html`
     <div class="brand">
-      <span class="brand-mark">P</span>
-      <span class="brand-name">Parametic</span>
+      <span class="brand-name">Parametic Report</span>
       ${tagline ? html`<span class="brand-sub">${tagline}</span>` : null}
     </div>`;
 }
