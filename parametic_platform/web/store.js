@@ -3,6 +3,7 @@
 // the documented endpoints in api.js.
 import { useState, useEffect, useCallback } from "preact/hooks";
 import * as API from "./api.js";
+import { loadSpotData } from "./spotdata.js";
 
 export const ACTIVE_STATUSES = new Set(["queued", "running"]);
 
@@ -72,22 +73,27 @@ export function useAnalyses() {
   return { rows, error, refresh };
 }
 
-// Loads one analysis row + its artifacts + spec, polling while active.
+// Loads one analysis row + its spec + (for succeeded) artifacts and the derived
+// spot-story data, polling while active.
 export function useAnalysis(id) {
-  const [state, setState] = useState({ row: null, artifacts: [], masks: [], spec: null, loading: true, error: null });
+  const [state, setState] = useState({ row: null, artifacts: [], masks: [], spec: null, spot: null, loading: true, error: null });
 
   const load = useCallback(async () => {
     if (!id) return;
     try {
       const row = await API.getAnalysis(id);
-      let artifacts = [], masks = [], spec = null;
+      let artifacts = [], masks = [], spot = null;
+      // Spec carries the analysis metadata + stage list (useful for failed runs
+      // too); fetch it regardless of status.
+      let spec = null;
+      try { spec = await API.getSpec(id); } catch { spec = null; }
       if (row.status === "succeeded") {
         const res = await API.getArtifacts(id);
         artifacts = res.items || [];
         masks = res.masks || [];
-        try { spec = await API.getSpec(id); } catch { spec = null; }
+        spot = await loadSpotData(artifacts);
       }
-      setState({ row, artifacts, masks, spec, loading: false, error: null });
+      setState({ row, artifacts, masks, spec, spot, loading: false, error: null });
     } catch (e) {
       setState((s) => ({ ...s, loading: false, error: e.message }));
     }
