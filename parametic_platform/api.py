@@ -10,7 +10,7 @@ from fastapi import Depends, FastAPI, HTTPException, Request
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
-from starlette.responses import FileResponse, RedirectResponse, Response
+from starlette.responses import FileResponse, Response
 from starlette.staticfiles import StaticFiles
 
 from .catalog import get_area, get_mode, get_model, public_areas, public_models, public_modes
@@ -109,8 +109,9 @@ def health() -> dict[str, str]:
 
 
 @app.get("/")
-def root() -> RedirectResponse:
-    return RedirectResponse(url="/app/")
+def root() -> FileResponse:
+    # Landing page at the root; the analysis app lives at /app/.
+    return FileResponse(WEB_DIR / "landing.html")
 
 
 @app.get("/models")
