@@ -40,8 +40,13 @@ def host_artifact_root(settings, request: AnalysisRequest) -> Path:
 def vessl_container_paths(settings, request: AnalysisRequest, job: Job) -> dict[str, str]:
     """Container-side paths inside the VESSL job (clean mounts — no host aliasing).
 
-    Code is synced to the fast cluster volume (/work); results + HF cache live on the
-    S3-backed object volume (/shared) so they survive job teardown and are downloadable.
+    Code is synced to the fast cluster volume (/work); results live on the S3-backed
+    object volume (/shared) so they survive job teardown and are downloadable. The HF
+    cache must stay on /work too: HuggingFace stores files as blobs symlinked into
+    snapshots/, and the S3-backed /shared mount does NOT support symlinks (the snapshot
+    entries land as dead 0-byte files), so a model cached on /shared is unreadable.
+    /work is a real SSD filesystem (symlinks work) and is betelgeuse-local, so the
+    cache still persists across jobs on the cluster we actually run on.
     """
     ns = settings.vessl_ns
     obj = settings.vessl_object_mnt
@@ -50,7 +55,7 @@ def vessl_container_paths(settings, request: AnalysisRequest, job: Job) -> dict[
         "code": f"{work}/{ns}/code",
         "artifact_root": f"{obj}/{ns}/results/{request.cache_key}",
         "scratch_root": f"{work}/{ns}/scratch/{job.id}",
-        "hf_cache": f"{obj}/{ns}/hf-cache",
+        "hf_cache": f"{work}/{ns}/hf-cache",
         "job_spec": f"{obj}/{ns}/jobs/{job.id}/job_spec.json",
         "spec_remote_prefix": f"{ns}/jobs/{job.id}",
         "results_remote_prefix": f"{ns}/results/{request.cache_key}",
@@ -135,10 +140,13 @@ def vessl_submit(settings, request: AnalysisRequest, job: Job, host_spec_path: P
     args += ["--cmd", full_cmd]
 
     out = _run_logged(args, worker_log)
-    match = re.search(r"job-[a-z0-9]+", out)
-    if not match:
+    # submit.sh echoes the full --cmd, which contains `--job-spec`; a bare
+    # `job-[a-z0-9]+` search would greedily match "job-spec". Anchor on the
+    # authoritative `slug: job-...` line submit.sh prints last instead.
+    matches = re.findall(r"slug:\s*(job-[a-z0-9]+)", out)
+    if not matches:
         raise RuntimeError("could not parse VESSL job slug from submit output")
-    return match.group(0)
+    return matches[-1]
 
 
 def vessl_wait(settings, slug: str, worker_log: Path) -> str:

@@ -15,13 +15,13 @@
 #   --pip "PKGS"    pip install these before running (e.g. "peft transformers")
 #   --no-sync       skip the /shared->/work code copy (use code already on /work)
 #   --env KEY=VALUE  pass env var to the job (repeatable)
-#   --tag TAG       job tag (default: omni-cons)
+#   --tag TAG       job tag (default: project name from VESSL_NS)
 #   --watch         poll until terminal and stream logs after submit
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$HERE/config.sh"
 
-NAME=""; CMD=""; GPUS=1; USE_CPU=0; IMAGE="$VESSL_IMAGE"; PIP=""; SYNC=1; TAG="omni-cons"; WATCH=0
+NAME=""; CMD=""; GPUS=1; USE_CPU=0; IMAGE="$VESSL_IMAGE"; PIP=""; SYNC=1; TAG="${VESSL_NS##*/}"; WATCH=0
 ENV_ARGS=()
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -49,7 +49,7 @@ if [[ "$SYNC" == "1" ]]; then
   PRE="${PRE}; echo '[harness] sync code ${VESSL_CODE_SHARED} -> ${VESSL_CODE_WORK}'; cp -ru '${VESSL_CODE_SHARED}/.' '${VESSL_CODE_WORK}/'"
 fi
 PRE="${PRE}; cd '${VESSL_CODE_WORK}'"
-[[ -n "$PIP" ]] && PRE="${PRE}; echo '[harness] pip install ${PIP}'; pip install -q ${PIP}"
+[[ -n "$PIP" ]] && PRE="${PRE}; echo '[harness] pip install ${PIP}'; pip install -q --break-system-packages ${PIP}"
 FULL_CMD="${PRE}; echo '[harness] === user cmd ==='; ${CMD}"
 
 echo "spec=$SPEC image=$IMAGE"
