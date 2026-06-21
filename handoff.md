@@ -452,3 +452,59 @@ real logo; the landing currently approximates it as serif text — swap for the 
 **Git state:** `ui/redesign` pushed to `origin`. (It carries the prior unpushed
 `experiment/qwen3-8b-calibration` commits in its history.)
 
+# 2026-06-15 (later) — UI absorbed into experiment + new-model feature designed
+
+**UI merge.** Fast-forwarded `experiment/qwen3-8b-calibration` ← `origin/ui/redesign` (14 UI
+commits: buildless Preact+htm rewrite, landing at `/`, app at `/app/`, heatmap K%-slider hero,
+modal request, tabbed report). Backend touch = `api.py` 7 lines (`/` serves `landing.html` instead
+of redirecting). **16 unit tests pass.** Working tree clean. `experiment` now == `origin/ui/redesign`
+tip and is **14 ahead of `origin/experiment` — still unpushed** (no GitHub creds on the server; push
+from an authed local: `git push origin experiment/qwen3-8b-calibration`, a pointer-only update since
+the objects are already on `origin/ui/redesign`).
+
+**ENV CHANGE (important):** `/opt/conda` is GONE on this server. Use system `python3` (3.12) with
+`pip install --break-system-packages -r requirements-platform.txt -r requirements-dev.txt`
+(PEP-668 externally-managed). Run tests with `python3 -m pytest tests/ -q`. CLAUDE.md still says
+`/opt/conda/bin/python` — stale.
+
+**Preview app with real data (no GPU/Postgres).** `/tmp/*.db` was wiped, but the real run artifacts
+remain under `platform_artifacts/`. Helper `platform_scratch/seed_preview_db.py` (gitignored)
+rebuilds a SQLite from the on-disk `manifest.json`/`error.json` (6 rows: 4 succeeded + 2 failed,
+llama+qwen, smoke+1024). Launch: `PYTHONPATH=$PWD DATABASE_URL=sqlite:///$PWD/platform_scratch/preview.db
+PARAMETIC_ALLOW_INTERNAL_MODES=1 PARAMETIC_BASIC_AUTH_USER=demo PARAMETIC_BASIC_AUTH_PASSWORD=demo
+python3 -m uvicorn parametic_platform.api:app --host 0.0.0.0 --port 8000`. UI verified serving
+(`/`,`/app/`,`/analyses`,figures all 200).
+
+## NEXT FEATURE — register/run new HuggingFace models (designed, not started)
+
+Goal/vision (user): a **region-detection tool platform**. Phase 1 = **we (operators) register HF
+models and accumulate a library**; later = users upload code+weights or pull private HF models.
+Architecture support = **broad, via an abstraction** (user picked "더 넓게").
+
+Key finding: most of "download from HF" already works — models load via `hf_model_id`, and
+`tokenizer_path` already accepts HF ids (`qwen3-8b` uses `Qwen/Qwen3-8B`; `run_preprocess.sh` passes
+HF ids through). The arch-specific surface is just **two spots**: `scripts/create_approx_spot_masks.py`
+(~line 93, `startswith("model.layers.")` filter) and `scripts/plot_approx_spot_location.py`
+(line 12 `PARAM_RE = model\.layers\.(\d+)\.(.+)` + `MODULE_GROUPS`/`MODULE_ORDER`). The
+calibration grad×param dump is already arch-agnostic (HF param names).
+
+Designed approach + recommended build order:
+1. **Architecture adapter** (the abstraction): `param_name → (layer_idx, module)` + `is_target(name)`,
+   generic over `.layers.N.` / `.h.N.` / `.blocks.N.`; wire into the two scripts, drop the hardcoded
+   filter; derive `expected_tensors` by runtime tensor count (no user input). **Start here +
+   regression-check that llama-3.2-3b & qwen3-8b produce identical output.**
+2. **`resolve_model(hf_id, revision)`** — fetch only `config.json` from HF → detect `model_type` →
+   A100-fit size check → derive ModelSpec (display/output name, `tokenizer=hf_id`, size-appropriate
+   `config_path`) + compatibility report (supported/needs-review/unsupported). Then a
+   `registered_models` DB table so registrations accumulate alongside the curated `catalog.py`
+   entries; resolved spec feeds the existing spec/cache_key builder unchanged. Validate with one new
+   HF model end-to-end on GPU.
+3. **UI** operator "Add model" flow (HF id + revision → resolve → preview report → register), gated
+   for now; self-serve (upload / private HF + auth/quota/storage) reuses this path later.
+
+## Session end state
+- All server processes **stopped** (preview uvicorn killed). No VESSL jobs running. `/shared` corrupt
+  HF cache already deleted; good cache on `/work`.
+- Branch `experiment/qwen3-8b-calibration`: UI + VESSL E2E + IO-opt all merged, **unpushed to
+  `origin/experiment`** (safe on `origin/ui/redesign`).
+
