@@ -5,12 +5,16 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Parametic Report — LLM's Spot</title>
     <link rel="stylesheet" href="./styles.css" />
+    <!-- Self-hosted ESM deps (vendor/, pinned versions). Previously loaded from
+         esm.sh, but the demo environment can't always reach it → blank app. These
+         are served from our own origin so the app never depends on a public CDN. -->
     <script type="importmap">
       {
         "imports": {
-          "preact": "https://esm.sh/preact@10.24.3",
-          "preact/hooks": "https://esm.sh/preact@10.24.3/hooks",
-          "htm/preact": "https://esm.sh/htm@3.1.1/preact?external=preact"
+          "preact": "/app/vendor/preact.module.js",
+          "preact/hooks": "/app/vendor/hooks.module.js",
+          "htm": "/app/vendor/htm.module.js",
+          "htm/preact": "/app/vendor/htm-preact.module.js"
         }
       }
     </script>

@@ -42,7 +42,8 @@ export function useCatalog() {
 
   const refresh = useCallback(async () => {
     try {
-      setCatalog((c) => ({ ...c, models: await API.getModels() }));
+      const models = await API.getModels();
+      setCatalog((c) => ({ ...c, models }));
     } catch (error) {
       setCatalog((c) => ({ ...c, ok: false, error: error.message }));
     }
