@@ -569,10 +569,23 @@ the pushed volume), then `set -a; source /tmp/parametic_qwen25_e2e.env; set +a`,
 (`python3 -m uvicorn parametic_platform.api:app --port 8000`) + worker
 (`python3 -m parametic_platform.worker --init-db --poll-seconds 5`). Both **stopped** at session end.
 
+**Step 3 — operator "Add model" UI: DONE** (commit `f5136c2`, first real TDD pass on this repo).
+Backend contract written test-first (red→green): `/models` entries tagged `source`
+(catalog|registered), registered entries carry `model_type`+compatibility `status`; new
+`GET /capabilities` → `{model_registration}` so the UI gates the flow on the server's
+`PARAMETIC_ALLOW_MODEL_REGISTRATION`. UI (`web/`): gallery toolbar "＋ Add model" launcher
+(shown only when capable) — HF id+revision → `/models/resolve` preview (compat badge, model_type,
+est. params, derived id/expected_tensors, notes) → `/models/register` → `catalog.refresh()` so the
+new model shows in the picker immediately. `api.js` gains resolveModel/registerModel/getCapabilities;
+`useCatalog` loads capabilities + exposes refresh. `tests/test_models_contract.py` (4); **full suite
+63 green**. JS syntax-checked (`node --check`) + backend smoke (capabilities/source/`/app/`/gallery.js
+all 200) — but **UI visual rendering not verified headless**; eyeball the modal locally.
+
 **REMAINING:**
-- **Step 3 — operator "Add model" UI** (HF id + revision → `/models/resolve` preview → `/models/register`
-  → appears in gallery). Reuse `ui/gallery.js`. **Do in TDD.**
-- Both new commits **unpushed to `origin/experiment`** (push from an authed local).
+- The whole new-model feature (steps 1–3) is **5 commits unpushed to `origin/experiment`**
+  (`b1306d8`→`f5136c2`; push from an authed local — no GitHub creds on the server).
+- Visual UI check of the Add-model modal (local, per the frontend dev workflow).
 - Optional: register `Qwen/Qwen2.5-1.5B` etc. in the *curated* catalog with exact `expected_tensors`
   (336+2=338) if it becomes a standing offering, so the cross-k calibration skip fires.
+- Later phases: user self-serve upload / private HF + auth/quota/storage (reuses this path).
 
