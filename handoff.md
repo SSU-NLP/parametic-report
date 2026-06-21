@@ -581,11 +581,48 @@ new model shows in the picker immediately. `api.js` gains resolveModel/registerM
 63 green**. JS syntax-checked (`node --check`) + backend smoke (capabilities/source/`/app/`/gallery.js
 all 200) — but **UI visual rendering not verified headless**; eyeball the modal locally.
 
+## Blank-app fix (commit `d46bfc5`)
+
+Serving the app on the server surfaced a **blank white screen** (landing `/` fine, `/app/` blank).
+Two causes, both fixed:
+1. **esm.sh unreachable from the demo browser.** `index.html` loaded preact/htm from `esm.sh`; the
+   bare-specifier imports failed → blank. **Vendored** preact/preact-hooks/htm/htm-preact into
+   `parametic_platform/web/vendor/` (pinned 10.24.3 / 3.1.1) and pointed the importmap at
+   `/app/vendor/*` (root-absolute). Resolves the standing "CDN reachability" risk; the app no longer
+   needs a public CDN. (Fonts still come from fonts.googleapis.com but degrade gracefully.)
+2. **My own syntax bug** in `store.js` `useCatalog.refresh`: `await` inside a non-async setState
+   updater (`setCatalog((c) => ({ ...c, models: await API.getModels() }))`) — a SyntaxError that
+   failed to parse store.js and cascaded to the whole app graph. Fixed: await first, then set.
+
+**Debug method that worked (use it for UI changes — TDD-aligned):** `node --check` per file
+**did not** catch the await-in-updater bug (it parses, the error is semantic-in-module-context). What
+caught it: copy `web/` to a tmp dir, `npm i preact@10.24.3 htm@3.1.1 linkedom`, stub
+`document`/`location`/`fetch`, `import('./app.js')`, and assert `#app` innerHTML is non-empty. This
+renders App() under real preact + a real DOM and surfaces both syntax and render-time errors. The
+gallery rendered clean after the fix.
+
 **REMAINING:**
-- The whole new-model feature (steps 1–3) is **5 commits unpushed to `origin/experiment`**
-  (`b1306d8`→`f5136c2`; push from an authed local — no GitHub creds on the server).
-- Visual UI check of the Add-model modal (local, per the frontend dev workflow).
+- The new-model feature + this fix are **6 commits unpushed to `origin/experiment`**
+  (`b1306d8`→`d46bfc5`; push from an authed local — no GitHub creds on the server).
+- **Visual UI check still pending** — the app was verified rendering via linkedom (headless), but the
+  user had not yet confirmed the Add-model modal visually in a browser when the server was stopped.
+  Re-open the server (recipe below) and eyeball: gallery card for `qwen2.5-1.5b`, the "＋ Add model"
+  button → resolve preview → register.
 - Optional: register `Qwen/Qwen2.5-1.5B` etc. in the *curated* catalog with exact `expected_tensors`
   (336+2=338) if it becomes a standing offering, so the cross-k calibration skip fires.
 - Later phases: user self-serve upload / private HF + auth/quota/storage (reuses this path).
+
+## Server restart recipe (this session's env)
+
+SQLite E2E env at `/tmp/parametic_qwen25_e2e.env` (registration enabled, demo/demo, HF_TOKEN). The DB
+`/tmp/parametic_qwen25_e2e.db` holds the registered `qwen2.5-1.5b` + its succeeded run
+(`0aa8a59f…`, cache_key `4227553136…`). If `/tmp` was wiped, recreate the env (see the file's keys
+above) and re-register via `POST /models/register`. To bring it up:
+```
+set -a; source /tmp/parametic_qwen25_e2e.env; set +a
+setsid python3 -m uvicorn parametic_platform.api:app --host 0.0.0.0 --port 8000 >/tmp/api.log 2>&1 & disown
+setsid python3 -m parametic_platform.worker --init-db --poll-seconds 5 >/tmp/worker.log 2>&1 & disown   # only if running new analyses
+```
+UI at `http://<host>:8000/app/` (demo/demo). Stop with a targeted `kill <pid>` (NOT pkill — see
+CLAUDE.md gotcha). All processes were **stopped** at session end; no VESSL jobs running.
 
