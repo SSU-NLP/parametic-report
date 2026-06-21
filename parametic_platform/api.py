@@ -13,9 +13,11 @@ from sqlalchemy.orm import Session
 from starlette.responses import FileResponse, Response
 from starlette.staticfiles import StaticFiles
 
-from .catalog import get_area, get_mode, get_model, public_areas, public_models, public_modes
+from .catalog import get_area, get_mode, public_areas, public_models, public_modes
 from .config import load_settings
 from .db import AnalysisRequest, Job, find_active_request, find_completed_request, init_db, make_session_factory
+from .registry import register_model, registered_model_dicts, resolve_model_spec
+from .resolve import resolve_model
 from .spec import build_analysis_spec, cache_key
 
 settings = load_settings()
@@ -115,8 +117,49 @@ def root() -> FileResponse:
 
 
 @app.get("/models")
-def models() -> list[dict[str, Any]]:
-    return public_models()
+def models(session: Session = Depends(get_session)) -> list[dict[str, Any]]:
+    return public_models() + registered_model_dicts(session)
+
+
+class ModelResolveRequest(BaseModel):
+    hf_model_id: str = Field(examples=["Qwen/Qwen3-8B"])
+    revision: str = Field(default="main")
+
+
+def _require_model_registration() -> None:
+    if not settings.allow_model_registration:
+        raise HTTPException(status_code=403, detail="Model registration is disabled (set PARAMETIC_ALLOW_MODEL_REGISTRATION=1)")
+
+
+def _hf_token() -> str | None:
+    import os
+
+    return os.getenv("HF_TOKEN")
+
+
+@app.post("/models/resolve")
+def resolve_model_endpoint(payload: ModelResolveRequest) -> dict[str, Any]:
+    """Preview: fetch the model's config.json, report compatibility + derived spec.
+    Does not persist. Operator-gated."""
+    _require_model_registration()
+    try:
+        return resolve_model(payload.hf_model_id, payload.revision, token=_hf_token())
+    except Exception as exc:  # network / missing repo / bad config
+        raise HTTPException(status_code=400, detail=f"Could not resolve {payload.hf_model_id}: {exc}") from exc
+
+
+@app.post("/models/register")
+def register_model_endpoint(
+    payload: ModelResolveRequest, session: Session = Depends(get_session)
+) -> dict[str, Any]:
+    """Resolve and persist the model into the registry. Operator-gated."""
+    _require_model_registration()
+    try:
+        return register_model(session, payload.hf_model_id, payload.revision, token=_hf_token())
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Could not register {payload.hf_model_id}: {exc}") from exc
 
 
 @app.get("/areas")
@@ -153,7 +196,7 @@ def public_analysis_response(
 @app.post("/analyses", response_model=AnalysisResponse)
 def create_analysis(payload: AnalysisCreate, session: Session = Depends(get_session)) -> AnalysisResponse:
     try:
-        model = get_model(payload.model_id)
+        model = resolve_model_spec(session, payload.model_id)
         area = get_area(payload.area_id)
         mode = get_mode(payload.mode)
     except ValueError as exc:

@@ -43,6 +43,8 @@ class PlatformSettings:
     basic_auth_user: str | None
     basic_auth_password: str | None
     allow_internal_modes: bool
+    # Operator gate for the HF-model registration endpoints (/models/resolve, /register).
+    allow_model_registration: bool
     # --- VESSL Cloud dispatch (see scripts/vessl/config.sh for the team standard) ---
     vessl_ns: str
     vessl_object_vol: str
@@ -80,6 +82,7 @@ def load_settings() -> PlatformSettings:
         basic_auth_user=os.getenv("PARAMETIC_BASIC_AUTH_USER"),
         basic_auth_password=os.getenv("PARAMETIC_BASIC_AUTH_PASSWORD"),
         allow_internal_modes=_bool_env("PARAMETIC_ALLOW_INTERNAL_MODES", False),
+        allow_model_registration=_bool_env("PARAMETIC_ALLOW_MODEL_REGISTRATION", False),
         vessl_ns=vget("VESSL_NS", "seonghyeon/parametic"),
         vessl_object_vol=vget("VESSL_OBJECT_VOL", "objvol-gsvyr0eu87wt"),
         vessl_cluster_vol=vget("VESSL_CLUSTER_VOL", "clustervol-r922i766wr02"),

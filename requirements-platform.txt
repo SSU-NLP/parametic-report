@@ -4,3 +4,5 @@ sqlalchemy>=2.0
 psycopg[binary]>=3.2
 pydantic>=2.8
 python-dotenv>=1.0
+huggingface-hub>=0.24
+

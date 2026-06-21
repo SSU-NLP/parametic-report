@@ -58,6 +58,27 @@ class Job(Base):
     request: Mapped[AnalysisRequest] = relationship(back_populates="jobs")
 
 
+class RegisteredModel(Base):
+    """Operator-registered HF model. Mirrors catalog.ModelSpec fields so a resolved
+    registration feeds the existing spec/cache_key builder unchanged. The static
+    MODEL_CATALOG stays the curated source of truth; these accumulate alongside it."""
+
+    __tablename__ = "registered_models"
+
+    id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    display_name: Mapped[str] = mapped_column(String(256))
+    hf_model_id: Mapped[str] = mapped_column(String(256), index=True)
+    config_path: Mapped[str] = mapped_column(Text)
+    tokenizer_path: Mapped[str] = mapped_column(Text)
+    model_output_name: Mapped[str] = mapped_column(String(256))
+    expected_tensors: Mapped[int] = mapped_column(Integer)
+    revision: Mapped[str] = mapped_column(String(128), default="main")
+    # Provenance / compatibility captured at resolve time (model_type, params, status…).
+    model_type: Mapped[str | None] = mapped_column(String(128))
+    compatibility: Mapped[dict | None] = mapped_column(JSON)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=now_utc)
+
+
 def make_engine(settings: PlatformSettings):
     return create_engine(settings.database_url, pool_pre_ping=True)
 

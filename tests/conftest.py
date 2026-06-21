@@ -23,6 +23,7 @@ os.environ["PARAMETIC_SCRATCH_ROOT"] = str(_ROOT / "scratch")
 os.environ["PARAMETIC_BASIC_AUTH_USER"] = "demo"
 os.environ["PARAMETIC_BASIC_AUTH_PASSWORD"] = "demo"
 os.environ["PARAMETIC_ALLOW_INTERNAL_MODES"] = "1"
+os.environ["PARAMETIC_ALLOW_MODEL_REGISTRATION"] = "1"
 # Keep scratch so failed-run assertions can inspect it deterministically.
 os.environ["PARAMETIC_KEEP_SCRATCH_ON_SUCCESS"] = "1"
 os.environ["PARAMETIC_KEEP_SCRATCH_ON_FAILURE"] = "1"
@@ -119,12 +120,13 @@ def _create_schema():
 def _clean_db():
     """Isolate tests: wipe the shared SQLite tables before each test."""
     from parametic_platform.config import load_settings
-    from parametic_platform.db import AnalysisRequest, Job, make_session_factory
+    from parametic_platform.db import AnalysisRequest, Job, RegisteredModel, make_session_factory
 
     session_factory = make_session_factory(load_settings())
     with session_factory() as session:
         session.query(Job).delete()
         session.query(AnalysisRequest).delete()
+        session.query(RegisteredModel).delete()
         session.commit()
     yield
 
