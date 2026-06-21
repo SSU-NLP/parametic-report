@@ -35,15 +35,26 @@ export function catalogLabel(collection, id) {
   return item ? item.display_name || item.id : id;
 }
 
-// Loads the catalog once and exposes it for selectors + row labels.
+// Loads the catalog + capabilities and exposes them for selectors + row labels.
+// `refresh` re-pulls models so a freshly registered model shows up immediately.
 export function useCatalog() {
-  const [catalog, setCatalog] = useState({ models: [], areas: [], modes: [], ok: null, error: null });
+  const [catalog, setCatalog] = useState({ models: [], areas: [], modes: [], caps: {}, ok: null, error: null });
+
+  const refresh = useCallback(async () => {
+    try {
+      setCatalog((c) => ({ ...c, models: await API.getModels() }));
+    } catch (error) {
+      setCatalog((c) => ({ ...c, ok: false, error: error.message }));
+    }
+  }, []);
+
   useEffect(() => {
-    Promise.all([API.getModels(), API.getAreas(), API.getModes()])
-      .then(([models, areas, modes]) => setCatalog({ models, areas, modes, ok: true, error: null }))
+    Promise.all([API.getModels(), API.getAreas(), API.getModes(), API.getCapabilities().catch(() => ({}))])
+      .then(([models, areas, modes, caps]) => setCatalog({ models, areas, modes, caps, ok: true, error: null }))
       .catch((error) => setCatalog((c) => ({ ...c, ok: false, error: error.message })));
   }, []);
-  return catalog;
+
+  return { ...catalog, refresh };
 }
 
 // Loads the analyses list and polls active rows every 5s.

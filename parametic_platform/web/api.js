@@ -21,6 +21,13 @@ export function apiText(path) {
 export const getModels = () => api("/models");
 export const getAreas = () => api("/areas");
 export const getModes = () => api("/modes");
+export const getCapabilities = () => api("/capabilities");
+
+// Operator model registration (gated server-side by PARAMETIC_ALLOW_MODEL_REGISTRATION).
+export const resolveModel = ({ hf_model_id, revision }) =>
+  api("/models/resolve", { method: "POST", body: JSON.stringify({ hf_model_id, revision: revision || "main" }) });
+export const registerModel = ({ hf_model_id, revision }) =>
+  api("/models/register", { method: "POST", body: JSON.stringify({ hf_model_id, revision: revision || "main" }) });
 export const getAnalyses = (limit) => api(`/analyses${limit ? `?limit=${limit}` : ""}`);
 export const getAnalysis = (id) => api(`/analyses/${id}`);
 export const getArtifacts = (id) => api(`/analyses/${id}/artifacts`);

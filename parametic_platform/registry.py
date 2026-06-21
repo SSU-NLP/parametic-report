@@ -100,4 +100,14 @@ def register_model(
 
 
 def registered_model_dicts(session: Session) -> list[dict[str, Any]]:
-    return [asdict(spec) for spec in list_registered_models(session)]
+    """Registered models as catalog-shaped dicts, tagged with provenance the UI
+    badges with (source/model_type/compatibility status)."""
+    rows = session.execute(select(RegisteredModel).order_by(RegisteredModel.created_at.asc())).scalars().all()
+    out: list[dict[str, Any]] = []
+    for row in rows:
+        item = asdict(_row_to_spec(row))
+        item["source"] = "registered"
+        item["model_type"] = row.model_type
+        item["status"] = (row.compatibility or {}).get("status")
+        out.append(item)
+    return out

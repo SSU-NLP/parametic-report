@@ -118,7 +118,14 @@ def root() -> FileResponse:
 
 @app.get("/models")
 def models(session: Session = Depends(get_session)) -> list[dict[str, Any]]:
-    return public_models() + registered_model_dicts(session)
+    catalog = [{**m, "source": "catalog"} for m in public_models()]
+    return catalog + registered_model_dicts(session)
+
+
+@app.get("/capabilities")
+def capabilities() -> dict[str, Any]:
+    """Feature flags the UI gates on (e.g. whether to show the 'Add model' flow)."""
+    return {"model_registration": settings.allow_model_registration}
 
 
 class ModelResolveRequest(BaseModel):

@@ -99,6 +99,21 @@ code { font-family: "JetBrains Mono", "SFMono-Regular", ui-monospace, monospace;
 .gallery-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 0 0 22px; }
 .toolbar-count { font-size: 13px; font-weight: 700; color: var(--muted); background: var(--surface-2); border-radius: 999px; padding: 2px 10px; }
 .launcher-err { margin: 14px 0 0; color: #c0263a; font-size: 13px; }
+.toolbar-actions { display: flex; align-items: center; gap: 8px; }
+
+/* Add-model resolve preview */
+.resolve-card { margin-top: 16px; padding: 12px 14px; background: var(--surface-2); border: 1px solid var(--line); border-radius: var(--radius); }
+.resolve-head { display: flex; align-items: center; gap: 8px; }
+.resolve-head code { font-size: 12px; color: var(--ink-2); }
+.resolve-params { margin-left: auto; font-size: 12px; font-weight: 600; color: var(--muted); }
+.resolve-spec { margin-top: 8px; font-size: 12px; color: var(--ink-2); }
+.resolve-spec code { background: var(--surface); border: 1px solid var(--line); border-radius: 5px; padding: 0 5px; }
+.resolve-note { margin: 8px 0 0; font-size: 12px; color: var(--ink-2); line-height: 1.45; }
+.resolve-card .muted { color: var(--muted); }
+.compat-badge { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .03em; border-radius: 999px; padding: 3px 9px; }
+.compat-badge.supported { background: var(--green-soft); color: #0f8a39; }
+.compat-badge.needs-review { background: var(--amber-soft); color: #a07400; }
+.compat-badge.unsupported { background: var(--red-soft); color: #c0263a; }
 
 /* modal */
 .modal-backdrop {

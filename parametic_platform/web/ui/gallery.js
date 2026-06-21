@@ -3,9 +3,78 @@
 import { useState } from "preact/hooks";
 import { html, Brand, StatusPill, Modal } from "./common.js";
 import { catalogLabel, navigate } from "../store.js";
-import { createAnalysis } from "../api.js";
+import { createAnalysis, resolveModel, registerModel } from "../api.js";
 import { shortId, fmtRatio } from "../format.js";
 import { useDamageRatio } from "../spotdata.js";
+
+// Operator "Add model" flow: enter an HF id → resolve a compatibility preview →
+// register. Gated by the server capability flag (catalog.caps.model_registration).
+function AddModel({ catalog, onRegistered }) {
+  const [open, setOpen] = useState(false);
+  const [hf, setHf] = useState("");
+  const [revision, setRevision] = useState("main");
+  const [preview, setPreview] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState(null);
+
+  const close = () => { setOpen(false); setErr(null); setPreview(null); setHf(""); setRevision("main"); };
+
+  async function resolve() {
+    setBusy(true); setErr(null); setPreview(null);
+    try { setPreview(await resolveModel({ hf_model_id: hf.trim(), revision })); }
+    catch (e) { setErr(e.message); }
+    finally { setBusy(false); }
+  }
+
+  async function register() {
+    setBusy(true); setErr(null);
+    try {
+      const res = await registerModel({ hf_model_id: hf.trim(), revision });
+      await (catalog.refresh && catalog.refresh());
+      onRegistered && onRegistered(res);
+      close();
+    } catch (e) { setErr(e.message); }
+    finally { setBusy(false); }
+  }
+
+  const compat = preview && preview.compatibility;
+  const spec = preview && preview.model_spec;
+  const canRegister = compat && compat.status !== "unsupported";
+
+  return html`
+    <button class="btn ghost" onClick=${() => setOpen(true)}>＋ Add model</button>
+    ${open ? html`
+      <${Modal} title="Add a Hugging Face model" onClose=${close}>
+        <div class="form-grid">
+          <label><span>HF model id</span>
+            <input value=${hf} placeholder="org/Model-Name" onInput=${(e) => setHf(e.target.value)} /></label>
+          <label><span>Revision</span>
+            <input value=${revision} placeholder="main" onInput=${(e) => setRevision(e.target.value)} /></label>
+        </div>
+        <div class="modal-actions">
+          <button class="btn" disabled=${busy || !hf.trim()} onClick=${resolve}>${busy && !preview ? "Resolving…" : "Resolve"}</button>
+        </div>
+
+        ${compat ? html`
+          <div class="resolve-card">
+            <div class="resolve-head">
+              <span class="compat-badge ${compat.status}">${compat.status}</span>
+              <code>${compat.model_type || "?"}</code>
+              <span class="resolve-params">${compat.estimated_params_human || ""}</span>
+            </div>
+            ${spec ? html`<div class="resolve-spec">
+              id <code>${spec.id}</code> · tensors <code>${spec.expected_tensors}</code>${compat.expected_tensors_estimated ? html` <span class="muted">(est.)</span>` : null}
+            </div>` : null}
+            ${(compat.notes || []).map((n) => html`<p class="resolve-note">${n}</p>`)}
+          </div>` : null}
+
+        ${err ? html`<p class="launcher-err">${err}</p>` : null}
+        <div class="modal-actions">
+          <button class="btn ghost" onClick=${close}>Cancel</button>
+          <button class="btn run" disabled=${busy || !canRegister} title=${canRegister ? "" : "Resolve a supported model first"} onClick=${register}>${busy && preview ? "Registering…" : "Register"}</button>
+        </div>
+      </${Modal}>` : null}`;
+}
 
 // New-analysis launcher: a primary button that opens the request form in a modal.
 function Launcher({ catalog, onSubmitted }) {
@@ -98,7 +167,10 @@ export function Gallery({ catalog, rows, error, refresh }) {
       <div class="gallery-toolbar">
         <h1 class="gallery-title">Analyses
           <span class="toolbar-count">${rows.length}</span></h1>
-        <${Launcher} catalog=${catalog} onSubmitted=${refresh} />
+        <div class="toolbar-actions">
+          ${catalog.caps?.model_registration ? html`<${AddModel} catalog=${catalog} onRegistered=${catalog.refresh} />` : null}
+          <${Launcher} catalog=${catalog} onSubmitted=${refresh} />
+        </div>
       </div>
 
       ${error ? html`<p class="banner bad">${error}</p>` : null}
