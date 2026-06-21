@@ -508,3 +508,71 @@ Designed approach + recommended build order:
 - Branch `experiment/qwen3-8b-calibration`: UI + VESSL E2E + IO-opt all merged, **unpushed to
   `origin/experiment`** (safe on `origin/ui/redesign`).
 
+# 2026-06-21 — New-model feature: Steps 1+2 shipped + new-model GPU E2E PASSED ✅
+
+Built the **register/run arbitrary HF models** feature (steps 1–2 of the design above) and
+**validated it end-to-end on GPU with a brand-new model** (`Qwen/Qwen2.5-1.5B`, never in the
+catalog). Two commits on `experiment/qwen3-8b-calibration` (still unpushed to `origin/experiment`):
+
+- `b1306d8` **Step 1 — architecture adapter.** New `scripts/arch_adapter.py`
+  (`parse_param`/`is_target`/`layer_pt_files`) generalizes the per-script hardcoded llama/qwen
+  `model.layers.N.` parsing over `layers.N`/`h.N`/`blocks.N`/`decoder.layers.N` (llama, qwen, opt,
+  gpt2, gptj, falcon, gpt-neox, mpt). Wired into the 3 runner-path scripts
+  (`create_approx_spot_masks`, `plot_approx_spot_location`, `plot_seed_agreement_atlas`) + 2 research
+  scripts (`compare_seed_stability`, `plot_model_mri`). `plot_spot_overview`'s PARAM_RE was dead code.
+  Sibling import resolves because the runner runs scripts by full path (sys.path[0]=scripts/).
+- `1c3eb6b` **Step 2 — resolve & register.** `parametic_platform/resolve.py` `resolve_model(hf_id,
+  revision)`: fetch only `config.json` → detect arch (model_type/architectures) → estimate params for
+  an A100×1 fit gate → derive ModelSpec → compatibility report (supported/needs-review/unsupported).
+  **`expected_tensors` derived from config** (exact for llama=254/qwen3=399; skip-safe overestimate +
+  `expected_tensors_estimated` flag for un-tabulated families). Network fetch isolated in
+  `fetch_hf_config` (pure, unit-testable). `registry.py` + `registered_models` table (db.py);
+  `resolve_model_spec()` = catalog-first-then-registry single lookup; `create_analysis` falls back to
+  it. API: `POST /models/resolve` (preview), `POST /models/register` (persist), both gated by
+  `PARAMETIC_ALLOW_MODEL_REGISTRATION`; `/models` lists catalog + registered. **Worker/runner
+  unchanged** — worker reads the baked `request.spec`; registered models reuse the shared `config.json`
+  because model-specific values (hf_model_id, tokenizer) flow through runner *args*.
+
+**KEY DESIGN POINT:** a registered model needs **no per-model config file** — only `tokenizer_path`
+and `model_name_or_path` differ per model, and both are passed as runner args that override
+`config.json`. So `config_path="config.json"` for every registered model; `model_output_name` =
+`hf_id.split('/')[-1]` (matches the calibration shell's `${MODEL##*/}`).
+
+**Tests:** `tests/test_arch_adapter.py` (16: identical-to-old-logic on llama/qwen + generalization)
+and `tests/test_resolve.py` (14) + `tests/test_registry_api.py` (13). **Full suite 59 green**
+(`python3 -m pytest tests/ -q`). conftest now sets `PARAMETIC_ALLOW_MODEL_REGISTRATION=1` and wipes
+`RegisteredModel` between tests. `huggingface-hub` added to `requirements-platform.txt` (host now
+fetches configs). NOTE: this was **test-after, not TDD** — the user asked for real TDD going forward.
+
+**GPU E2E (the real validation) — PASSED.** Registered `Qwen/Qwen2.5-1.5B` (model_type `qwen2` —
+qkv-bias, no qk-norm, *different* from both validated families) via the live API, submitted
+`java-code-smoke`+`approx-smoke`, ran on VESSL A100 (~8 min):
+
+| Model | PPL |
+|---|---:|
+| original | 2.95 |
+| **code spot top0.01** | **16,745,231** (×5.68M) |
+| bottom top0.01 | 2.97 |
+| random_seed1 top0.01 | 3.00 |
+
+`mask_tensors: 336` = exactly qwen2.5-1.5b's layer-tensor count (28 layers × 12) — **proves the arch
+adapter parsed qwen2 correctly** (excluded embed/norm/lm_head). All 8 stages succeeded; 11 figures +
+2 CSVs (incl `spot_parameter_summary.csv`) round-tripped to host-local artifact_root; API serves a
+figure (HTTP 200 PNG 134KB) and the 15-entry artifact listing. The `expected_tensors=366` overestimate
+was skip-safe (no false skip). cache_key `4227553136718d9791f12f7d88e1dbd5`, request
+`0aa8a59f-7d1d-4505-8db8-0bae893c92a5` in the SQLite E2E DB.
+
+**Operational (this run):** SQLite env at `/tmp/parametic_qwen25_e2e.env`
+(`DATABASE_URL=sqlite:////tmp/parametic_qwen25_e2e.db`, registration enabled, demo/demo). Recipe:
+`bash scripts/vessl/push.sh` (after code changes — the runner imports `scripts/arch_adapter.py` from
+the pushed volume), then `set -a; source /tmp/parametic_qwen25_e2e.env; set +a`, then API
+(`python3 -m uvicorn parametic_platform.api:app --port 8000`) + worker
+(`python3 -m parametic_platform.worker --init-db --poll-seconds 5`). Both **stopped** at session end.
+
+**REMAINING:**
+- **Step 3 — operator "Add model" UI** (HF id + revision → `/models/resolve` preview → `/models/register`
+  → appears in gallery). Reuse `ui/gallery.js`. **Do in TDD.**
+- Both new commits **unpushed to `origin/experiment`** (push from an authed local).
+- Optional: register `Qwen/Qwen2.5-1.5B` etc. in the *curated* catalog with exact `expected_tensors`
+  (336+2=338) if it becomes a standing offering, so the cross-k calibration skip fires.
+
