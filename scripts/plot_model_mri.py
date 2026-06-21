@@ -1,14 +1,13 @@
 #!/usr/bin/env python3
 import argparse
-import re
 from pathlib import Path
 
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
 
+from arch_adapter import parse_param
 
-PARAM_RE = re.compile(r"model\.layers\.(\d+)\.(.+)\.pt$")
 MODULE_ORDER = [
     "self_attn.q_proj.weight",
     "self_attn.k_proj.weight",
@@ -34,10 +33,7 @@ MODULE_LABELS = {
 
 
 def parse_name(path):
-    match = PARAM_RE.fullmatch(path.name)
-    if not match:
-        return None
-    return int(match.group(1)), match.group(2)
+    return parse_param(path.stem)
 
 
 def block_reduce_2d(tensor, rows, cols, reduce="mean"):
@@ -63,7 +59,7 @@ def build_atlas(checkpoint, mask_dir, tile_size):
     items = {}
     importances = []
     mask_densities = []
-    for grad_path in sorted(checkpoint.glob("model.layers.*.pt")):
+    for grad_path in sorted(checkpoint.glob("*.pt")):
         parsed = parse_name(grad_path)
         if parsed is None:
             continue

@@ -1,15 +1,14 @@
 #!/usr/bin/env python3
 import argparse
 import csv
-import re
 from pathlib import Path
 
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
 
+from arch_adapter import parse_param
 
-PARAM_RE = re.compile(r"model\.layers\.(\d+)\.(.+)\.pt$")
 MODULE_ORDER = [
     "self_attn.q_proj.weight",
     "self_attn.k_proj.weight",
@@ -52,10 +51,7 @@ def format_k(k):
 
 
 def parse_name(path):
-    match = PARAM_RE.fullmatch(path.name)
-    if not match:
-        return None
-    return int(match.group(1)), match.group(2)
+    return parse_param(path.stem)
 
 
 def module_filter(module_group):
@@ -130,9 +126,9 @@ def load_mean_score(paths):
 def build_items(checkpoint_dirs, k, tile_size, device, module_group):
     keep = module_filter(module_group)
     first_dir = checkpoint_dirs[0]
-    files = sorted(first_dir.glob("model.layers.*.pt"))
+    files = sorted(first_dir.glob("*.pt"))
     if not files:
-        raise SystemExit(f"No layer tensors found in {first_dir}")
+        raise SystemExit(f"No tensors found in {first_dir}")
 
     items = {}
     rows = []

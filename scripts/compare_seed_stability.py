@@ -8,6 +8,8 @@ from pathlib import Path
 
 import torch
 
+from arch_adapter import is_target
+
 
 def format_k(k):
     return f"{k:g}"
@@ -38,7 +40,7 @@ def checkpoint_dir(root, seed, language, sample_size):
 def tensor_files(path, include_non_layer):
     files = sorted(path.glob("*.pt"))
     if not include_non_layer:
-        files = [item for item in files if item.name.startswith("model.layers.")]
+        files = [item for item in files if is_target(item.stem)]
     return files
 
 

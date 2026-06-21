@@ -1,14 +1,13 @@
 #!/usr/bin/env python3
 import argparse
-import re
 from pathlib import Path
 
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
 
+from arch_adapter import parse_param
 
-PARAM_RE = re.compile(r"model\.layers\.(\d+)\.(.+)\.pt$")
 MODULE_ORDER = [
     "self_attn.q_proj.weight",
     "self_attn.k_proj.weight",
@@ -62,10 +61,7 @@ def format_k(k):
 
 
 def parse_name(path):
-    match = PARAM_RE.fullmatch(path.name)
-    if not match:
-        return None
-    return int(match.group(1)), match.group(2)
+    return parse_param(path.stem)
 
 
 def resolve_device(name):
@@ -115,9 +111,9 @@ def block_reduce_2d(tensor, rows, cols, reduce="mean"):
 
 def build_items(seed_a_dir, seed_b_dir, k, tile_size, device, module_group="all"):
     items = {}
-    files = sorted(seed_a_dir.glob("model.layers.*.pt"))
+    files = sorted(seed_a_dir.glob("*.pt"))
     if not files:
-        raise SystemExit(f"No layer tensors found in {seed_a_dir}")
+        raise SystemExit(f"No tensors found in {seed_a_dir}")
     keep = module_filter(module_group)
     processed = 0
     for idx, path_a in enumerate(files, 1):

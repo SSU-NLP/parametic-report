@@ -6,6 +6,8 @@ from pathlib import Path
 
 import torch
 
+from arch_adapter import is_target
+
 
 def stable_seed(seed, name):
     digest = hashlib.sha256(f"{seed}:{name}".encode("utf-8")).digest()
@@ -90,7 +92,7 @@ def main():
     k_label = args.k_label or f"top{args.k:g}"
     files = sorted(args.checkpoints[0].glob("*.pt"))
     if not args.include_non_layer:
-        files = [path for path in files if path.name.startswith("model.layers.")]
+        files = [path for path in files if is_target(path.stem)]
     if not files:
         raise SystemExit(f"No .pt tensors found in {args.checkpoints[0]}")
 
