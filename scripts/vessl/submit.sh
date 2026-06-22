@@ -46,7 +46,9 @@ if [[ "$USE_CPU" == "1" ]]; then SPEC="$VESSL_CPU_SPEC"; else SPEC="${VESSL_GPU_
 # In-container preamble: ensure namespace dirs, copy code to fast disk, cd, optional pip.
 PRE="set -e; mkdir -p '${VESSL_CODE_WORK}' '${VESSL_DATA_SHARED}' '${VESSL_RESULTS_SHARED}'"
 if [[ "$SYNC" == "1" ]]; then
-  PRE="${PRE}; echo '[harness] sync code ${VESSL_CODE_SHARED} -> ${VESSL_CODE_WORK}'; cp -ru '${VESSL_CODE_SHARED}/.' '${VESSL_CODE_WORK}/'"
+  # Replace the code tree wholesale (it is tiny, ~12MB). An incremental `cp -ru` fails
+  # with "File exists" when a prior job left files of a different type/owner on /work.
+  PRE="${PRE}; echo '[harness] sync code ${VESSL_CODE_SHARED} -> ${VESSL_CODE_WORK}'; rm -rf '${VESSL_CODE_WORK:?}'; mkdir -p '${VESSL_CODE_WORK}'; cp -r '${VESSL_CODE_SHARED}/.' '${VESSL_CODE_WORK}/'"
 fi
 PRE="${PRE}; cd '${VESSL_CODE_WORK}'"
 [[ -n "$PIP" ]] && PRE="${PRE}; echo '[harness] pip install ${PIP}'; pip install -q --break-system-packages ${PIP}"

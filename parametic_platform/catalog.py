@@ -85,6 +85,18 @@ AREA_CATALOG: dict[str, AreaSpec] = {
         train_ratio=0.8,
         public=False,
     ),
+    # Mid-size set so a sample_size=1024 calibration actually fills: ~12 examples pack
+    # into one 2048-token sequence, so 50k examples -> ~3.4k train sequences >> 1024.
+    "java-code-mid": AreaSpec(
+        id="java-code-mid",
+        display_name="Java code spot (mid)",
+        language="java",
+        dataset_name="tiny-codes-java-mid",
+        hf_dataset_name="nampdn-ai/tiny-codes",
+        total_examples=50_000,
+        train_ratio=0.8,
+        public=False,
+    ),
 }
 
 
