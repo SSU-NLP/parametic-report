@@ -1,0 +1,17 @@
+experiment,sample,k,core_k,strategy,decode,pass_at_1,passed,total,compile_error,runtime_error,timeout,selected,notes
+origin,10000,,,base,batch,0.2722,43,158,31,83,1,,floor(배치 base; 순차는 0.2595)
+origin,10000,,,coder,batch,0.3861,61,158,25,72,0,,상한(배치 coder; 순차 0.3734)
+ksweep,10000,0.01,0.01,v2,batch,0.2911,46,158,,,,697992,
+ksweep,10000,0.03,0.03,v2,batch,0.2785,44,158,,,,1869385,
+ksweep,10000,0.05,0.05,v2,batch,0.2975,47,158,32,78,1,3709031,status=k0.05 root
+ksweep,10000,0.10,0.10,v2,batch,0.2848,45,158,,,,6957793,순차 단조가 배치서 깨짐
+exclusion,10000,0.01,0.005,v2,batch,0.2658,42,158,,,,1155837,
+exclusion,10000,0.01,0.020,v2,batch,0.2911,46,158,,,,640974,
+exclusion,10000,0.01,0.030,v2,batch,0.2722,43,158,,,,492811,순차 단조가 배치서 깨짐
+control,10000,0.05,0.05,rand,batch,0.2785,44,158,34,78,2,3709031,무작위 위치
+control,10000,0.05,0.05,perm,batch,0.0000,0,158,158,0,0,3709031,값 정합 셔플 -> 붕괴
+control,10000,0.05,0.05,ndhi,batch,0.0443,7,158,77,74,0,3709031,drift 큰 non-bridge -> 붕괴
+control,10000,0.05,0.05,ndlo,batch,0.3038,48,158,30,79,1,3709031,drift 작은 non-bridge (v2보다 높음!)
+control,10000,0.05,0.05,vhi,batch,0.2911,46,158,32,79,1,1854442,bridge 내 drift 상위
+control,10000,0.05,0.05,vlo,batch,0.2911,46,158,31,80,1,1854442,bridge 내 drift 하위
+control,10000,0.05,0.05,reverse,batch,0.3418,54,158,27,77,0,,coder<-base bridge (coder -4.4pp)
