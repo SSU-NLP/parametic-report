@@ -18,7 +18,9 @@ damage/damaged_models/
 *.dis
 *.tmp
 training/further_training/*/
-reports/
+reports/**
+!reports/**/
+!reports/**/*.md
 training/further_training_java_full/
 region_selection_java_full/
 training/sample_calibration_*/

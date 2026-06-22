@@ -81,7 +81,7 @@ WATCH_FLAG=(); [[ "${WATCH:-0}" == "1" ]] && WATCH_FLAG=(--watch)
 
 active_job_exists() {  # name -> exit 0 if a non-terminal job with that name exists
   vesslctl job list 2>/dev/null | awk -v n="$1" '
-    $2==n && ($3=="running"||$3=="pending"||$3=="idle"||$3=="initializing"){f=1}
+    $2==n && ($3=="created"||$3=="running"||$3=="pending"||$3=="idle"||$3=="initializing"){f=1}
     END{exit !f}'
 }
 
@@ -195,31 +195,35 @@ cowork_one() {  # strategy — colleague repro: raw base model + completion eval
 
 bridge_one() {  # tag(base/coder), hf — build paper-spot "bridge" mask: A(|weight| top-k) ∖ B(java grad top-k)
   local tag="$1" hf="$2"
-  local name="tx-bridge-$tag-$SAMPLE"
+  local CK="${CORE_K:-$K}"                         # core(B) size to exclude; defaults to k
+  local blabel="k${K}"; [ "$CK" != "$K" ] && blabel="k${K}-c${CK}"
+  local name="tx-bridge-$tag-$SAMPLE-$blabel"
   local jobcode; jobcode="$(uniq_jobcode "$name")"
   local sc="$SCORES/$tag/seed_1234"               # java grad input_dir (single seed, paper-style)
   local W="$jobcode/bridgework"; local PS="$jobcode/scripts/paper_spot"
   local cmd="$PREAMBLE; pip install -q --break-system-packages fire >/dev/null 2>&1 || true; mkdir -p $W; cd $W"
   cmd="$cmd; python $PS/save_model_layer_weights.py --model_path $hf --output_dir weights --dtype float32"
-  cmd="$cmd; python $PS/extract_accumulated_core_linguistic_region.py --model_name $tag --original_model_path $hf --language_list '[\"$LANG\"]' --sample_list '[$SAMPLE]' --k $K --input_dir $sc"
-  cmd="$cmd; python $PS/extract_spot.py --model_name $tag --original_model_path $hf --core_path code-region/$tag/top$K --instruct_path weights --sample_list '[$SAMPLE]' --k $K --input_dir $sc --code_or_lang code"
-  cmd="$cmd; mkdir -p $BRIDGE/${tag}-${SAMPLE}; cp -r code-spot/$tag/top$K/. $BRIDGE/${tag}-${SAMPLE}/ && echo BRIDGE_DONE"
-  echo "[bridge] $tag (sample $SAMPLE) -> $BRIDGE/${tag}-${SAMPLE}"
+  cmd="$cmd; python $PS/extract_accumulated_core_linguistic_region.py --model_name $tag --original_model_path $hf --language_list '[\"$LANG\"]' --sample_list '[$SAMPLE]' --k $CK --input_dir $sc"
+  cmd="$cmd; python $PS/extract_spot.py --model_name $tag --original_model_path $hf --core_path code-region/$tag/top$CK --instruct_path weights --sample_list '[$SAMPLE]' --k $K --core_k $CK --input_dir $sc --code_or_lang code"
+  cmd="$cmd; mkdir -p $BRIDGE/${tag}-${SAMPLE}-$blabel; cp -r code-spot/$tag/top$K/. $BRIDGE/${tag}-${SAMPLE}-$blabel/ && echo BRIDGE_DONE"
+  echo "[bridge] $tag (sample $SAMPLE, k=$K core_k=$CK) -> $BRIDGE/${tag}-${SAMPLE}-$blabel"
   submit "$name" "$jobcode" "$cmd"
 }
 
 bridge_eval_one() {  # strategy — bridge transplant (paper A∖B masks) + cowork completion eval
   local s="$1"
-  local name="tx-bre-$s-$SAMPLE"
+  local CK="${CORE_K:-$K}"
+  local blabel="k${K}"; [ "$CK" != "$K" ] && blabel="k${K}-c${CK}"
+  local name="tx-bre-$s-$SAMPLE-$blabel"
   local jobcode; jobcode="$(uniq_jobcode "$name")"
   local setup="apt-get update -qq && apt-get install -y -qq default-jdk >/dev/null 2>&1 || true"
   setup="$setup; pip install -q --break-system-packages pyarrow >/dev/null 2>&1 || true"
   local cmd="$PREAMBLE; $setup; python scripts/transplant/eval_bridge_cowork.py"
   cmd="$cmd --strategy $s --base-model Qwen/Qwen2.5-1.5B --donor-model Qwen/Qwen2.5-Coder-1.5B"
-  cmd="$cmd --bridge-base $BRIDGE/base-$SAMPLE --bridge-coder $BRIDGE/coder-$SAMPLE"
-  cmd="$cmd --data $DATA_MULTIPL/test.parquet --result $TX_OBJ/results-bridge-$SAMPLE/$s --work-dir $jobcode/brwork"
+  cmd="$cmd --bridge-base $BRIDGE/base-$SAMPLE-$blabel --bridge-coder $BRIDGE/coder-$SAMPLE-$blabel"
+  cmd="$cmd --data $DATA_MULTIPL/test.parquet --result $TX_OBJ/results-bridge-$SAMPLE-$blabel/$s --work-dir $jobcode/brwork"
   [ -n "${HE_LIMIT:-}" ] && [ "${HE_LIMIT}" != "0" ] && cmd="$cmd --limit $HE_LIMIT"
-  echo "[bridge-eval] $s (sample $SAMPLE) -> results-bridge-$SAMPLE/$s"
+  echo "[bridge-eval] $s (sample $SAMPLE, k=$K core_k=$CK) -> results-bridge-$SAMPLE-$blabel/$s"
   submit "$name" "$jobcode" "$cmd"
 }
 

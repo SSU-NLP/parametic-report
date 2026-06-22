@@ -130,9 +130,15 @@ def extract(
     instruct_path: str = "./Llama-3.2-1B-Instruct",
     sample_list: list = [10000],
     k: float = 0.01,
+    core_k: float = None,
     input_dir: str = "/data_x/junkim100/projects/interpretability/Code-Spot/training/further_training/Llama-3.2-1B-Instruct",
     code_or_lang: str = "code",
 ):
+    # core_k: size of the core (B = grad top-k) to EXCLUDE from A (|weight| top-k).
+    # Defaults to k (paper behavior: A and B same size). For the exclusion-ratio sweep
+    # we fix A's k and vary core_k to plot how much core to carve out of the bridge.
+    if core_k is None:
+        core_k = k
     original_model = AutoModelForCausalLM.from_pretrained(original_model_path)
 
     top_k_params_dict = {}
@@ -178,7 +184,7 @@ def extract(
                     grad_tensor = tensor.abs().cpu()
 
                 bool_sensor_max, bool_sensor_min, bool_sensor_random = (
-                    get_top_bottom_tensor(grad_tensor, k)
+                    get_top_bottom_tensor(grad_tensor, core_k)
                 )
                 top_k_params_dict[name] = top_k_params_dict[name] & ~bool_sensor_max
                 bottom_k_params_dict[name] = (
