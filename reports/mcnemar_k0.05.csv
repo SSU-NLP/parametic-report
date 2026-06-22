@@ -1,0 +1,10 @@
+ref,strat,b_ref_yes_strat_no,c_ref_no_strat_yes,both,neither,net_c_minus_b,chi2,p,verdict
+base,coder,8,26,35,89,18,8.50,0.004,유의(coder 진짜 향상)
+base,v2,5,9,38,106,4,0.64,0.423,노이즈(bridge≈random)
+base,rand,7,8,36,107,1,0.00,1.000,노이즈
+base,ndlo,3,8,40,107,5,1.45,0.228,노이즈
+base,vhi,5,8,38,107,3,0.31,0.579,노이즈
+base,vlo,2,5,41,110,3,0.57,0.450,노이즈
+base,perm,43,0,0,115,-43,41.02,0.000,유의 손상(값정합 깸)
+base,ndhi,36,0,7,115,-36,34.03,0.000,유의 손상(drift 큰 곳)
+base,reverse,10,21,33,94,11,3.23,0.072,경계(ref=base라 부적절; reverse는 coder 기준이어야)

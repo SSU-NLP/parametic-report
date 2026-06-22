@@ -253,5 +253,10 @@ case "${1:-}" in
     sroot="$TX_OBJ/results-bridge-$SAMPLE-k${K}"
     scmd="$PREAMBLE; python scripts/transplant/status_breakdown.py $sroot ${ANALYZE_STRATS:-v2 rand ndlo vhi vlo perm ndhi}"
     submit "$sname" "$sjob" "$scmd";;
+  analyze-mcnemar)  # base 대비 per-problem flip McNemar 검정
+    nname="tx-mcnemar-k${K}"; njob="$(uniq_jobcode "$nname")"
+    nroot="$TX_OBJ/results-bridge-$SAMPLE-k${K}"
+    ncmd="$PREAMBLE; python scripts/transplant/mcnemar.py $nroot ${MCNEMAR_REF:-base} ${ANALYZE_STRATS:-coder v2 rand ndlo vhi vlo perm ndhi reverse}"
+    submit "$nname" "$njob" "$ncmd";;
   *) echo "usage: $0 {cal-base|cal-coder|eval <s>|eval-all|eval-it|cowork <s>|cowork-all|bridge <base|coder>|bridge-all|bridge-eval <s>|bridge-eval-all|analyze-gen}" >&2; exit 1;;
 esac

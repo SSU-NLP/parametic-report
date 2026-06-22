@@ -56,6 +56,30 @@ def main():
         ["시트6 bridge_control", "위치/값/인과 통제: rand/perm/ndhi/ndlo/vhi/vlo/reverse (순차)"],
         ["주의", "k스윕/제외/통제는 순차(batch=1). 배치 분기점(2026-06-22) 이후 재측정 예정"],
         ["주의2", "통제 결론: bridge가 random과 pass@1·status 구별 안 됨 (위치 특이성 불지지)"],
+        ["", ""],
+        ["── strategy/condition 용어 ──", "(이식 = base에 coder 값 덮어쓰기, per-tensor top-k 매칭)"],
+        ["base", "원본 base 모델(Qwen2.5-1.5B), 이식 없음 = floor"],
+        ["coder", "원본 coder(Qwen2.5-Coder-1.5B) = ceiling(상한)"],
+        ["v1", "coder bridge 위치 그대로 이식(같은 위치)"],
+        ["v2", "base_bridge ∩ coder_bridge 교집합에 coder 값 (Bridge 핵심)"],
+        ["v3", "base bridge 위치에 coder 값"],
+        ["v3a/v3b/v3c/v3d", "(ablation) 텐서 내 정렬 대응: 중요도/weight/인덱스순/랜덤짝"],
+        ["v3ctrl", "(ablation) base spot 위치 + coder의 non-spot 값"],
+        ["rand", "v2와 같은 개수를 무작위 위치에 coder 값 (위치 특이성 통제)"],
+        ["perm", "bridge 위치는 그대로, coder 값을 텐서 내 셔플(값-위치 정합 깸)"],
+        ["ndhi", "non-bridge 중 |coder−base| drift 큰 곳 N개 (drift confound 통제)"],
+        ["ndlo", "non-bridge 중 drift 작은 곳 N개"],
+        ["vhi", "bridge 내부에서 drift 상위 절반"],
+        ["vlo", "bridge 내부에서 drift 하위 절반"],
+        ["reverse", "coder에 base bridge 이식(인과 검증; coder 하락 기대)"],
+        ["", ""],
+        ["── 컬럼 용어 ──", ""],
+        ["k", "A=|weight| top-k 와 B=grad top-k 의 비율 (예: 0.05 = 5%)"],
+        ["core_k", "제외 비율 스윕: A는 top1% 고정, 코어 B(grad top-core_k) 크기만 변화"],
+        ["selected", "실제 이식된 파라미터 개수"],
+        ["decode", "seq=순차(batch=1) / batch=배치(batch=32, deterministic). 둘 사이 ±2문제 디코딩 노이즈"],
+        ["pass@1", "HumanEval-Java 158문제 중 통과 비율 (greedy)"],
+        ["compile_err / runtime_err", "컴파일 실패 / 실행 후 assert 실패(=wrong answer)"],
     ])
 
     # ── 1. ablation cowork (생모델 completion) ──
@@ -139,6 +163,13 @@ def main():
                                  sk, r["pass_at_1"], d])
         add_sheet(wb, "10_seq_vs_batch",
                   ["experiment", "k", "core_k", "strategy", "seq_pass@1", "batch_pass@1", "diff"], cmp_rows)
+
+    # ── 11. McNemar (Phase A: base 대비 per-problem flip 검정) ──
+    mpath = f"{R}/mcnemar_k0.05.csv"
+    if os.path.exists(mpath):
+        mrows = list(csv.DictReader(open(mpath)))
+        add_sheet(wb, "11_mcnemar", ["ref", "strat", "net(c-b)", "chi2", "p", "verdict"],
+                  [[r["ref"], r["strat"], r["net_c_minus_b"], r["chi2"], r["p"], r["verdict"]] for r in mrows])
 
     out = f"{R}/experiments.xlsx"
     wb.save(out)
