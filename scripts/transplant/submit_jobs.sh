@@ -54,6 +54,7 @@ STRATEGIES=(base coder v1 v2 v3a v3b v3c v3d v3ctrl)
 case "$AREA" in
   java-code-smoke) DS_NAME="tiny-codes-java-smoke";;
   java-code-mid)   DS_NAME="tiny-codes-java-mid";;
+  java-code-xl)    DS_NAME="tiny-codes-java-xl";;
   java-code)       DS_NAME="tiny-codes-java-full";;
   *) echo "unknown AREA=$AREA" >&2; exit 1;;
 esac
@@ -61,6 +62,7 @@ case "$MODE" in
   approx-smoke) SAMPLE=8;;
   approx-1024)  SAMPLE=1024;;
   approx-2048)  SAMPLE=2048;;
+  full-10000)   SAMPLE=10000;;
   *) echo "unknown MODE=$MODE" >&2; exit 1;;
 esac
 

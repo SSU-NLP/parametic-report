@@ -47,7 +47,7 @@ def main():
     elif args.strategy == "coder":
         model_dir = args.donor_model
     else:
-        model, tok, applied = build_transplanted_model(
+        model, tok, applied, skipped = build_transplanted_model(
             args.base_model, args.donor_model, args.base_scores, args.donor_scores,
             args.k, args.strategy, token, dtype, 0,
         )

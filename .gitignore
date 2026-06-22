@@ -27,3 +27,4 @@ platform_scratch/
 
 # Claude Code personal project permissions (do not commit)
 .claude/settings.local.json
+parametic-report-doyun/

@@ -97,6 +97,18 @@ AREA_CATALOG: dict[str, AreaSpec] = {
         train_ratio=0.8,
         public=False,
     ),
+    # XL set for full calibration (sample_size=10000): ~12 examples/sequence, so 200k
+    # examples -> ~13k train sequences > 10000.
+    "java-code-xl": AreaSpec(
+        id="java-code-xl",
+        display_name="Java code spot (xl, full-cal)",
+        language="java",
+        dataset_name="tiny-codes-java-xl",
+        hf_dataset_name="nampdn-ai/tiny-codes",
+        total_examples=200_000,
+        train_ratio=0.8,
+        public=False,
+    ),
 }
 
 
@@ -126,6 +138,17 @@ MODE_CATALOG: dict[str, ModeSpec] = {
         id="approx-2048",
         display_name="Approx MRI, 2048 samples",
         sample_size=2048,
+        seeds=(1234, 5678),
+        k=0.01,
+        random_seeds=(1, 2, 3),
+        ppl_samples=128,
+        tile_size=16,
+        public=False,
+    ),
+    "full-10000": ModeSpec(
+        id="full-10000",
+        display_name="Full calibration, 10000 samples",
+        sample_size=10000,
         seeds=(1234, 5678),
         k=0.01,
         random_seeds=(1, 2, 3),
