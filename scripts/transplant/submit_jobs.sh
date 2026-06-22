@@ -222,8 +222,9 @@ bridge_eval_one() {  # strategy — bridge transplant (paper A∖B masks) + cowo
   cmd="$cmd --strategy $s --base-model Qwen/Qwen2.5-1.5B --donor-model Qwen/Qwen2.5-Coder-1.5B"
   cmd="$cmd --bridge-base $BRIDGE/base-$SAMPLE-$blabel --bridge-coder $BRIDGE/coder-$SAMPLE-$blabel"
   cmd="$cmd --data $DATA_MULTIPL/test.parquet --result $TX_OBJ/results-bridge-$SAMPLE-$blabel/$s --work-dir $jobcode/brwork"
+  cmd="$cmd --batch-size ${HE_BATCH:-32}"
   [ -n "${HE_LIMIT:-}" ] && [ "${HE_LIMIT}" != "0" ] && cmd="$cmd --limit $HE_LIMIT"
-  echo "[bridge-eval] $s (sample $SAMPLE, k=$K core_k=$CK) -> results-bridge-$SAMPLE-$blabel/$s"
+  echo "[bridge-eval] $s (sample $SAMPLE, k=$K core_k=$CK, batch=${HE_BATCH:-32}) -> results-bridge-$SAMPLE-$blabel/$s"
   submit "$name" "$jobcode" "$cmd"
 }
 
@@ -242,5 +243,15 @@ case "${1:-}" in
   bridge-all) bridge_one base "$BASE_HF"; bridge_one coder "$CODER_HF";;
   bridge-eval)     bridge_eval_one "${2:?strategy required}";;
   bridge-eval-all) for s in base coder v1 v2 v3; do bridge_eval_one "$s"; done;;
-  *) echo "usage: $0 {cal-base|cal-coder|eval <s>|eval-all|eval-it|cowork <s>|cowork-all|bridge <base|coder>|bridge-all|bridge-eval <s>|bridge-eval-all}" >&2; exit 1;;
+  analyze-gen)  # generations.jsonl completion 쌍별 비교 (왜 동일 pass@1인지)
+    aname="tx-analyze-gen-k${K}"; ajob="$(uniq_jobcode "$aname")"
+    aroot="$TX_OBJ/results-bridge-$SAMPLE-k${K}"
+    acmd="$PREAMBLE; python scripts/transplant/compare_generations.py $aroot ${ANALYZE_STRATS:-v2 rand ndlo vhi vlo perm ndhi}"
+    submit "$aname" "$ajob" "$acmd";;
+  analyze-status)  # 각 strategy summary.json의 채점 status 세분화
+    sname="tx-analyze-status-k${K}"; sjob="$(uniq_jobcode "$sname")"
+    sroot="$TX_OBJ/results-bridge-$SAMPLE-k${K}"
+    scmd="$PREAMBLE; python scripts/transplant/status_breakdown.py $sroot ${ANALYZE_STRATS:-v2 rand ndlo vhi vlo perm ndhi}"
+    submit "$sname" "$sjob" "$scmd";;
+  *) echo "usage: $0 {cal-base|cal-coder|eval <s>|eval-all|eval-it|cowork <s>|cowork-all|bridge <base|coder>|bridge-all|bridge-eval <s>|bridge-eval-all|analyze-gen}" >&2; exit 1;;
 esac

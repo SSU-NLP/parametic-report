@@ -28,38 +28,81 @@ import eval_humaneval_java_cowork as cw  # noqa: E402
 ORIGINALS = ("base", "coder")
 
 
+# 위치/값 통제 strategies — 전부 v2 교집합(inter)의 per-tensor 개수 n에 매칭.
+#   v2      base_bridge ∩ coder_bridge 위치에 coder 값            (기준)
+#   v1/v3   coder/base bridge 단독
+#   rand    같은 n개 무작위 위치, coder 값                         (위치 특이성: 양 아님)
+#   perm    inter 위치, coder 값을 텐서 내 셔플                    (값-위치 정합 깸)
+#   ndhi    non-bridge(¬inter) 중 |coder-base| 상위 n             (drift confound 핵심)
+#   ndlo    non-bridge 중 |coder-base| 하위 n
+#   vhi/vlo inter 내부를 |coder-base| 상/하위 절반(n//2)으로 분리   (drift가 효과 주도?)
+#   reverse coder에 base bridge 이식(inter, base 값) → 평가 coder  (인과: 하락해야)
+CONTROLS = {"v1", "v2", "v3", "rand", "perm", "ndhi", "ndlo", "vhi", "vlo", "reverse"}
+
+
 def build(base_id, donor_id, bridge_base, bridge_coder, strategy, token, dtype):
-    base = AutoModelForCausalLM.from_pretrained(base_id, token=token, torch_dtype=dtype)
-    coder = AutoModelForCausalLM.from_pretrained(donor_id, token=token, torch_dtype=dtype)
+    reverse = strategy == "reverse"
+    # recv = 수정 대상 모델(평가됨), src = 값 출처
+    recv_id, src_id = (donor_id, base_id) if reverse else (base_id, donor_id)
+    recv = AutoModelForCausalLM.from_pretrained(recv_id, token=token, torch_dtype=dtype)
+    src = AutoModelForCausalLM.from_pretrained(src_id, token=token, torch_dtype=dtype)
     tok = AutoTokenizer.from_pretrained(base_id, token=token)
-    bp = dict(base.named_parameters()); cp = dict(coder.named_parameters())
+    rp = dict(recv.named_parameters()); sp = dict(src.named_parameters())
+    recv_bridge, src_bridge = (bridge_coder, bridge_base) if reverse else (bridge_base, bridge_coder)
     applied = selected = 0
     with torch.no_grad():
-        for mf in sorted(bridge_base.glob("*.pt")):
+        for i, mf in enumerate(sorted(recv_bridge.glob("*.pt"))):
             name = mf.stem
-            cmf = bridge_coder / mf.name
-            if name not in bp or name not in cp or not cmf.exists():
+            smf = src_bridge / mf.name
+            if name not in rp or name not in sp or not smf.exists():
                 continue
-            bm = torch.load(mf, map_location="cpu").bool()
-            cm = torch.load(cmf, map_location="cpu").bool()
-            if strategy == "v2":
-                sel = bm & cm           # 두 bridge의 교집합
+            rm = torch.load(mf, map_location="cpu").bool()       # recv 자신의 bridge
+            sm = torch.load(smf, map_location="cpu").bool()      # src 자신의 bridge
+            if tuple(rm.shape) != tuple(rp[name].shape):
+                continue
+            inter = rm & sm                                       # v2 교집합 = 매칭 기준
+            n = int(inter.sum())
+            g = torch.Generator().manual_seed(20260622 + i)
+            if reverse or strategy == "v2":
+                sel = inter; vals = sp[name].data[sel]
             elif strategy == "v1":
-                sel = cm                # coder bridge 위치
-            else:                       # v3
-                sel = bm                # base bridge 위치
-            if tuple(sel.shape) != tuple(bp[name].shape):
-                continue
+                sel = sm; vals = sp[name].data[sel]
+            elif strategy == "v3":
+                sel = rm; vals = sp[name].data[sel]
+            elif strategy == "rand":
+                flat = torch.zeros(rm.numel(), dtype=torch.bool)
+                if n:
+                    flat[torch.randperm(rm.numel(), generator=g)[:n]] = True
+                sel = flat.reshape(rm.shape); vals = sp[name].data[sel]
+            elif strategy == "perm":
+                sel = inter
+                v = sp[name].data[sel]
+                vals = v[torch.randperm(v.numel(), generator=g)] if v.numel() else v
+            elif strategy in ("ndhi", "ndlo", "vhi", "vlo"):
+                delta = (sp[name].data - rp[name].data).abs().reshape(-1)
+                if strategy[0] == "n":               # non-bridge 후보, 전체 n
+                    cand = ~inter.reshape(-1); k_ = n
+                else:                                 # bridge 내부, 절반
+                    cand = inter.reshape(-1); k_ = n // 2
+                hi = strategy.endswith("hi")
+                d = delta.clone()
+                d[~cand] = -1.0 if hi else float("inf")
+                idx = torch.topk(d, k_, largest=hi).indices if k_ > 0 else torch.empty(0, dtype=torch.long)
+                flat = torch.zeros(rm.numel(), dtype=torch.bool)
+                flat[idx] = True
+                sel = flat.reshape(rm.shape); vals = sp[name].data[sel]
+            else:
+                raise SystemExit(f"unknown strategy {strategy}")
             cnt = int(sel.sum())
             if cnt:
-                bp[name].data[sel] = cp[name].data[sel].to(bp[name].dtype)
+                rp[name].data[sel] = vals.to(rp[name].dtype)
                 selected += cnt
             applied += 1
-    del coder
+    del src
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
-    print(f"bridge {strategy}: applied={applied} selected={selected}", flush=True)
-    return base, tok
+    print(f"bridge {strategy} (reverse={reverse}): applied={applied} selected={selected}", flush=True)
+    return recv, tok
 
 
 def main():
@@ -73,6 +116,7 @@ def main():
     p.add_argument("--result", required=True)
     p.add_argument("--work-dir", type=Path, default=Path("/tmp/bridgemodel"))
     p.add_argument("--max-new-tokens", type=int, default=512)
+    p.add_argument("--batch-size", type=int, default=32)   # batched greedy; A100 80GB는 32~48 여유
     p.add_argument("--limit", type=int, default=None)
     a = p.parse_args()
 
@@ -99,7 +143,7 @@ def main():
     tasks = cw.load_tasks(a.data, limit=a.limit)
     gen_args = argparse.Namespace(model=model_dir, dtype="bfloat16", device="auto",
                                   max_new_tokens=a.max_new_tokens, temperature=0.0, top_p=0.95,
-                                  local_files_only=False)
+                                  batch_size=a.batch_size, local_files_only=False)
     rows = cw.generate_completions(gen_args, tasks)
     Path(a.result).mkdir(parents=True, exist_ok=True)
     cw.write_jsonl(str(Path(a.result) / "generations.jsonl"), rows)

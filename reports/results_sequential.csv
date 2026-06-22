@@ -1,0 +1,25 @@
+experiment,sample,k,core_k,strategy,decode,pass_at_1,passed,total,compile_error,runtime_error,timeout,selected,notes
+repro,1024,0.01,0.01,base,seq,0.2595,41,158,,,,,floor(원본 base)
+repro,,,,,coder,seq,0.3734,59,158,,,,,ceiling(원본 coder +11.4pp)
+repro,1024,0.01,0.01,v1,seq,0.1965,31,158,,,,,coder bridge 동일위치 그대로 -6.3pp
+repro,1024,0.01,0.01,v2,seq,0.2595,41,158,,,,,교집합 +0.0pp (approx grad 무효)
+repro,1024,0.01,0.01,v3,seq,0.1645,26,158,,,,,base bridge 단독 -9.5pp
+repro,10000,0.01,0.01,v1,seq,0.2025,32,158,,,,,coder bridge 동일위치 그대로 -5.7pp
+repro,10000,0.01,0.01,v2,seq,0.2911,46,158,,,,,705282,교집합 +3.2pp (Bridge 재현 성공)
+repro,10000,0.01,0.01,v3,seq,0.1965,31,158,,,,,base bridge 단독 -6.3pp
+ksweep,10000,0.01,0.01,v2,seq,0.2722,43,158,,,,,697992,k=A=B top-k
+ksweep,10000,0.03,0.03,v2,seq,0.2785,44,158,,,,,1869385,
+ksweep,10000,0.05,0.05,v2,seq,0.2848,45,158,,,,,3709031,
+ksweep,10000,0.10,0.10,v2,seq,0.2975,47,158,,,,,6957793,포화 미관측
+exclusion,10000,0.01,0.005,v2,seq,0.2658,42,158,,,,,1155837,A고정 core_k 변화
+exclusion,10000,0.01,0.010,v2,seq,0.2722,43,158,,,,,697992,=ksweep k0.01
+exclusion,10000,0.01,0.020,v2,seq,0.2722,43,158,,,,,640974,
+exclusion,10000,0.01,0.030,v2,seq,0.2785,44,158,,,,,492811,코어 많이 뺄수록 향상
+control,10000,0.05,0.05,rand,seq,0.2848,45,158,33,78,2,3709031,무작위 위치(같은 N)
+control,10000,0.05,0.05,perm,seq,0.0000,0,158,158,0,0,3709031,값-위치 정합 셔플 -> 컴파일 붕괴
+control,10000,0.05,0.05,ndhi,seq,0.0380,6,158,84,68,0,3709031,non-bridge drift 큰 곳 -> 붕괴
+control,10000,0.05,0.05,ndlo,seq,0.2848,45,158,29,83,1,3709031,non-bridge drift 작은 곳
+control,10000,0.05,0.05,vhi,seq,0.2848,45,158,34,78,1,1854442,bridge 내 drift 상위 절반
+control,10000,0.05,0.05,vlo,seq,0.2848,45,158,30,82,1,1854442,bridge 내 drift 하위 절반
+control,10000,0.05,0.05,reverse,seq,0.3481,55,158,,,,,coder<-base bridge 이식 (coder -2.5pp)
+batch_pivot,10000,0.05,0.05,v2,batch,0.2975,47,158,32,78,1,3709031,배치 분기점 첫 측정(seq 0.2848과 +2문제 = 디코딩 노이즈)

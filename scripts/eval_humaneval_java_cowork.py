@@ -70,6 +70,7 @@ def generate_completions(args: argparse.Namespace, tasks: list[dict]) -> list[di
 
     print(f"[2/4] Loading tokenizer: {args.model}", flush=True)
     tokenizer = AutoTokenizer.from_pretrained(args.model, local_files_only=args.local_files_only)
+    tokenizer.padding_side = "left"   # completion eval: left-pad so batched greedy == per-sample greedy
     if tokenizer.pad_token_id is None:
         tokenizer.pad_token = tokenizer.eos_token
 
@@ -93,10 +94,14 @@ def generate_completions(args: argparse.Namespace, tasks: list[dict]) -> list[di
     model.eval()
     print(f"[2/4] Model ready on {device}", flush=True)
 
+    bs = max(1, int(getattr(args, "batch_size", None) or 16))
     results = []
-    print(f"[3/4] Generating completions", flush=True)
-    for task in tqdm(tasks, desc="generating", dynamic_ncols=True):
-        encoded = tokenizer(task["prompt"], return_tensors="pt").to(device)
+    print(f"[3/4] Generating completions (batch_size={bs})", flush=True)
+    for start in tqdm(range(0, len(tasks), bs), desc="generating", dynamic_ncols=True):
+        batch = tasks[start : start + bs]
+        encoded = tokenizer(
+            [t["prompt"] for t in batch], return_tensors="pt", padding=True
+        ).to(device)
         with torch.no_grad():
             output = model.generate(
                 **encoded,
@@ -107,19 +112,20 @@ def generate_completions(args: argparse.Namespace, tasks: list[dict]) -> list[di
                 pad_token_id=tokenizer.pad_token_id,
                 eos_token_id=tokenizer.eos_token_id,
             )
-        new_tokens = output[0, encoded["input_ids"].shape[-1] :]
-        completion = tokenizer.decode(new_tokens, skip_special_tokens=True)
-        completion = truncate_at_stop(completion, task["stop_tokens"])
-        source = build_source(task["prompt"], completion, task["tests"])
-        results.append(
-            {
-                "name": task["name"],
-                "prompt": task["prompt"],
-                "completion": completion,
-                "tests": task["tests"],
-                "source": source,
-            }
-        )
+        gen = output[:, encoded["input_ids"].shape[1] :]   # left-padded => same prompt width for all
+        for j, task in enumerate(batch):
+            completion = tokenizer.decode(gen[j], skip_special_tokens=True)
+            completion = truncate_at_stop(completion, task["stop_tokens"])
+            source = build_source(task["prompt"], completion, task["tests"])
+            results.append(
+                {
+                    "name": task["name"],
+                    "prompt": task["prompt"],
+                    "completion": completion,
+                    "tests": task["tests"],
+                    "source": source,
+                }
+            )
     return results
 
 
