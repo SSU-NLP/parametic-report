@@ -71,6 +71,7 @@ TX_OBJ="$VESSL_OBJECT_MNT/$NS/transplant"      # /shared/<ns>/transplant
 TX_WORK="$VESSL_CLUSTER_MNT/$NS/transplant"    # /work/<ns>/transplant
 SCORES="$TX_OBJ/scores"; DATA="$TX_OBJ/data"; RESULTS="$TX_OBJ/results"
 RESULTS_CW="$TX_OBJ/results-cowork"; DATA_MULTIPL="$TX_OBJ/multipl-java"   # colleague repro (completion eval)
+BRIDGE="$TX_OBJ/bridge"   # paper-spot (A∖B) "bridge" masks per model/scale
 HFCACHE="$VESSL_CLUSTER_MNT/$NS/hf-cache"
 HF_TOKEN_VAL="$(grep '^HF_TOKEN=' "$ROOT/.env" 2>/dev/null | cut -d= -f2- || true)"
 
@@ -192,6 +193,36 @@ cowork_one() {  # strategy — colleague repro: raw base model + completion eval
   submit "$name" "$jobcode" "$cmd"
 }
 
+bridge_one() {  # tag(base/coder), hf — build paper-spot "bridge" mask: A(|weight| top-k) ∖ B(java grad top-k)
+  local tag="$1" hf="$2"
+  local name="tx-bridge-$tag-$SAMPLE"
+  local jobcode; jobcode="$(uniq_jobcode "$name")"
+  local sc="$SCORES/$tag/seed_1234"               # java grad input_dir (single seed, paper-style)
+  local W="$jobcode/bridgework"; local PS="$jobcode/scripts/paper_spot"
+  local cmd="$PREAMBLE; pip install -q --break-system-packages fire >/dev/null 2>&1 || true; mkdir -p $W; cd $W"
+  cmd="$cmd; python $PS/save_model_layer_weights.py --model_path $hf --output_dir weights --dtype float32"
+  cmd="$cmd; python $PS/extract_accumulated_core_linguistic_region.py --model_name $tag --original_model_path $hf --language_list '[\"$LANG\"]' --sample_list '[$SAMPLE]' --k $K --input_dir $sc"
+  cmd="$cmd; python $PS/extract_spot.py --model_name $tag --original_model_path $hf --core_path code-region/$tag/top$K --instruct_path weights --sample_list '[$SAMPLE]' --k $K --input_dir $sc --code_or_lang code"
+  cmd="$cmd; mkdir -p $BRIDGE/${tag}-${SAMPLE}; cp -r code-spot/$tag/top$K/. $BRIDGE/${tag}-${SAMPLE}/ && echo BRIDGE_DONE"
+  echo "[bridge] $tag (sample $SAMPLE) -> $BRIDGE/${tag}-${SAMPLE}"
+  submit "$name" "$jobcode" "$cmd"
+}
+
+bridge_eval_one() {  # strategy — bridge transplant (paper A∖B masks) + cowork completion eval
+  local s="$1"
+  local name="tx-bre-$s-$SAMPLE"
+  local jobcode; jobcode="$(uniq_jobcode "$name")"
+  local setup="apt-get update -qq && apt-get install -y -qq default-jdk >/dev/null 2>&1 || true"
+  setup="$setup; pip install -q --break-system-packages pyarrow >/dev/null 2>&1 || true"
+  local cmd="$PREAMBLE; $setup; python scripts/transplant/eval_bridge_cowork.py"
+  cmd="$cmd --strategy $s --base-model Qwen/Qwen2.5-1.5B --donor-model Qwen/Qwen2.5-Coder-1.5B"
+  cmd="$cmd --bridge-base $BRIDGE/base-$SAMPLE --bridge-coder $BRIDGE/coder-$SAMPLE"
+  cmd="$cmd --data $DATA_MULTIPL/test.parquet --result $TX_OBJ/results-bridge-$SAMPLE/$s --work-dir $jobcode/brwork"
+  [ -n "${HE_LIMIT:-}" ] && [ "${HE_LIMIT}" != "0" ] && cmd="$cmd --limit $HE_LIMIT"
+  echo "[bridge-eval] $s (sample $SAMPLE) -> results-bridge-$SAMPLE/$s"
+  submit "$name" "$jobcode" "$cmd"
+}
+
 case "${1:-}" in
   cal-base)  calibrate "$BASE_TAG"  "$BASE_ID"  "$BASE_HF"  "$BASE_MOUT"  "$BASE_TOK"  1;;
   cal-coder) calibrate "$CODER_TAG" "$CODER_ID" "$CODER_HF" "$CODER_MOUT" "$CODER_TOK" 0;;
@@ -200,5 +231,12 @@ case "${1:-}" in
   eval-it)   eval_original base-it "$BASE_IT_HF"; eval_original coder-it "$CODER_IT_HF";;
   cowork)    cowork_one "${2:?strategy required}";;
   cowork-all) for s in "${STRATEGIES[@]}"; do cowork_one "$s"; done;;
-  *) echo "usage: $0 {cal-base|cal-coder|eval <strategy>|eval-all|eval-it|cowork <s>|cowork-all}" >&2; exit 1;;
+  bridge)    case "${2:?tag(base|coder) required}" in
+               base)  bridge_one base "$BASE_HF";;
+               coder) bridge_one coder "$CODER_HF";;
+               *) echo "bridge tag must be base|coder" >&2; exit 1;; esac;;
+  bridge-all) bridge_one base "$BASE_HF"; bridge_one coder "$CODER_HF";;
+  bridge-eval)     bridge_eval_one "${2:?strategy required}";;
+  bridge-eval-all) for s in base coder v1 v2 v3; do bridge_eval_one "$s"; done;;
+  *) echo "usage: $0 {cal-base|cal-coder|eval <s>|eval-all|eval-it|cowork <s>|cowork-all|bridge <base|coder>|bridge-all|bridge-eval <s>|bridge-eval-all}" >&2; exit 1;;
 esac
