@@ -90,7 +90,8 @@ tests/studio/         pytest (tiny eager 모델, CPU)
 
 ```bash
 # Python (커널·API). conda 또는 venv 무방.
-python -m pip install torch torchvision   # mps 지원 빌드(Apple Silicon)
+python -m pip install torch   # mps 지원 빌드(Apple Silicon). torchvision 금지 — 텍스트 LLM엔 불필요하고
+                              # pyenv가 _lzma 없이 빌드되면 transformers→torchvision→lzma import가 깨짐.
 python -m pip install transformers accelerate fastapi "uvicorn[standard]" websockets pytest
 # mps 확인
 python -c "import torch; print(torch.backends.mps.is_available())"
