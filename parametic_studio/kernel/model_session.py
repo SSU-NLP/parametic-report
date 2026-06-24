@@ -36,10 +36,17 @@ class ModelSession:
 
     def _register_activation_hooks(self):
         names = ["self_attn", "mlp"]
+        self._hook_handles = []
         for i, layer in enumerate(self.model.model.layers):
             for name in names:
-                getattr(layer, name).register_forward_hook(self._act_hook(i, name))
+                self._hook_handles.append(getattr(layer, name).register_forward_hook(self._act_hook(i, name)))
         return names
+
+    def close(self):
+        # remove hooks so the model (and this session) can be GC'd / freed.
+        for h in getattr(self, "_hook_handles", []):
+            h.remove()
+        self._hook_handles = []
 
     def _act_hook(self, i, name):
         def hook(_module, _inp, out):

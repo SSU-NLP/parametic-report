@@ -78,6 +78,15 @@ def test_ws_streams_logitlens_when_subscribed():
     assert "token" in lens[0]["layers"][0] and "prob" in lens[0]["layers"][0]
 
 
+def test_ws_close_unloads_model():
+    api.SESSIONS = {"m1": _tiny_session(), "m2": _tiny_session()}
+    with TestClient(api.app).websocket_connect("/ws") as ws:
+        ws.send_json({"type": "close", "model": "m1"})
+        msg = ws.receive_json()
+    assert msg["type"] == "closed" and msg["model"] == "m1"
+    assert "m1" not in api.SESSIONS and "m2" in api.SESSIONS
+
+
 def test_ws_open_emits_loading_then_opened():
     api.SESSIONS = {"m1": _tiny_session()}  # pre-loaded → no download
     with TestClient(api.app).websocket_connect("/ws") as ws:

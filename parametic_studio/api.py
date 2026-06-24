@@ -90,6 +90,18 @@ async def ws_endpoint(websocket: WebSocket):
             await websocket.send_json({"type": "loading", "model": msg["model"]})
             await _ensure(msg["model"])  # non-blocking (thread); other models keep streaming
             await websocket.send_json({"type": "opened", "model": msg["model"]})
+        elif t == "close":
+            s = SESSIONS.pop(msg["model"], None)
+            _locks.pop(msg["model"], None)
+            if s is not None and hasattr(s, "close"):
+                s.close()  # remove hooks → frees the model
+            try:
+                import torch
+                if torch.backends.mps.is_available():
+                    torch.mps.empty_cache()
+            except Exception:
+                pass
+            await websocket.send_json({"type": "closed", "model": msg["model"]})
         elif t == "drilldown":
             ph = _loaded(msg).drilldown(msg["layer"])
             await websocket.send_json({"type": "perhead", "model": msg.get("model"), "layer": msg["layer"],

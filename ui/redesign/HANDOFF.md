@@ -40,12 +40,14 @@ cd studio_web && npx tsc --noEmit -p .     # 0 (타입체크가 권위 — vite 
 ## 3. WS 계약 (모델당 소켓, 모든 server→client 이벤트에 `model`)
 
 ```
-client→server: catalog · open{model} · generate{model,prompt,max_tokens,probes:[attention,activation,logitlens]}
+client→server: catalog · open{model} · close{model} · generate{model,prompt,max_tokens,probes:[attention,activation,logitlens]}
                · stop{model} · drilldown{model,layer} · spot{model,examples}
-server→client: catalog{models} · loading{model} · opened{model}
+server→client: catalog{models} · loading{model} · opened{model} · closed{model}
                · token{model,step,token_id,text} · attention{model,step,shape,data:[L][kv]}  // prefill 다수행→정사각
                · activation{model,step,shape,data:[L][M]} · logitlens{model,step,layers:[{token,prob}]}
                · perhead{model,layer,shape,data:[heads,kv]} · spotmap{model,layers,modules,grid} · done{model,reason}
+
+모델 load=open(지연로드,비블로킹) / unload=close(`ModelSession.close()` hook 제거 + SESSIONS pop + mps empty_cache로 메모리 해제). 프론트 칩 ×로 unload(최소 1개 유지, 닫은 모델 바인딩 타일은 남은 모델로 재배정).
 ```
 재사용 자산: `scripts/save_masked_model.py:apply_mask`(→knob hook), `scripts/visualize_heatmaps.py:parse_param`,
 `scripts/create_approx_spot_masks.py`(top-k/grad×param). torchvision는 **제거됨**(pyenv `_lzma` 누락 → transformers→torchvision→lzma 깨짐, 텍스트 LLM엔 불필요).

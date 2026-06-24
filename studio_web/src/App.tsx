@@ -108,6 +108,16 @@ export default function App() {
   }
   function stop() { for (const mid of targets()) sockets.current[mid]?.send(JSON.stringify({ type: 'stop', model: mid })) }
   function openModel(id: string, label: string) { if (open.some((m) => m.id === id)) return; setOpen((o) => [...o, { id, label }]); patch(id, () => ({ ...empty(), loading: true })); sendTo(id, { type: 'open' }) }
+  function closeModel(id: string) {
+    if (open.length <= 1) return  // keep at least one
+    const rest = open.find((m) => m.id !== id)!.id
+    sockets.current[id]?.send(JSON.stringify({ type: 'close', model: id }))
+    sockets.current[id]?.close(); delete sockets.current[id]
+    setOpen((o) => o.filter((m) => m.id !== id))
+    setData((d) => { const n = { ...d }; delete n[id]; return n })
+    setCols((cs) => cs.map((c) => ({ ...c, tiles: c.tiles.map((t) => (t.model === id ? { ...t, model: rest } : t)) })))
+    setFocusModel((f) => (f === id ? rest : f))
+  }
   const anyBusy = Object.values(data).some((d) => d.busy)
 
   // ---- 2-level layout ops (cols × tiles) ----
@@ -212,7 +222,7 @@ export default function App() {
         <button onClick={() => setExplorerOpen((v) => !v)} title="explorer" style={{ background: 'transparent', border: 'none', color: 'var(--text-1)', cursor: 'pointer', padding: 0 }}>[≡]</button>
         <strong>parametic-studio</strong>
         <div style={{ display: 'flex', gap: 6 }}>
-          {open.map((m) => <span key={m.id} style={{ fontSize: 11, padding: '2px 8px', borderRadius: 4, background: 'var(--bg-2)', border: '1px solid var(--line)' }}>{data[m.id]?.loading ? <span style={hint}>⟳ </span> : data[m.id]?.busy ? <span style={{ color: 'var(--live)' }}>● </span> : ''}{m.label}</span>)}
+          {open.map((m) => <span key={m.id} style={{ fontSize: 11, padding: '2px 8px', borderRadius: 4, background: 'var(--bg-2)', border: '1px solid var(--line)' }}>{data[m.id]?.loading ? <span style={hint}>⟳ </span> : data[m.id]?.busy ? <span style={{ color: 'var(--live)' }}>● </span> : ''}{m.label}{open.length > 1 && <span onClick={() => closeModel(m.id)} title="unload model" style={{ marginLeft: 6, cursor: 'pointer', color: 'var(--text-2)' }}>×</span>}</span>)}
           {closed.length > 0 && (
             <select value="" onChange={(e) => { const c = catalog.find((x) => x.id === e.target.value); if (c) openModel(c.id, c.label) }} style={{ fontSize: 11, background: 'var(--bg-2)', color: 'var(--text-1)', border: '1px solid var(--line-strong)', borderRadius: 4, padding: '2px 4px' }}>
               <option value="">+ model</option>
