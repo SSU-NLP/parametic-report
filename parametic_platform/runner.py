@@ -346,30 +346,35 @@ def main() -> None:
         manifest=manifest,
     )
 
-    run_step(
-        "plot_seed_agreement",
-        [
-            python_bin,
-            str(repo_root / "scripts/plot_seed_agreement_atlas.py"),
-            "--seed-a-checkpoint",
-            str(checkpoints[0]),
-            "--seed-b-checkpoint",
-            str(checkpoints[1]),
-            "--output-dir",
-            str(artifact_root / "figures" / "seed_agreement"),
-            "--k",
-            str(k),
-            "--tile-size",
-            str(mode["tile_size"]),
-            "--device",
-            "auto",
-            "--title-prefix",
-            f"{model['display_name']} {area['display_name']}",
-        ],
-        cwd=repo_root,
-        env=env,
-        manifest=manifest,
-    )
+    # seed-agreement compares two calibration seeds; skip when only one seed was run
+    # (e.g. paper-repro single-seed calibration) — there is no second checkpoint.
+    if len(checkpoints) >= 2:
+        run_step(
+            "plot_seed_agreement",
+            [
+                python_bin,
+                str(repo_root / "scripts/plot_seed_agreement_atlas.py"),
+                "--seed-a-checkpoint",
+                str(checkpoints[0]),
+                "--seed-b-checkpoint",
+                str(checkpoints[1]),
+                "--output-dir",
+                str(artifact_root / "figures" / "seed_agreement"),
+                "--k",
+                str(k),
+                "--tile-size",
+                str(mode["tile_size"]),
+                "--device",
+                "auto",
+                "--title-prefix",
+                f"{model['display_name']} {area['display_name']}",
+            ],
+            cwd=repo_root,
+            env=env,
+            manifest=manifest,
+        )
+    else:
+        manifest["stages"].append({"name": "plot_seed_agreement", "status": "skipped"})
 
     ppl_path = artifact_root / "metrics" / "ppl_damage.json"
     data_prefix = preprocessed_prefix / "test" / area["language"] / "test"

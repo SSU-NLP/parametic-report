@@ -19,12 +19,24 @@ def load_default_config(config_path=None):
         return json.load(f).get("data", {})
 
 
+# tiny-codes programming_language labels with shell/filesystem-unsafe chars -> safe aliases.
+# Filtering still matches the dataset's real label (c#/c++); only output paths use the alias.
+LANG_ALIAS = {"c#": "csharp", "c++": "cpp"}
+_ALIAS_TO_LABEL = {alias: label for label, alias in LANG_ALIAS.items()}  # csharp -> c#
+
+
+def safe_lang_label(label):
+    """Dataset programming_language (any case) -> filesystem/shell-safe token (c# -> csharp)."""
+    return LANG_ALIAS.get(label.lower(), label.lower())
+
+
 def normalize_languages(languages):
     if languages is None:
         return None
     if isinstance(languages, str):
         languages = [part.strip() for part in languages.replace(",", " ").split()]
-    return {language.lower() for language in languages if language}
+    # accept either the dataset label (c#) or the safe alias (csharp); filter on the dataset label
+    return {_ALIAS_TO_LABEL.get(lang.lower(), lang.lower()) for lang in languages if lang}
 
 
 class CodeSplitter:
@@ -87,7 +99,7 @@ class CodeSplitter:
     def get_output_file(self, language, split):
         output_dir = os.path.join(self.dataset_root, self.dataset_folder, split)
         os.makedirs(output_dir, exist_ok=True)
-        return os.path.join(output_dir, f"{language.lower()}.jsonl")
+        return os.path.join(output_dir, f"{safe_lang_label(language)}.jsonl")
 
     def open_language_file(self, language, split):
         if self.language_files[language][split] is None:

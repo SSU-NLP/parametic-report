@@ -25,6 +25,7 @@
 |---|---|---|---|---|---|---|
 | 0 | 엑셀 정리 ✅ | 우리 | — | 박제 | — | done |
 | A | McNemar ✅ | 우리 | Qwen(java) | flip 검정 | results.jsonl | done |
+| S | **파이프라인 배선 검증(smoke, 1회성)** | 우리(검증) | Llama-3.2-3B-it | java 단일 damage spot/random/bottom zero | 원본 HumanEval(Py) | full/java/k0.25% 1회 |
 | B1 | 다언어 grad 누적 | 논문 | 5모델 | 10언어 fine-tune→grad·param | — | 5×10 |
 | B2 | code spot(합산) | 논문 | 5모델 | 다언어 합산 top-k% | — | 5×k4종 |
 | B3 | code spot(언어별 단독)+겹침 | 논문+우리 | 5모델 | 언어별 top-k%, Jaccard(언어 공통성 검증) | — | 5×10×k4종 |
@@ -34,6 +35,7 @@
 
 - **5모델** = CodeLlama-7B-it, Llama-3.1-8B-it, Llama-3.2-3B-it, Qwen2.5-1.5B-it, Qwen2.5-Coder-1.5B-it
 - **이식(C)** = Qwen 2개만, 기준 spot = B의 다언어 code spot
+- **S(smoke)** = 목록에 없던 검증을 1회성 smoke로 박제한 것(VESSL paper_repro 드라이버 배선·eval 하네스 검증용). java 단일이라 **논문 Table1과 숫자 비교 불가**. 향후 목록 외 실험은 임의 추가 금지 — 본 실험은 B(agg 다언어)부터.
 
 ## 다음 (Phase B 1차 — 검증부터)
 `Qwen2.5-1.5B-it/damage-spot/0.0025%/full/java` 파이프라인을 **끝까지 1회** 검증 → 5모델×10언어×k4종 확장.
@@ -43,6 +45,17 @@
 
 ## 측정 정책
 - 전부 **배치(deterministic, 고정 batch_size)**. damage는 붕괴(→0)라 배치로 충분; bridge(작은 효과)는 큰 평가셋+McNemar로 정확도(batch=1로 바꿔도 158문제론 노이즈 못 넘음). 논문 Table1 중간-k 정밀대조 행만 선택적 batch=1.
+
+## B 본 실험 설정 (박제, 2026-06-22 — 이 값으로만 실행)
+- **calibration**: full-10000, **single seed = 1234** (mode 기본 2 seed→1; spot이 1234만 사용하므로 무손실·비용 절반).
+- **데이터**: `nampdn-ai/tiny-codes` (job 안 create_code_dataset가 HF에서 자동 다운로드). **10언어 각각 calibration(B1)** → **합산 top-k%(B2, agg)**. 언어별 단독 spot+Jaccard(B3).
+- **언어 10**: Bash, C#, C++, Go, Java, JavaScript, Julia, Ruby, Rust, TypeScript (Python 제외; 정확한 라벨값은 create_code_dataset 필터에서 확인).
+- **damage k 4종**: 0.000025 / 0.0001 / 0.0009 / 0.0025 (= 0.0025% / 0.01% / 0.09% / 0.25%). 비교 = **spot vs random vs bottom**(matched 개수).
+- **eval HumanEval(Python)**: 원본 Chen2021, dataset `openai/openai_humaneval`(canonical id 버그 회피), greedy(temp 0), **max_new_tokens=512**, **batch_size=32**, allow_code_execution, pass@1.
+- **eval 일반과제**: lm-eval-harness, n-shot = GSM8K 5 / HellaSwag 10 / MMLU 5 / TruthfulQA 0(mc2) / WinoGrande 5.
+- **근거**: 논문이 디코딩 세부 미명시(Appendix B 확인) → 위 값은 **우리 reproducibility 기준**. 절대값 논문 대조 불가 → **패턴 재현**(spot damage 시 붕괴, control 보존, k↑ 단조 하락)에 집중.
+- **우선순위**: **calibration(B1)은 5모델 선행**(모델 독립 → 미리 병렬, 모델별 순차 제출; 작은 모델 우선 Qwen1.5B→7B/8B). **eval(B2~B4)은 Llama-3.2-3B-it 10언어 agg 1행부터** 검증 → 5모델 확장. (calibration 49 job 동시는 A100 가용·HF 부담 → 모델별 순차.)
+- 결과는 항상 `experiments.xlsx` 박제.
 
 ## 표기 규약 (memory: notation-experiment-items)
 `[model] / type / k / sample / lang` — sample=full(10000)/approx(1024), lang=agg(다언어 합산)/단일언어.

@@ -1,0 +1,13 @@
+family,strategy,kA,kB,eval,pass@1,note
+baseline,base(floor),-,-,java,0.073,humanevalpack(humanevalsynthesize-java) floor
+baseline,coder(ceiling),-,-,java,0.500,humanevalpack-java ceiling (coder 7x base)
+bridge,v2,0.001,0.0025,java,0.073,A-sweep =floor (no transfer)
+bridge,v2,0.005,0.0025,java,0.018,A-sweep
+bridge,v2,0.01,0.0025,java,0.043,A-sweep
+bridge,v2,0.03,0.0025,java,0.067,A-sweep
+bridge,v2,0.05,0.0025,java,0.091,A-sweep (~floor; earlier "up" was noise)
+bridge,v2,0.1,0.0025,java,0.006,A-sweep
+baseline,base(floor),-,-,java-chat,0.073,Qwen instruction_tokens -- IDENTICAL to non-chat
+baseline,coder(ceiling),-,-,java-chat,0.500,identical
+bridge,v2,0.05,0.0025,java-chat,0.091,identical (bigcode has no apply_chat_template)
+bridge,v2,0.001,0.0025,java-chat,0.073,identical

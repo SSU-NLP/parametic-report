@@ -203,27 +203,31 @@ class DistributedTokenizer:
         """Load tokenizer"""
         DistributedTokenizer.tokenizer = Tokenizer(self.args.tokenizer_path)
 
-        if self.args.language.lower() in ['bash', 'c', 'c#', 'c++', 'go', 'java', 'javascript', 'julia', 'neo4j database and cypher', 'python', 'relation database and sql', 'ruby', 'rust', 'typescript', 'text']:
+        # accept filesystem-safe aliases (csharp->c#, cpp->c++) emitted by create_code_dataset.py;
+        # only the splitter selection needs the original label — output paths keep the alias.
+        _alias = {"csharp": "c#", "cpp": "c++"}
+        lang = _alias.get(self.args.language.lower(), self.args.language.lower())
+        if lang in ['bash', 'c', 'c#', 'c++', 'go', 'java', 'javascript', 'julia', 'neo4j database and cypher', 'python', 'relation database and sql', 'ruby', 'rust', 'typescript', 'text']:
             if self.args.do_split_functions:
-                if self.args.language.lower() == "bash": DistributedTokenizer.splitter = BashSplitter()
-                elif self.args.language.lower() == "c": DistributedTokenizer.splitter = CSplitter()
-                elif self.args.language.lower() == "c#": DistributedTokenizer.splitter = CSharpSplitter()
-                elif self.args.language.lower() == "c++": DistributedTokenizer.splitter = CPlusPlusSplitter()
-                elif self.args.language.lower() == "go": DistributedTokenizer.splitter = GoSplitter()
-                elif self.args.language.lower() == "java": DistributedTokenizer.splitter = JavaSplitter()
-                elif self.args.language.lower() == "javascript": DistributedTokenizer.splitter = JavaScriptSplitter()
-                elif self.args.language.lower() == "julia": DistributedTokenizer.splitter = JuliaSplitter()
-                elif self.args.language.lower() == "neo4j database and cypher": DistributedTokenizer.splitter = Neo4jCypherSplitter()
-                elif self.args.language.lower() == "python": DistributedTokenizer.splitter = PythonSplitter()
-                elif self.args.language.lower() == "relation database and sql": DistributedTokenizer.splitter = SQLSplitter()
-                elif self.args.language.lower() == "ruby": DistributedTokenizer.splitter = RubySplitter()
-                elif self.args.language.lower() == "rust": DistributedTokenizer.splitter = RustSplitter()
-                elif self.args.language.lower() == "typescript": DistributedTokenizer.splitter = TypeScriptSplitter()
-                elif self.args.language.lower() == "text": DistributedTokenizer.splitter = IdentitySplitter()
+                if lang == "bash": DistributedTokenizer.splitter = BashSplitter()
+                elif lang == "c": DistributedTokenizer.splitter = CSplitter()
+                elif lang == "c#": DistributedTokenizer.splitter = CSharpSplitter()
+                elif lang == "c++": DistributedTokenizer.splitter = CPlusPlusSplitter()
+                elif lang == "go": DistributedTokenizer.splitter = GoSplitter()
+                elif lang == "java": DistributedTokenizer.splitter = JavaSplitter()
+                elif lang == "javascript": DistributedTokenizer.splitter = JavaScriptSplitter()
+                elif lang == "julia": DistributedTokenizer.splitter = JuliaSplitter()
+                elif lang == "neo4j database and cypher": DistributedTokenizer.splitter = Neo4jCypherSplitter()
+                elif lang == "python": DistributedTokenizer.splitter = PythonSplitter()
+                elif lang == "relation database and sql": DistributedTokenizer.splitter = SQLSplitter()
+                elif lang == "ruby": DistributedTokenizer.splitter = RubySplitter()
+                elif lang == "rust": DistributedTokenizer.splitter = RustSplitter()
+                elif lang == "typescript": DistributedTokenizer.splitter = TypeScriptSplitter()
+                elif lang == "text": DistributedTokenizer.splitter = IdentitySplitter()
             else:
                 DistributedTokenizer.splitter = IdentitySplitter()
         else:
-            assert False, "The currently supported languages are 'bash', 'c#', 'c++', 'go', 'java', 'javascript', 'julia', 'python', 'ruby', 'rust', 'typescript', and 'text'. Please make sure you enter them correctly."
+            assert False, "The currently supported languages are 'bash', 'c#'/'csharp', 'c++'/'cpp', 'go', 'java', 'javascript', 'julia', 'python', 'ruby', 'rust', 'typescript', and 'text'. Please make sure you enter them correctly."
 
     def _re_split(self, src: str, tokenized: List, start_part=False, end_part=False):
         """

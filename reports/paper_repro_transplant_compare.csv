@@ -1,0 +1,9 @@
+kA,python_v2,java_v2,note
+floor,0.543,0.073,base (held-out Python vs in-dist Java)
+ceiling,0.628,0.500,coder
+0.001,0.537,0.073,both ~their floor
+0.005,0.506,0.018,
+0.01,0.280,0.043,
+0.03,0.268,0.067,
+0.05,0.189,0.091,
+0.1,0.061,0.006,

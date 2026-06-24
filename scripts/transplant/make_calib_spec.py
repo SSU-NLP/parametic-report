@@ -36,6 +36,8 @@ def main():
     p.add_argument("--repo-root", required=True)
     p.add_argument("--artifact-root", required=True)
     p.add_argument("--scratch-root", required=True)
+    p.add_argument("--seeds", type=int, nargs="*", default=None,
+                   help="override the mode's calibration seeds (e.g. single seed 1234 for paper-repro)")
     a = p.parse_args()
 
     model = ModelSpec(
@@ -49,6 +51,9 @@ def main():
     )
     area = catalog.AREA_CATALOG[a.area]
     mode = catalog.MODE_CATALOG[a.mode]
+    if a.seeds:
+        from dataclasses import replace
+        mode = replace(mode, seeds=tuple(a.seeds))
     analysis = build_analysis_spec(model=model, area=area, mode=mode, k=a.k, pipeline_version="approx-mri-v1")
 
     spec = {

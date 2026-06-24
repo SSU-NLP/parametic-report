@@ -111,6 +111,23 @@ AREA_CATALOG: dict[str, AreaSpec] = {
     ),
 }
 
+# Paper reproduction (Kim et al. "Coding Spot"): 10 languages (Python excluded), each its
+# own full-calibration area. C#/C++ use filesystem-safe aliases (csharp/cpp) — the dataset
+# filter still matches the real tiny-codes label (c#/c++) inside create_code_dataset.py.
+# java-code (above) already covers Java.
+_PAPER_AREA_LANGS = ["bash", "csharp", "cpp", "go", "javascript", "julia", "ruby", "rust", "typescript"]
+for _lang in _PAPER_AREA_LANGS:
+    AREA_CATALOG[f"{_lang}-code"] = AreaSpec(
+        id=f"{_lang}-code",
+        display_name=f"{_lang} code spot",
+        language=_lang,
+        dataset_name=f"tiny-codes-{_lang}-full",
+        hf_dataset_name="nampdn-ai/tiny-codes",
+        total_examples=1_630_000,
+        train_ratio=0.8,
+        public=False,
+    )
+
 
 MODE_CATALOG: dict[str, ModeSpec] = {
     "approx-smoke": ModeSpec(

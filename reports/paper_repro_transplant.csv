@@ -1,0 +1,39 @@
+family,strategy,kA,kB,pass@1,note
+baseline,base(floor),-,-,0.5427,qwen2.5-1.5b-it original (damage table)
+baseline,coder(ceiling),-,-,0.628,qwen2.5-coder-1.5b-it original (damage table)
+spot,v1,-,0.0025,0.0061,direct donor spot pos+val -> collapse
+spot,v2,-,0.0025,0.0671,spot intersection -> collapse
+spot,v3,-,0.0025,0.0,recipient spot pos <- donor val -> collapse
+bridge,v1,0.05,0.0025,0.0,donor bridge pos+val -> collapse
+bridge,v2,0.05,0.0025,0.1890,bridge intersection (hypothesis) -- below rand+floor
+bridge,v3,0.05,0.0025,0.0,recipient bridge pos <- donor val -> collapse
+bridge,rand,0.05,0.0025,0.3598,local random positions, donor val (control) -- above v2
+bridge,reverse,0.05,0.0025,0.4878,base bridge -> coder; coder 0.628->0.488
+bridge,v2,0.001,0.0025,0.5366,A-sweep; ~floor (no transfer)
+bridge,rand,0.001,0.0025,0.5549,A-sweep
+bridge,v2,0.005,0.0025,0.5061,A-sweep
+bridge,rand,0.005,0.0025,0.5610,A-sweep
+bridge,v2,0.01,0.0025,0.2805,A-sweep
+bridge,rand,0.01,0.0025,0.5305,A-sweep
+bridge,v2,0.03,0.0025,0.2683,A-sweep
+bridge,rand,0.03,0.0025,0.4878,A-sweep
+bridge,v2,0.1,0.0025,0.0610,A-sweep
+bridge,rand,0.1,0.0025,0.3415,A-sweep
+bridge,v2,0.001,0.000025,0.506,grid
+bridge,v2,0.005,0.000025,0.476,grid
+bridge,v2,0.01,0.000025,0.335,grid
+bridge,v2,0.03,0.000025,0.159,grid
+bridge,v2,0.05,0.000025,0.073,grid
+bridge,v2,0.1,0.000025,0.030,grid
+bridge,v2,0.001,0.0001,0.506,grid
+bridge,v2,0.005,0.0001,0.457,grid
+bridge,v2,0.01,0.0001,0.360,grid
+bridge,v2,0.03,0.0001,0.213,grid
+bridge,v2,0.05,0.0001,0.104,grid
+bridge,v2,0.1,0.0001,0.055,grid
+bridge,v2,0.001,0.0009,0.524,grid
+bridge,v2,0.005,0.0009,0.445,grid
+bridge,v2,0.01,0.0009,0.299,grid
+bridge,v2,0.03,0.0009,0.250,grid
+bridge,v2,0.05,0.0009,0.128,grid
+bridge,v2,0.1,0.0009,0.024,grid

@@ -79,52 +79,63 @@ def save_random_mask(count, shape, numel, output_path, seed, name):
 def main():
     parser = argparse.ArgumentParser(description="Create approximate top/bottom/random spot masks from one or more grad*param checkpoints.")
     parser.add_argument("--checkpoints", nargs="+", required=True, type=Path)
-    parser.add_argument("--code-output", required=True, type=Path)
+    parser.add_argument("--code-output", type=Path, default=None, help="single-k: dir for the top mask")
+    parser.add_argument("--code-output-root", type=Path, default=None, help="multi-k: masks go under <root>/top<k>/")
     parser.add_argument("--control-output-root", required=True, type=Path)
     parser.add_argument("--k", type=float, default=0.01)
+    parser.add_argument("--ks", nargs="+", default=None,
+                        help="multi-k list (literal strings, used verbatim in top<k> labels to avoid {:g} exponent form); each tensor read ONCE, reused for every k")
     parser.add_argument("--k-label", default=None)
     parser.add_argument("--random-seeds", nargs="*", type=int, default=[1, 2, 3])
     parser.add_argument("--device", default="auto")
     parser.add_argument("--include-non-layer", action="store_true")
     args = parser.parse_args()
 
+    if args.code_output is None and args.code_output_root is None:
+        raise SystemExit("provide --code-output (single-k) or --code-output-root (multi-k)")
+    # keep literal k strings for labels (f"{k:g}" turns 0.000025 into "2.5e-05" → label mismatch)
+    ks_strs = args.ks if args.ks else [str(args.k)]
+
     device = resolve_device(args.device)
-    k_label = args.k_label or f"top{args.k:g}"
-    files = sorted(args.checkpoints[0].glob("*.pt"))
-    if not args.include_non_layer:
-        files = [path for path in files if is_target(path.stem)]
+    # Union of tensor names across all checkpoints. deepspeed occasionally yields a None grad for
+    # a parameter, so accumulate skips it — per-language tensor sets differ slightly. Take every
+    # tensor present in >=1 checkpoint and average only over the ones that have it.
+    names = set()
+    for ck in args.checkpoints:
+        for p in ck.glob("*.pt"):
+            if args.include_non_layer or is_target(p.stem):
+                names.add(p.name)
+    files = sorted(names)
     if not files:
-        raise SystemExit(f"No .pt tensors found in {args.checkpoints[0]}")
+        raise SystemExit(f"No target .pt tensors found across {args.checkpoints}")
 
-    total_selected = 0
-    for idx, first_path in enumerate(files, 1):
-        paths = [checkpoint / first_path.name for checkpoint in args.checkpoints]
-        for path in paths:
-            if not path.exists():
-                raise FileNotFoundError(path)
-        score, shape = load_mean_score(paths, device)
+    for idx, fname in enumerate(files, 1):
+        paths = [ck / fname for ck in args.checkpoints if (ck / fname).exists()]
+        if not paths:
+            continue
+        score, shape = load_mean_score(paths, device)  # mean over languages that have it; read once, reused for all k
         numel = score.numel()
-        count = int(args.k * numel)
-        total_selected += count
-
-        top_idx = stable_top_indices(score, count, largest=True)
-        save_mask(top_idx, shape, numel, args.code_output / first_path.name)
-
-        bottom_idx = stable_top_indices(score, count, largest=False)
-        save_mask(bottom_idx, shape, numel, args.control_output_root / "bottom" / k_label / first_path.name)
-
-        for seed in args.random_seeds:
-            save_random_mask(count, shape, numel, args.control_output_root / f"random_seed{seed}" / k_label / first_path.name, seed, first_path.name)
-
-        del score, top_idx, bottom_idx
+        for ks_str in ks_strs:
+            k = float(ks_str)
+            k_label = args.k_label if (args.k_label and len(ks_strs) == 1) else f"top{ks_str}"
+            count = int(k * numel)
+            code_path = (args.code_output / fname) if args.code_output \
+                else (args.code_output_root / k_label / fname)
+            save_mask(stable_top_indices(score, count, largest=True), shape, numel, code_path)
+            save_mask(stable_top_indices(score, count, largest=False), shape, numel,
+                      args.control_output_root / "bottom" / k_label / fname)
+            for seed in args.random_seeds:
+                save_random_mask(count, shape, numel,
+                                 args.control_output_root / f"random_seed{seed}" / k_label / fname,
+                                 seed, fname)
+        del score
         if device.type == "cuda":
             torch.cuda.empty_cache()
         gc.collect()
         if idx % 25 == 0 or idx == len(files):
-            print(f"processed {idx}/{len(files)} tensors selected_total={total_selected}", flush=True)
+            print(f"processed {idx}/{len(files)} tensors (ks={ks_strs})", flush=True)
 
-    print(f"wrote code mask to {args.code_output}")
-    print(f"wrote controls under {args.control_output_root}")
+    print(f"wrote masks (ks={ks_strs}) code-> {args.code_output or args.code_output_root}, controls-> {args.control_output_root}", flush=True)
 
 
 if __name__ == "__main__":

@@ -72,6 +72,7 @@ TX_WORK="$VESSL_CLUSTER_MNT/$NS/transplant"    # /work/<ns>/transplant
 SCORES="$TX_OBJ/scores"; DATA="$TX_OBJ/data"; RESULTS="$TX_OBJ/results"
 RESULTS_CW="$TX_OBJ/results-cowork"; DATA_MULTIPL="$TX_OBJ/multipl-java"   # colleague repro (completion eval)
 BRIDGE="$TX_OBJ/bridge"   # paper-spot (A∖B) "bridge" masks per model/scale
+SPOT="$TX_OBJ/spot"       # code spot (core B = grad·param top-k) masks per model/scale — the paper-faithful region
 HFCACHE="$VESSL_CLUSTER_MNT/$NS/hf-cache"
 HF_TOKEN_VAL="$(grep '^HF_TOKEN=' "$ROOT/.env" 2>/dev/null | cut -d= -f2- || true)"
 
@@ -98,11 +99,16 @@ submit() {  # name, jobcode, cmd
   # code dir, so concurrent runs can never clobber each other — this removes the old
   # shared-/work/code sync race entirely, and a duplicate submit just gets its own dir.
   local isolate="rm -rf '$jobcode'; mkdir -p '$jobcode'; cp -r '$VESSL_CODE_SHARED/.' '$jobcode/'; cd '$jobcode'"
+  # Always reclaim this job's unique /work scratch on exit (success OR failure). Without
+  # this every job leaks a code-copy + saved transplant model (~3GB) into /work; dozens of
+  # jobs/day overflow the 1TB CephFS and then ALL concurrent jobs die. `|| RC=$?` keeps the
+  # cleanup from being skipped by the harness's `set -e` when the user cmd fails.
+  local wrapped="RC=0; { $cmd ; } || RC=\$?; cd /; rm -rf '$jobcode'; exit \$RC"
   local env_args=()
   [[ -n "$HF_TOKEN_VAL" ]] && env_args=(--env "HF_TOKEN=$HF_TOKEN_VAL")
   bash "$SUBMIT" --name "$name" --gpus 1 --image "$VESSL_IMAGE" --no-sync \
     --pip "-r requirements-runner.txt" --tag parametic "${env_args[@]}" \
-    "${WATCH_FLAG[@]}" --cmd "$isolate; $cmd"
+    "${WATCH_FLAG[@]}" --cmd "$isolate; $wrapped"
 }
 
 uniq_jobcode() { echo "$TX_WORK/txjobs/$1-$(date +%s%N)"; }
@@ -210,6 +216,57 @@ bridge_one() {  # tag(base/coder), hf — build paper-spot "bridge" mask: A(|wei
   submit "$name" "$jobcode" "$cmd"
 }
 
+MPL_DATA="$TX_OBJ/multipl"   # per-language MultiPL-E completion parquets: {py,java,cpp,js,go}/test.parquet
+
+multipl_eval_one() {  # strategy — multi-language MultiPL-E completion eval of a transplant (bridge OR spot family)
+  local s="$1"
+  local fam="${MPL_FAMILY:-bridge}"               # bridge | spot — picks which mask dir
+  local masks="$BRIDGE"; [ "$fam" = "spot" ] && masks="$SPOT"
+  local name="tx-mpl-$fam-$s-$SAMPLE-k${K}"
+  local jobcode; jobcode="$(uniq_jobcode "$name")"
+  # toolchains for the 5 languages (python already present): jdk, g++, node, go
+  local setup="apt-get update -qq && apt-get install -y -qq default-jdk g++ nodejs golang-go >/dev/null 2>&1 || true"
+  setup="$setup; pip install -q --break-system-packages pyarrow >/dev/null 2>&1 || true"
+  local cmd="$PREAMBLE; $setup; python scripts/transplant/eval_multipl_bridge.py"
+  cmd="$cmd --strategy $s --base-model Qwen/Qwen2.5-1.5B --donor-model Qwen/Qwen2.5-Coder-1.5B"
+  cmd="$cmd --mask-base $masks/base-$SAMPLE-k${K} --mask-coder $masks/coder-$SAMPLE-k${K}"
+  cmd="$cmd --data-root $MPL_DATA --langs ${MPL_LANGS:-py java cpp js go}"
+  cmd="$cmd --result-root $TX_OBJ/results-multipl-$fam-$SAMPLE-k${K}/$s --work-dir $jobcode/mplwork"
+  cmd="$cmd --batch-size ${HE_BATCH:-32} --timeout ${MPL_TIMEOUT:-25}"
+  [ -n "${HE_LIMIT:-}" ] && [ "${HE_LIMIT}" != "0" ] && cmd="$cmd --limit $HE_LIMIT"
+  echo "[multipl] $fam/$s (sample $SAMPLE, k=$K) -> results-multipl-$fam-$SAMPLE-k${K}/$s"
+  submit "$name" "$jobcode" "$cmd"
+}
+
+spot_one() {  # tag(base/coder), hf — build code spot (core B = java grad·param top-k) mask, the paper region
+  local tag="$1" hf="$2"
+  local name="tx-spot-$tag-$SAMPLE-k${K}"
+  local jobcode; jobcode="$(uniq_jobcode "$name")"
+  local sc="$SCORES/$tag/seed_1234"               # java grad input_dir (single seed, paper-style; matches bridge build)
+  local W="$jobcode/spotwork"; local PS="$jobcode/scripts/paper_spot"
+  local cmd="$PREAMBLE; pip install -q --break-system-packages fire setproctitle >/dev/null 2>&1 || true; mkdir -p $W; cd $W"
+  cmd="$cmd; python $PS/extract_accumulated_core_linguistic_region.py --model_name $tag --original_model_path $hf --language_list '[\"$LANG\"]' --sample_list '[$SAMPLE]' --k $K --input_dir $sc"
+  cmd="$cmd; mkdir -p $SPOT/${tag}-${SAMPLE}-k${K}; cp -r code-region/$tag/top$K/. $SPOT/${tag}-${SAMPLE}-k${K}/ && echo SPOT_DONE"
+  echo "[spot] $tag (sample $SAMPLE, k=$K) -> $SPOT/${tag}-${SAMPLE}-k${K}"
+  submit "$name" "$jobcode" "$cmd"
+}
+
+spot_eval_one() {  # strategy — code-spot transplant (paper B masks) + cowork completion eval (mirror of bridge_eval_one)
+  local s="$1"
+  local name="tx-spe-$s-$SAMPLE-k${K}"
+  local jobcode; jobcode="$(uniq_jobcode "$name")"
+  local setup="apt-get update -qq && apt-get install -y -qq default-jdk >/dev/null 2>&1 || true"
+  setup="$setup; pip install -q --break-system-packages pyarrow >/dev/null 2>&1 || true"
+  local cmd="$PREAMBLE; $setup; python scripts/transplant/eval_bridge_cowork.py"
+  cmd="$cmd --strategy $s --base-model Qwen/Qwen2.5-1.5B --donor-model Qwen/Qwen2.5-Coder-1.5B"
+  cmd="$cmd --bridge-base $SPOT/base-$SAMPLE-k${K} --bridge-coder $SPOT/coder-$SAMPLE-k${K}"
+  cmd="$cmd --data $DATA_MULTIPL/test.parquet --result $TX_OBJ/results-spot-$SAMPLE-k${K}/$s --work-dir $jobcode/spwork"
+  cmd="$cmd --batch-size ${HE_BATCH:-32}"
+  [ -n "${HE_LIMIT:-}" ] && [ "${HE_LIMIT}" != "0" ] && cmd="$cmd --limit $HE_LIMIT"
+  echo "[spot-eval] $s (sample $SAMPLE, k=$K, batch=${HE_BATCH:-32}) -> results-spot-$SAMPLE-k${K}/$s"
+  submit "$name" "$jobcode" "$cmd"
+}
+
 bridge_eval_one() {  # strategy — bridge transplant (paper A∖B masks) + cowork completion eval
   local s="$1"
   local CK="${CORE_K:-$K}"
@@ -241,8 +298,20 @@ case "${1:-}" in
                coder) bridge_one coder "$CODER_HF";;
                *) echo "bridge tag must be base|coder" >&2; exit 1;; esac;;
   bridge-all) bridge_one base "$BASE_HF"; bridge_one coder "$CODER_HF";;
+  multipl-eval)     multipl_eval_one "${2:?strategy required}";;
+  multipl-eval-set) for s in ${MPL_STRATS:-base coder v2 rand}; do multipl_eval_one "$s"; done;;
+  spot)      case "${2:?tag(base|coder) required}" in
+               base)  spot_one base "$BASE_HF";;
+               coder) spot_one coder "$CODER_HF";;
+               *) echo "spot tag must be base|coder" >&2; exit 1;; esac;;
+  spot-all)  spot_one base "$BASE_HF"; spot_one coder "$CODER_HF";;
+  spot-eval)      spot_eval_one "${2:?strategy required}";;
+  spot-eval-full) for s in ${BRE_STRATS:-base coder v1 v2 v3 rand perm ndhi ndlo vhi vlo reverse}; do spot_eval_one "$s"; done;;
   bridge-eval)     bridge_eval_one "${2:?strategy required}";;
   bridge-eval-all) for s in base coder v1 v2 v3; do bridge_eval_one "$s"; done;;
+  # full control set (Phase C-2 base-pair repro): adds the position/value/drift/causal controls
+  # so the v2>rand position-specificity gate + drift controls + reverse are all measured.
+  bridge-eval-full) for s in ${BRE_STRATS:-base coder v1 v2 v3 rand perm ndhi ndlo vhi vlo reverse}; do bridge_eval_one "$s"; done;;
   analyze-gen)  # generations.jsonl completion 쌍별 비교 (왜 동일 pass@1인지)
     aname="tx-analyze-gen-k${K}"; ajob="$(uniq_jobcode "$aname")"
     aroot="$TX_OBJ/results-bridge-$SAMPLE-k${K}"
@@ -258,5 +327,5 @@ case "${1:-}" in
     nroot="$TX_OBJ/results-bridge-$SAMPLE-k${K}"
     ncmd="$PREAMBLE; python scripts/transplant/mcnemar.py $nroot ${MCNEMAR_REF:-base} ${ANALYZE_STRATS:-coder v2 rand ndlo vhi vlo perm ndhi reverse}"
     submit "$nname" "$njob" "$ncmd";;
-  *) echo "usage: $0 {cal-base|cal-coder|eval <s>|eval-all|eval-it|cowork <s>|cowork-all|bridge <base|coder>|bridge-all|bridge-eval <s>|bridge-eval-all|analyze-gen}" >&2; exit 1;;
+  *) echo "usage: $0 {cal-base|cal-coder|eval <s>|eval-all|eval-it|cowork <s>|cowork-all|bridge <base|coder>|bridge-all|bridge-eval <s>|bridge-eval-all|bridge-eval-full|spot <base|coder>|spot-all|spot-eval <s>|spot-eval-full|multipl-eval <s>|multipl-eval-set|analyze-gen}" >&2; exit 1;;
 esac

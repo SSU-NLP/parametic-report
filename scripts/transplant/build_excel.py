@@ -171,6 +171,59 @@ def main():
         add_sheet(wb, "11_mcnemar", ["ref", "strat", "net(c-b)", "chi2", "p", "verdict"],
                   [[r["ref"], r["strat"], r["net_c_minus_b"], r["chi2"], r["p"], r["verdict"]] for r in mrows])
 
+    # ── 12. Phase B 논문 재현 (3모델 × HumanEval + 일반 5종, code spot damage k-sweep) ──
+    try:
+        prows = list(csv.reader(open(f"{R}/paper_repro_table1.csv")))
+        add_sheet(wb, "12_paper_repro_B", prows[0], prows[1:])
+    except FileNotFoundError:
+        pass
+
+    # ── 13. Phase C 이식 (qwen base<-coder): Spot/Bridge x 전략 + A-sweep, Python HumanEval chat ──
+    # floor(base)=0.5427, ceiling(coder)=0.628. 결론: 전 kA에서 v2<=rand, floor 초과 없음 → bridge 음성.
+    try:
+        trows = list(csv.reader(open(f"{R}/paper_repro_transplant.csv")))
+        add_sheet(wb, "13_transplant_C_py", trows[0], trows[1:])
+    except FileNotFoundError:
+        pass
+
+    # ── 14. Phase C 이식 — in-distribution Java (humanevalpack) ──
+    # 결론: Java v2도 ~floor (ceiling 0.500 미도달). chat(instruction_tokens)도 동일. in-dist 전이도 없음.
+    try:
+        jrows = list(csv.reader(open(f"{R}/paper_repro_transplant_java.csv")))
+        add_sheet(wb, "14_transplant_java", jrows[0], jrows[1:])
+    except FileNotFoundError:
+        pass
+
+    # ── 15. Python(held-out) vs Java(in-dist) v2 직접 대조 — 둘 다 전이 없음 ──
+    try:
+        crows = list(csv.reader(open(f"{R}/paper_repro_transplant_compare.csv")))
+        add_sheet(wb, "15_py_vs_java", crows[0], crows[1:])
+    except FileNotFoundError:
+        pass
+
+    # ── 16. Phase C-2 base 쌍 (Qwen2.5-1.5B<-Coder, MultiPL-E java completion): spot vs bridge + McNemar ──
+    # 결론: SPOT 이식(v1/v2/v3)=인과 붕괴(2~9/158, p<.001, rand보다 압도적 아래) + reverse도 coder 붕괴.
+    #       BRIDGE(여집합)=null(v2 vs rand p=.386). spot은 진짜, bridge는 무효과 — base 쌍에서도 doyun 'up'은 노이즈.
+    try:
+        brows = list(csv.reader(open(f"{R}/paper_repro_basepair.csv")))
+        add_sheet(wb, "16_basepair_C2", brows[0], brows[1:])
+    except FileNotFoundError:
+        pass
+
+    # ── 17/18. Phase C-2 다언어 MultiPL-E (py/java/cpp/js/go, 798쌍): bridge v2 검정력 결판 ──
+    # 결론: 검정력 충분(coder vs base +75 p<.001 검출). 그런데 v2 vs base p=.901, v2 vs rand p=.556 → 무효.
+    #       798문제(단일 5배)로도 bridge 'up' 못 잡음 = 잘 검정된 NULL. doyun 'up'=노이즈 확정.
+    try:
+        m1 = list(csv.reader(open(f"{R}/paper_repro_basepair_multipl.csv")))
+        add_sheet(wb, "17_multipl_passk", m1[0], m1[1:])
+    except FileNotFoundError:
+        pass
+    try:
+        m2 = list(csv.reader(open(f"{R}/paper_repro_basepair_multipl_mcnemar.csv")))
+        add_sheet(wb, "18_multipl_mcnemar_cmh", m2[0], m2[1:])
+    except FileNotFoundError:
+        pass
+
     out = f"{R}/experiments.xlsx"
     wb.save(out)
     print(f"saved {out} ({len(wb.sheetnames)} sheets: {wb.sheetnames})")
