@@ -64,34 +64,35 @@ def build_source(prompt: str, completion: str, tests: str) -> str:
     return strip_unavailable_imports(prompt + completion + tests)
 
 
-def generate_completions(args: argparse.Namespace, tasks: list[dict]) -> list[dict]:
+def generate_completions(args: argparse.Namespace, tasks: list[dict],
+                         model=None, tokenizer=None) -> list[dict]:
     import torch
     from transformers import AutoModelForCausalLM, AutoTokenizer
 
-    print(f"[2/4] Loading tokenizer: {args.model}", flush=True)
-    tokenizer = AutoTokenizer.from_pretrained(args.model, local_files_only=args.local_files_only)
+    if tokenizer is None:
+        print(f"[2/4] Loading tokenizer: {args.model}", flush=True)
+        tokenizer = AutoTokenizer.from_pretrained(args.model, local_files_only=args.local_files_only)
     tokenizer.padding_side = "left"   # completion eval: left-pad so batched greedy == per-sample greedy
     if tokenizer.pad_token_id is None:
         tokenizer.pad_token = tokenizer.eos_token
 
-    dtype = {
-        "auto": "auto",
-        "float16": torch.float16,
-        "bfloat16": torch.bfloat16,
-        "float32": torch.float32,
-    }[args.dtype]
-    print(f"[2/4] Loading model: {args.model}", flush=True)
-    model = AutoModelForCausalLM.from_pretrained(
-        args.model,
-        torch_dtype=dtype,
-        local_files_only=args.local_files_only,
-    )
-    device_name = "cuda" if args.device == "auto" and torch.cuda.is_available() else args.device
-    if device_name == "auto":
-        device_name = "cpu"
-    device = torch.device(device_name)
-    model.to(device)
+    if model is None:                  # default: load from path; caller may pass a pre-loaded (e.g. hooked) model
+        dtype = {
+            "auto": "auto",
+            "float16": torch.float16,
+            "bfloat16": torch.bfloat16,
+            "float32": torch.float32,
+        }[args.dtype]
+        print(f"[2/4] Loading model: {args.model}", flush=True)
+        model = AutoModelForCausalLM.from_pretrained(
+            args.model, torch_dtype=dtype, local_files_only=args.local_files_only,
+        )
+        device_name = "cuda" if args.device == "auto" and torch.cuda.is_available() else args.device
+        if device_name == "auto":
+            device_name = "cpu"
+        model.to(torch.device(device_name))
     model.eval()
+    device = next(model.parameters()).device
     print(f"[2/4] Model ready on {device}", flush=True)
 
     bs = max(1, int(getattr(args, "batch_size", None) or 16))

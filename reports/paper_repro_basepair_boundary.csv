@@ -1,0 +1,9 @@
+group,layers,alpha,pass@1,passed,compile_err,note
+base,-,-,0.2722,43,0,
+coder,-,-,0.3861,61,0,
+ffn-interp,2-25,1.0,0.0,0,158,middle(2-25) full-swap도 붕괴=compositional; boundary 개별도 붕괴; 전이 없음(base 0.272 안 넘음) -> raw 종료
+ffn-interp,2-25,0.3,0.1266,20,71,
+ffn-interp,2-25,0.1,0.2468,39,37,
+ffn-interp,0-1,1.0,0.0063,1,142,
+ffn-interp,26-27,1.0,0.0443,7,143,
+ffn-interp,0-1,26-27,1.0,0.0,0,158,

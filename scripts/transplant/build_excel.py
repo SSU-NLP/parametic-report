@@ -224,6 +224,57 @@ def main():
     except FileNotFoundError:
         pass
 
+    # ── 19. Phase C-2 delta 이식 + global interp (positive control), java ──
+    # 결론: global interp(positive control) 실패 — base→coder 선형경로 α≥0.3 붕괴(0.076/0.019) →
+    #       두 모델 weight-space 비연결 = sparse/full 모두 weight-copy 불가. spot delta: α↑→붕괴, α↓→floor
+    #       (skill carrier 아님=equilibrium-critical). bridge delta: 전 α floor. → 전이 없음 확정.
+    try:
+        drows = list(csv.reader(open(f"{R}/paper_repro_basepair_delta.csv")))
+        add_sheet(wb, "19_basepair_delta", drows[0], drows[1:])
+    except FileNotFoundError:
+        pass
+
+    # ── 20. 모듈 제한 이식 Round 1: FFN-only global interp gate (vs global-ALL 시트19) ──
+    # 결론: gate FAILED — FFN-only도 max α pass@1=0.2975 < base+0.04(0.312), α≥0.3 붕괴(compile_err 폭증).
+    #       embed/norm/lm_head/attn 제외해도 붕괴 지속 → 비호환은 FFN 블록 내부 (Case 3, 가장 강한 negative).
+    #       raw transplant 종결, alignment(LoRA/activation/TIES)로. Round 2(FFN spot/bridge) 미실행.
+    try:
+        mrows = list(csv.reader(open(f"{R}/paper_repro_basepair_module.csv")))
+        add_sheet(wb, "20_module_ffn_gate", mrows[0], mrows[1:])
+    except FileNotFoundError:
+        pass
+
+    # ── 21. 이식 호환성 진단 Step1+2 (activation map + 단일모듈 NLL), base←coder ──
+    # 기준 nll_base=1.1026 nll_coder=1.1236 (coder≈base NLL → NLL은 전이 신호 약함, 파괴여부만).
+    # 결론: 중간 레이어(2~25) 단일 MLP swap은 거의 무해(Δnll +0.02~0.06) → §10 FFN-ALL 붕괴는
+    #       누적(28층)+경계레이어(0/1/26/27 비호환: L1 cos0.17·norm1.68, L27 rel_delta3.9) 탓.
+    #       raw 완전사망 아님 → Step3(경계 제외 gated delta) 여지, but 전이판정은 pass@1로.
+    try:
+        arows = list(csv.reader(open(f"{R}/paper_repro_actcompat.csv")))
+        add_sheet(wb, "21_act_compat", arows[0], arows[1:])
+    except FileNotFoundError:
+        pass
+
+    # ── 22. boundary-excluded/middle-only FFN interp (compositional 가설), java pass@1 ──
+    # 결론: 중간 24층(2-25) full-swap도 0/158 붕괴(§11 단일층 무해와 반대) → 붕괴는 깊이방향 누적.
+    #       boundary 개별(0-1, 26-27)도 붕괴. 중간 α-sweep은 단조 손상, base(0.272) 못 넘음(전이 없음).
+    #       교훈: NLL은 generation 붕괴 못 잡음(pass@1 필수). → raw weight transplant 종료, LoRA distill로.
+    try:
+        brows = list(csv.reader(open(f"{R}/paper_repro_basepair_boundary.csv")))
+        add_sheet(wb, "22_boundary_ffn", brows[0], brows[1:])
+    except FileNotFoundError:
+        pass
+
+    # ── 23. residual-gated donor MLP injection (output-space, L2-25), java pass@1 + McNemar ──
+    # 결론: 전 β 유의 향상 없음 — 작은 β(0.01~0.1) neutral(p>0.4, =base), β=0.3 유의 손상(net-12 p=.025).
+    #       단 weight-interp(§12 α=0.1→0.247)보다 안정(β=0.1→0.291≈base) → weight 추가손상=MLP 내부 nonlinear path.
+    #       donor FFN 출력 방향에 전이 신호 없음 → output-space도 종료 → LoRA distillation으로.
+    try:
+        rrows = list(csv.reader(open(f"{R}/paper_repro_resgate.csv")))
+        add_sheet(wb, "23_resgate", rrows[0], rrows[1:])
+    except FileNotFoundError:
+        pass
+
     out = f"{R}/experiments.xlsx"
     wb.save(out)
     print(f"saved {out} ({len(wb.sheetnames)} sheets: {wb.sheetnames})")

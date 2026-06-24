@@ -1,0 +1,14 @@
+group,alpha,strategy,pass@1,passed,compile_err,note
+baseline,-,base,0.2722,43,0,
+baseline,-,coder,0.3861,61,0,
+interp-ALL,0.1,interp,0.2595,41,-,
+interp-ALL,0.3,interp,0.0759,12,-,
+interp-ALL,0.5,interp,0.019,3,-,
+interp-ALL,0.7,interp,0.0316,5,-,
+interp-FFN,0.03,interp,0.2975,47,31,FFN-only global interp; gate=base+0.04=0.312; max=0.2975<gate -> FAILED (Case 3)
+interp-FFN,0.01,interp,0.2785,44,33,FFN-only global interp; gate=base+0.04=0.312; max=0.2975<gate -> FAILED (Case 3)
+interp-FFN,0.3,interp,0.0443,7,132,FFN-only global interp; gate=base+0.04=0.312; max=0.2975<gate -> FAILED (Case 3)
+interp-FFN,1.0,interp,0.0,0,158,FFN-only global interp; gate=base+0.04=0.312; max=0.2975<gate -> FAILED (Case 3)
+interp-FFN,0.5,interp,0.0,0,158,FFN-only global interp; gate=base+0.04=0.312; max=0.2975<gate -> FAILED (Case 3)
+interp-FFN,0.7,interp,0.0,0,158,FFN-only global interp; gate=base+0.04=0.312; max=0.2975<gate -> FAILED (Case 3)
+interp-FFN,0.1,interp,0.2595,41,41,FFN-only global interp; gate=base+0.04=0.312; max=0.2975<gate -> FAILED (Case 3)

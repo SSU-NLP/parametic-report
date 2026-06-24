@@ -1,0 +1,13 @@
+family,strategy,alpha,pass@1,passed,total,note
+baseline,base,0,0.2722,43,158,replace(α=1) reference
+baseline,coder,1,0.3861,61,158,replace(α=1) reference
+bridge,v2,1,0.2911,46,158,A∖B delta-add
+spot,v2,1,0.057,9,158,core B delta-add
+interp,interp,0.1,0.2595,41,158,global linear interp (no mask) — positive control
+interp,interp,0.3,0.0759,12,158,global linear interp (no mask) — positive control
+interp,interp,0.5,0.019,3,158,global linear interp (no mask) — positive control
+interp,interp,0.7,0.0316,5,158,global linear interp (no mask) — positive control
+bridge,v2,0.1,0.2848,45,158,A∖B delta-add
+bridge,v2,0.3,0.2722,43,158,A∖B delta-add
+spot,v2,0.1,0.2975,47,158,core B delta-add
+spot,v2,0.3,0.2848,45,158,core B delta-add

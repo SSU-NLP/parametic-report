@@ -238,6 +238,58 @@ multipl_eval_one() {  # strategy — multi-language MultiPL-E completion eval of
   submit "$name" "$jobcode" "$cmd"
 }
 
+resgate_one() {  # beta [layers] — residual-gated donor MLP injection (output-space), java pass@1
+  local B="$1" LAY="${2:-2-25}"
+  local laytag; laytag="$(echo "$LAY" | tr ',-' '__')"
+  local name="tx-resgate-b$B-L$laytag"
+  local jobcode; jobcode="$(uniq_jobcode "$name")"
+  local setup="apt-get update -qq && apt-get install -y -qq default-jdk >/dev/null 2>&1 || true"
+  setup="$setup; pip install -q --break-system-packages pyarrow >/dev/null 2>&1 || true"
+  local cmd="$PREAMBLE; $setup; python scripts/transplant/residual_gate.py"
+  cmd="$cmd --base-model Qwen/Qwen2.5-1.5B --donor-model Qwen/Qwen2.5-Coder-1.5B --beta $B --layers $LAY"
+  cmd="$cmd --data $DATA_MULTIPL/test.parquet --result $TX_OBJ/results-resgate-L$laytag/b$B --batch-size ${HE_BATCH:-32}"
+  [ -n "${HE_LIMIT:-}" ] && [ "${HE_LIMIT}" != "0" ] && cmd="$cmd --limit $HE_LIMIT"
+  echo "[resgate] beta=$B layers=$LAY -> results-resgate-L$laytag/b$B"
+  submit "$name" "$jobcode" "$cmd"
+}
+
+act_compat_one() {  # forward-only transplant-compatibility diagnostic (Step 1+2), 1 GPU, no eval/transplant
+  local name="tx-actcompat"
+  local jobcode; jobcode="$(uniq_jobcode "$name")"
+  local cmd="$PREAMBLE; python scripts/transplant/activation_compat.py"
+  cmd="$cmd --base-model Qwen/Qwen2.5-1.5B --donor-model Qwen/Qwen2.5-Coder-1.5B"
+  cmd="$cmd --data-prefix $DATA/test --max-samples ${ACT_SAMPLES:-128} --seq-len ${ACT_SEQLEN:-1024} --batch-size ${ACT_BS:-8}"
+  cmd="$cmd --output $TX_OBJ/results-actcompat/metrics.csv"
+  echo "[actcompat] -> results-actcompat/metrics.csv"
+  submit "$name" "$jobcode" "$cmd"
+}
+
+delta_eval_one() {  # family(bridge|spot|interp) strategy alpha [modules] [layers] — delta-add/interp, java completion
+  local fam="$1" s="$2" A="$3" MOD="${4:-all}" LAY="${5:-all}"
+  local masks="$BRIDGE"; [ "$fam" = "spot" ] && masks="$SPOT"
+  # result/name tag: keep legacy `$s-a$A` when unrestricted (all/all) for path stability; else append m/L
+  local tag="$s-a$A"
+  if [ "$MOD" != "all" ] || [ "$LAY" != "all" ]; then
+    local laytag; laytag="$(echo "$LAY" | tr ',-' '__')"
+    tag="$s-a$A-m$MOD-L$laytag"
+  fi
+  local name="tx-de-$fam-$tag-$SAMPLE-k${K}"
+  local jobcode; jobcode="$(uniq_jobcode "$name")"
+  local setup="apt-get update -qq && apt-get install -y -qq default-jdk >/dev/null 2>&1 || true"
+  setup="$setup; pip install -q --break-system-packages pyarrow >/dev/null 2>&1 || true"
+  local cmd="$PREAMBLE; $setup; python scripts/transplant/eval_bridge_cowork.py"
+  cmd="$cmd --strategy $s --base-model Qwen/Qwen2.5-1.5B --donor-model Qwen/Qwen2.5-Coder-1.5B --alpha $A"
+  cmd="$cmd --modules $MOD --layers $LAY"
+  if [ "$fam" != "interp" ]; then
+    cmd="$cmd --bridge-base $masks/base-$SAMPLE-k${K} --bridge-coder $masks/coder-$SAMPLE-k${K}"
+  fi
+  cmd="$cmd --data $DATA_MULTIPL/test.parquet --result $TX_OBJ/results-delta-$fam-$SAMPLE-k${K}/$tag --work-dir $jobcode/dework"
+  cmd="$cmd --batch-size ${HE_BATCH:-32}"
+  [ -n "${HE_LIMIT:-}" ] && [ "${HE_LIMIT}" != "0" ] && cmd="$cmd --limit $HE_LIMIT"
+  echo "[delta] $fam/$s α=$A mod=$MOD lay=$LAY -> results-delta-$fam-$SAMPLE-k${K}/$tag"
+  submit "$name" "$jobcode" "$cmd"
+}
+
 spot_one() {  # tag(base/coder), hf — build code spot (core B = java grad·param top-k) mask, the paper region
   local tag="$1" hf="$2"
   local name="tx-spot-$tag-$SAMPLE-k${K}"
@@ -300,6 +352,29 @@ case "${1:-}" in
   bridge-all) bridge_one base "$BASE_HF"; bridge_one coder "$CODER_HF";;
   multipl-eval)     multipl_eval_one "${2:?strategy required}";;
   multipl-eval-set) for s in ${MPL_STRATS:-base coder v2 rand}; do multipl_eval_one "$s"; done;;
+  activation-compat) act_compat_one;;
+  resgate)     resgate_one "${2:?beta}" "${3:-2-25}";;
+  resgate-sweep) for B in ${RESGATE_BETAS:-0.0 0.01 0.03 0.1 0.3}; do resgate_one "$B" "${RESGATE_LAYERS:-2-25}"; done;;
+  delta-eval)  delta_eval_one "${2:?family}" "${3:?strategy}" "${4:?alpha}" "${5:-all}" "${6:-all}";;
+  delta-sweep) # global interp + bridge-v2 + spot-v2 delta-add α sweep (java screening)
+    for A in ${INTERP_ALPHAS:-0.1 0.3 0.5 0.7}; do delta_eval_one interp interp "$A"; done
+    for A in ${DELTA_ALPHAS:-0.1 0.3}; do delta_eval_one bridge v2 "$A"; delta_eval_one spot v2 "$A"; done;;
+  # ★ Round 1 gate: FFN-only global interp α-sweep (positive control, modules=ffn)
+  ffn-interp-sweep)
+    for A in ${INTERP_ALPHAS:-0.01 0.03 0.1 0.3 0.5 0.7 1.0}; do delta_eval_one interp interp "$A" ffn all; done;;
+  # boundary-excluded FFN interp screen (compositional/boundary hypothesis from act-compat):
+  # middle layers (2-25) interp α-sweep + boundary-only controls. java pass@1.
+  boundary-ffn-screen)
+    for A in ${MID_ALPHAS:-1.0 0.3 0.1}; do delta_eval_one interp interp "$A" ffn 2-25; done
+    delta_eval_one interp interp 1.0 ffn 0-1
+    delta_eval_one interp interp 1.0 ffn 26-27
+    delta_eval_one interp interp 1.0 ffn 0-1,26-27;;
+  # Round 2 (conditional on gate): FFN-restricted spot/bridge/rand delta — DO NOT run until gate passes
+  ffn-delta-sweep)
+    for A in ${DELTA_ALPHAS:-0.03 0.1 0.3 1.0}; do
+      delta_eval_one spot v2 "$A" ffn all;   delta_eval_one spot rand "$A" ffn all
+      delta_eval_one bridge v2 "$A" ffn all; delta_eval_one bridge rand "$A" ffn all
+    done;;
   spot)      case "${2:?tag(base|coder) required}" in
                base)  spot_one base "$BASE_HF";;
                coder) spot_one coder "$CODER_HF";;
@@ -327,5 +402,5 @@ case "${1:-}" in
     nroot="$TX_OBJ/results-bridge-$SAMPLE-k${K}"
     ncmd="$PREAMBLE; python scripts/transplant/mcnemar.py $nroot ${MCNEMAR_REF:-base} ${ANALYZE_STRATS:-coder v2 rand ndlo vhi vlo perm ndhi reverse}"
     submit "$nname" "$njob" "$ncmd";;
-  *) echo "usage: $0 {cal-base|cal-coder|eval <s>|eval-all|eval-it|cowork <s>|cowork-all|bridge <base|coder>|bridge-all|bridge-eval <s>|bridge-eval-all|bridge-eval-full|spot <base|coder>|spot-all|spot-eval <s>|spot-eval-full|multipl-eval <s>|multipl-eval-set|analyze-gen}" >&2; exit 1;;
+  *) echo "usage: $0 {cal-base|cal-coder|eval <s>|eval-all|eval-it|cowork <s>|cowork-all|bridge <base|coder>|bridge-all|bridge-eval <s>|bridge-eval-all|bridge-eval-full|spot <base|coder>|spot-all|spot-eval <s>|spot-eval-full|multipl-eval <s>|multipl-eval-set|delta-eval <fam> <s> <a> [mod] [lay]|delta-sweep|ffn-interp-sweep|ffn-delta-sweep|activation-compat|resgate <b> [lay]|resgate-sweep|analyze-gen}" >&2; exit 1;;
 esac

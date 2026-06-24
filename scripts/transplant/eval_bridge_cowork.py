@@ -15,17 +15,72 @@ then scores with the colleague's completion harness (eval_humaneval_java_cowork)
 import argparse
 import json
 import os
+import re
 import sys
 from pathlib import Path
 
-import torch
-from transformers import AutoModelForCausalLM, AutoTokenizer
-
+# torch/transformers are imported lazily inside build()/main() so the pure helpers below
+# (keep_tensor/_parse_layers) stay importable for unit tests on a host without torch.
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import eval_humaneval_java_cowork as cw  # noqa: E402
 
 ORIGINALS = ("base", "coder")
+
+# ── module/layer restriction (FFN-only / attn-only / per-layer) — pure, torch-free ──
+_LAYER_RE = re.compile(r"layers\.(\d+)\.(.+)$")
+
+
+def _parse_param(name):
+    """`model.layers.5.mlp.down_proj.weight` -> (5, 'mlp.down_proj.weight'); None for embed/lm_head/model.norm."""
+    m = _LAYER_RE.search(name)
+    return (int(m.group(1)), m.group(2)) if m else None
+
+
+def _parse_layers(spec):
+    """'all'->None; '12'->{12}; '0-5'->{0..5}; '0-3,12'->{0,1,2,3,12}."""
+    if spec is None or spec == "all":
+        return None
+    out = set()
+    for part in str(spec).split(","):
+        part = part.strip()
+        if not part:
+            continue
+        if "-" in part:
+            lo, hi = part.split("-")
+            out.update(range(int(lo), int(hi) + 1))
+        else:
+            out.add(int(part))
+    return out
+
+
+def keep_tensor(name, modules="all", layers=None):
+    """True iff this named_parameter is in-scope for the module/layer restriction.
+    modules: all|ffn|attn|attn-vo|attn-qk|attn-qkv|norm. layers: None(all) or set of int indices."""
+    pp = _parse_param(name)
+    if layers is not None:                       # layer filter: only numbered blocks survive
+        if pp is None or pp[0] not in layers:
+            return False
+    if modules == "all":
+        return True
+    if pp is None:                               # embed/lm_head/model.norm never match a module class
+        return False
+    suffix = pp[1]
+    if modules == "ffn":
+        return suffix.startswith("mlp.")         # Qwen2.5 mlp.{gate,up,down}_proj.weight (no bias)
+    if modules == "norm":
+        return "input_layernorm" in suffix or "post_attention_layernorm" in suffix
+    is_q, is_k = "q_proj" in suffix, "k_proj" in suffix
+    is_v, is_o = "v_proj" in suffix, "o_proj" in suffix
+    if modules == "attn":
+        return is_q or is_k or is_v or is_o
+    if modules == "attn-vo":
+        return is_v or is_o
+    if modules == "attn-qk":
+        return is_q or is_k
+    if modules == "attn-qkv":
+        return is_q or is_k or is_v
+    raise SystemExit(f"unknown --modules {modules}")
 
 
 # 위치/값 통제 strategies — 전부 v2 교집합(inter)의 per-tensor 개수 n에 매칭.
@@ -40,7 +95,15 @@ ORIGINALS = ("base", "coder")
 CONTROLS = {"v1", "v2", "v3", "rand", "perm", "ndhi", "ndlo", "vhi", "vlo", "reverse"}
 
 
-def build(base_id, donor_id, bridge_base, bridge_coder, strategy, token, dtype):
+def build(base_id, donor_id, bridge_base, bridge_coder, strategy, token, dtype, alpha=1.0,
+          modules="all", layers=None):
+    """Transplant donor->recipient over a mask dir. alpha<1 turns the masked OVERWRITE into a
+    scaled DELTA-ADD:  θ' = θ_recv + α·(θ_src − θ_recv)  (α=1 == the original replace).
+    strategy 'interp' ignores masks and blends the WHOLE model: θ' = (1−α)·base + α·coder
+    (positive control: is the base→coder linear weight path even coherent?).
+    modules/layers restrict which tensors are touched (FFN-only / attn-only / per-layer)."""
+    import torch
+    from transformers import AutoModelForCausalLM, AutoTokenizer
     reverse = strategy == "reverse"
     # recv = 수정 대상 모델(평가됨), src = 값 출처
     recv_id, src_id = (donor_id, base_id) if reverse else (base_id, donor_id)
@@ -48,11 +111,25 @@ def build(base_id, donor_id, bridge_base, bridge_coder, strategy, token, dtype):
     src = AutoModelForCausalLM.from_pretrained(src_id, token=token, torch_dtype=dtype)
     tok = AutoTokenizer.from_pretrained(base_id, token=token)
     rp = dict(recv.named_parameters()); sp = dict(src.named_parameters())
+    if strategy == "interp":                       # global interpolation, no mask
+        with torch.no_grad():
+            for name, prm in rp.items():
+                if not keep_tensor(name, modules, layers):
+                    continue
+                if name in sp and tuple(sp[name].shape) == tuple(prm.shape):
+                    prm.data.copy_((prm.data + alpha * (sp[name].data.to(prm.dtype) - prm.data)).to(prm.dtype))
+        del src
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+        print(f"interp alpha={alpha}: blended {len(rp)} tensors", flush=True)
+        return recv, tok
     recv_bridge, src_bridge = (bridge_coder, bridge_base) if reverse else (bridge_base, bridge_coder)
     applied = selected = 0
     with torch.no_grad():
         for i, mf in enumerate(sorted(recv_bridge.glob("*.pt"))):
             name = mf.stem
+            if not keep_tensor(name, modules, layers):
+                continue
             smf = src_bridge / mf.name
             if name not in rp or name not in sp or not smf.exists():
                 continue
@@ -95,7 +172,11 @@ def build(base_id, donor_id, bridge_base, bridge_coder, strategy, token, dtype):
                 raise SystemExit(f"unknown strategy {strategy}")
             cnt = int(sel.sum())
             if cnt:
-                rp[name].data[sel] = vals.to(rp[name].dtype)
+                if alpha == 1.0:
+                    rp[name].data[sel] = vals.to(rp[name].dtype)
+                else:                                  # delta-add: θ_recv + α·(θ_src − θ_recv)
+                    cur = rp[name].data[sel]
+                    rp[name].data[sel] = (cur + alpha * (vals.to(cur.dtype) - cur)).to(rp[name].dtype)
                 selected += cnt
             applied += 1
     del src
@@ -118,8 +199,14 @@ def main():
     p.add_argument("--max-new-tokens", type=int, default=512)
     p.add_argument("--batch-size", type=int, default=32)   # batched greedy; A100 80GB는 32~48 여유
     p.add_argument("--limit", type=int, default=None)
+    p.add_argument("--alpha", type=float, default=1.0, help="delta-add scale (1.0=replace); also global interp scale")
+    p.add_argument("--modules", default="all",
+                   choices=["all", "ffn", "attn", "attn-vo", "attn-qk", "attn-qkv", "norm"],
+                   help="restrict transplant/interp to a module group")
+    p.add_argument("--layers", default="all", help="restrict to layer indices: all | 12 | 0-5 | 0-3,12")
     a = p.parse_args()
 
+    import torch
     token = os.getenv("HF_TOKEN")
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     dtype = torch.bfloat16 if device.type == "cuda" else torch.float32
@@ -129,9 +216,10 @@ def main():
     elif a.strategy == "coder":
         model_dir = a.donor_model
     else:
-        if not a.bridge_base or not a.bridge_coder:
+        if a.strategy != "interp" and (not a.bridge_base or not a.bridge_coder):
             raise SystemExit("--bridge-base and --bridge-coder required for transplant strategies")
-        model, tok = build(a.base_model, a.donor_model, a.bridge_base, a.bridge_coder, a.strategy, token, dtype)
+        model, tok = build(a.base_model, a.donor_model, a.bridge_base, a.bridge_coder, a.strategy,
+                           token, dtype, a.alpha, a.modules, _parse_layers(a.layers))
         a.work_dir.mkdir(parents=True, exist_ok=True)
         md = a.work_dir / "model"; md.mkdir(parents=True, exist_ok=True)
         model.save_pretrained(md); tok.save_pretrained(md)
@@ -149,6 +237,9 @@ def main():
     cw.write_jsonl(str(Path(a.result) / "generations.jsonl"), rows)
     summary = cw.score_results(argparse.Namespace(result=a.result, timeout=10), rows)
     summary["strategy"] = a.strategy
+    summary["alpha"] = a.alpha
+    summary["modules"] = a.modules
+    summary["layers"] = a.layers
     print(json.dumps(summary, indent=2), flush=True)
 
 
