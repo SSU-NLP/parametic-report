@@ -275,6 +275,25 @@ def main():
     except FileNotFoundError:
         pass
 
+    # ── 24. compatibility-gated static surgery (마지막 무학습 이식), FFN 2-25, java pass@1 + McNemar ──
+    # 결론: T(gradient-aligned·Fisher-safe·sign-consistent)·gain·descent-rand·matched-rand 전부 pass@1≈base
+    #       (0.272~0.285, 전부 McNemar p≥0.48 무의미). gain은 pred_ΔL=-30.8(코드 loss 큰 감소 예측)인데도 pass@1=base
+    #       = 1차 loss-descent ≠ pass@1 전이. → 무학습 parameter transplant 이 모델쌍에서 종결.
+    try:
+        grows = list(csv.reader(open(f"{R}/paper_repro_gated.csv")))
+        add_sheet(wb, "24_gated_surgery", grows[0], grows[1:])
+    except FileNotFoundError:
+        pass
+
+    # ── 25. abs-accumulated saliency 이식 closure (signed/abs/∩/∖, FFN 2-25) ──
+    # 결론: signed≈abs≈signed∩abs≈abs∖signed≈matched-rand≈base (0.26~0.285, McNemar p≥0.48 전부 무의미).
+    #       saliency 정의(signed vs abs activity)를 바꿔도 static transplant 차이 0 → static saliency surgery 완전 종결.
+    try:
+        srows = list(csv.reader(open(f"{R}/paper_repro_saliency.csv")))
+        add_sheet(wb, "25_saliency", srows[0], srows[1:])
+    except FileNotFoundError:
+        pass
+
     out = f"{R}/experiments.xlsx"
     wb.save(out)
     print(f"saved {out} ({len(wb.sheetnames)} sheets: {wb.sheetnames})")

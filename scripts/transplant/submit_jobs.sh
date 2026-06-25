@@ -238,6 +238,33 @@ multipl_eval_one() {  # strategy — multi-language MultiPL-E completion eval of
   submit "$name" "$jobcode" "$cmd"
 }
 
+GRAD="$TX_OBJ/grad"   # recipient code-grad stats G/A/F for compatibility-gated surgery
+
+grad_calib_one() {  # recipient code-gradient stats (G/A/F) — forward+backward, no update, no jdk
+  local name="tx-gradcalib"
+  local jobcode; jobcode="$(uniq_jobcode "$name")"
+  local cmd="$PREAMBLE; python scripts/transplant/grad_calib.py"
+  cmd="$cmd --model Qwen/Qwen2.5-1.5B --data-prefix $DATA/test --max-samples ${GRAD_SAMPLES:-256} --output-dir $GRAD"
+  echo "[gradcalib] -> $GRAD/{G,A,F}"
+  submit "$name" "$jobcode" "$cmd"
+}
+
+gated_delta_one() {  # mode k alpha [modules] [layers] — compatibility-gated static surgery, java pass@1
+  local MODE="$1" K_="$2" A_="$3" MOD="${4:-ffn}" LAY="${5:-2-25}"
+  local laytag; laytag="$(echo "$LAY" | tr ',-' '__')"
+  local name="tx-gated-$MODE-k$K_-a$A_-m$MOD-L$laytag"
+  local jobcode; jobcode="$(uniq_jobcode "$name")"
+  local setup="apt-get update -qq && apt-get install -y -qq default-jdk >/dev/null 2>&1 || true"
+  setup="$setup; pip install -q --break-system-packages pyarrow >/dev/null 2>&1 || true"
+  local cmd="$PREAMBLE; $setup; python scripts/transplant/gated_delta.py"
+  cmd="$cmd --base-model Qwen/Qwen2.5-1.5B --donor-model Qwen/Qwen2.5-Coder-1.5B --grad-dir $GRAD"
+  cmd="$cmd --mode $MODE --k $K_ --alpha $A_ --modules $MOD --layers $LAY"
+  cmd="$cmd --data $DATA_MULTIPL/test.parquet --result $TX_OBJ/results-gated-m$MOD-L$laytag/$MODE-k$K_-a$A_ --batch-size ${HE_BATCH:-32}"
+  [ -n "${HE_LIMIT:-}" ] && [ "${HE_LIMIT}" != "0" ] && cmd="$cmd --limit $HE_LIMIT"
+  echo "[gated] $MODE k=$K_ a=$A_ mods=$MOD L=$LAY -> results-gated-m$MOD-L$laytag/$MODE-k$K_-a$A_"
+  submit "$name" "$jobcode" "$cmd"
+}
+
 resgate_one() {  # beta [layers] — residual-gated donor MLP injection (output-space), java pass@1
   local B="$1" LAY="${2:-2-25}"
   local laytag; laytag="$(echo "$LAY" | tr ',-' '__')"
@@ -353,6 +380,18 @@ case "${1:-}" in
   multipl-eval)     multipl_eval_one "${2:?strategy required}";;
   multipl-eval-set) for s in ${MPL_STRATS:-base coder v2 rand}; do multipl_eval_one "$s"; done;;
   activation-compat) act_compat_one;;
+  grad-calib)  grad_calib_one;;
+  gated-delta) gated_delta_one "${2:?mode}" "${3:?k}" "${4:?alpha}" "${5:-ffn}" "${6:-2-25}";;
+  gated-delta-primary)  # T score, FFN middle, k×α grid
+    for K_ in ${GATED_KS:-0.0001 0.001}; do
+      for A_ in ${GATED_ALPHAS:-0.003 0.01 0.03}; do gated_delta_one T "$K_" "$A_" ffn 2-25; done
+    done;;
+  gated-delta-controls)  # at representative k/α: gain-only / descent-rand / matched-rand
+    for M in gain descent-rand matched-rand; do gated_delta_one "$M" "${GATED_K:-0.001}" "${GATED_A:-0.01}" ffn 2-25; done;;
+  saliency-sweep)  # abs-accumulated saliency closure test (reuse grad/{G,A}); FFN middle
+    for M in signed abs signed-and-abs abs-not-signed; do
+      for A_ in ${SAL_ALPHAS:-0.01 0.03}; do gated_delta_one "$M" "${SAL_K:-0.001}" "$A_" ffn 2-25; done
+    done;;
   resgate)     resgate_one "${2:?beta}" "${3:-2-25}";;
   resgate-sweep) for B in ${RESGATE_BETAS:-0.0 0.01 0.03 0.1 0.3}; do resgate_one "$B" "${RESGATE_LAYERS:-2-25}"; done;;
   delta-eval)  delta_eval_one "${2:?family}" "${3:?strategy}" "${4:?alpha}" "${5:-all}" "${6:-all}";;
@@ -402,5 +441,5 @@ case "${1:-}" in
     nroot="$TX_OBJ/results-bridge-$SAMPLE-k${K}"
     ncmd="$PREAMBLE; python scripts/transplant/mcnemar.py $nroot ${MCNEMAR_REF:-base} ${ANALYZE_STRATS:-coder v2 rand ndlo vhi vlo perm ndhi reverse}"
     submit "$nname" "$njob" "$ncmd";;
-  *) echo "usage: $0 {cal-base|cal-coder|eval <s>|eval-all|eval-it|cowork <s>|cowork-all|bridge <base|coder>|bridge-all|bridge-eval <s>|bridge-eval-all|bridge-eval-full|spot <base|coder>|spot-all|spot-eval <s>|spot-eval-full|multipl-eval <s>|multipl-eval-set|delta-eval <fam> <s> <a> [mod] [lay]|delta-sweep|ffn-interp-sweep|ffn-delta-sweep|activation-compat|resgate <b> [lay]|resgate-sweep|analyze-gen}" >&2; exit 1;;
+  *) echo "usage: $0 {cal-base|cal-coder|eval <s>|eval-all|eval-it|cowork <s>|cowork-all|bridge <base|coder>|bridge-all|bridge-eval <s>|bridge-eval-all|bridge-eval-full|spot <base|coder>|spot-all|spot-eval <s>|spot-eval-full|multipl-eval <s>|multipl-eval-set|delta-eval <fam> <s> <a> [mod] [lay]|delta-sweep|ffn-interp-sweep|ffn-delta-sweep|activation-compat|resgate-sweep|grad-calib|gated-delta <mode> <k> <a>|gated-delta-primary|gated-delta-controls|saliency-sweep|analyze-gen}" >&2; exit 1;;
 esac
