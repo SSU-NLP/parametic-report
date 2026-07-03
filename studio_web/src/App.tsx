@@ -1490,6 +1490,9 @@ export default function App() {
                     onKeyDown={onKey} onBlur={onBlur} style={{ ...fieldStyle, flex: 1 }} title="dataset config (e.g. humanevalpack language)" />
                   <input value={askFilter} onChange={(e) => setAskFilter(e.target.value)} placeholder="programming_language=Python  (tiny-codes)"
                     onKeyDown={onKey} onBlur={onBlur} style={{ ...fieldStyle, flex: 2 }} title="row filter: col=value, applied before capping rows" />
+                  <button onMouseDown={(e) => e.preventDefault()} onClick={submitHfDataset} disabled={!askValue.trim()}
+                    title="download this dataset from the Hugging Face Hub"
+                    style={{ ...addBtn, flexShrink: 0, borderColor: 'var(--accent)', color: 'var(--accent)', opacity: askValue.trim() ? 1 : 0.5 }}>Load</button>
                 </div>
               )
             })()}
