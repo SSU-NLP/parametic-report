@@ -75,7 +75,7 @@ def test_open_streams_download_progress_then_opened(monkeypatch):
 
     monkeypatch.setattr(api, "_download_model", fake_download)
     monkeypatch.setattr("parametic_studio.kernel.model_session.ModelSession.from_pretrained",
-                        classmethod(lambda cls, mid: sess))
+                        classmethod(lambda cls, mid, device="auto": sess))
 
     with TestClient(api.app).websocket_connect("/ws") as ws:
         ws.send_json({"type": "open", "model": "m/new"})

@@ -103,6 +103,46 @@ def test_ws_close_default_model_drops_session_ref():
     assert api.SESSION is None and "m1" not in api.SESSIONS
 
 
+def test_ws_gpus_op_survives_without_cuda():
+    # cuda absent (CI) → count:0, no devices; connection stays alive for the next op.
+    api.SESSION = _tiny_session()
+    api.SESSIONS.clear()
+    with TestClient(api.app).websocket_connect("/ws") as ws:
+        ws.send_json({"type": "gpus"})
+        msg = ws.receive_json()
+        assert msg["type"] == "gpus"
+        if not torch.cuda.is_available():
+            assert msg["count"] == 0 and msg["devices"] == []
+        else:
+            assert msg["count"] == len(msg["devices"])
+            assert all({"index", "name", "mem_used_mb", "mem_total_mb", "models"} <= set(d) for d in msg["devices"])
+        ws.send_json({"type": "tensors"})                # same connection still serves ops
+        assert ws.receive_json()["type"] == "tensors"
+
+
+def test_ws_open_passes_device_to_from_pretrained(monkeypatch):
+    # device on the open frame must reach ModelSession.from_pretrained (so the UI can target a card).
+    from parametic_studio.kernel.model_session import ModelSession
+    seen = {}
+
+    def _fake(model_id, device="auto"):
+        seen["model_id"], seen["device"] = model_id, device
+        return _tiny_session()
+
+    monkeypatch.setattr(ModelSession, "from_pretrained", staticmethod(_fake))
+    monkeypatch.setattr(api, "_download_model", lambda *a, **k: _noop())
+    api.SESSIONS.clear()
+    with TestClient(api.app).websocket_connect("/ws") as ws:
+        ws.send_json({"type": "open", "model": "m1", "device": "cpu"})
+        while ws.receive_json()["type"] != "opened":
+            pass
+    assert seen == {"model_id": "m1", "device": "cpu"}
+
+
+async def _noop():
+    return None
+
+
 def test_ws_open_emits_loading_then_opened():
     api.SESSIONS = {"m1": _tiny_session()}  # pre-loaded → no download
     with TestClient(api.app).websocket_connect("/ws") as ws:

@@ -403,6 +403,9 @@ export default function App() {
   // kernel liveness: null=connecting, true=up, false=down (reconnecting with backoff)
   const [kernelUp, setKernelUp] = useState<boolean | null>(null)
   const [kernelStats, setKernelStats] = useState<{ rss_mb: number } | null>(null)
+  // P16: GPU inventory — count + per-device mem/model occupancy, for the status bar and the load-device picker
+  const [gpus, setGpus] = useState<{ count: number; devices: { index: number; name: string; mem_used_mb: number; mem_total_mb: number; models: string[] }[] } | null>(null)
+  const [openDevice, setOpenDevice] = useState('')  // '' = Auto; else 'cuda:N' — picked in the "+ model" row
   // settings panel (menu-driven; browser gets a small status-bar button) — config + cached-model management
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [config, setConfig] = useState<Record<string, string>>({})
@@ -460,6 +463,7 @@ export default function App() {
         reconnectAttempts.current = 0
         // resync: fresh kernel has no sessions/state for us — reload models, catalog re-pulls regions+datasets
         sendTo(openRef.current[0]?.id ?? DEFAULT.id, { type: 'catalog' })
+        sendTo(openRef.current[0]?.id ?? DEFAULT.id, { type: 'gpus' })
         for (const m of openRef.current) { patch(m.id, (d) => ({ ...d, loading: true })); sendTo(m.id, { type: 'open' }) }
       }
       probe.onerror = () => { try { probe.close() } catch { /* already closed */ } scheduleReconnect() }
@@ -530,6 +534,7 @@ export default function App() {
     if (m.type === 'dataset_saved') { sendTo(m.model, { type: 'datasets' }); return }
     if (m.type === 'loading_dataset') { setHfLoading(m.repo); return }
     if (m.type === 'stats') { setKernelStats({ rss_mb: m.rss_mb }); return }
+    if (m.type === 'gpus') { setGpus({ count: m.count, devices: m.devices ?? [] }); return }
     if (m.type === 'config') { setConfig(m.config ?? {}); return }
     if (m.type === 'installed_models') { setInstalled(m.items ?? []); return }
     if (m.type === 'cached_deleted') { sendTo(focused(), { type: 'installed_models' }); return }
@@ -633,7 +638,7 @@ export default function App() {
     if (s.readyState === WebSocket.OPEN) s.send(JSON.stringify(m))
     else s.addEventListener('open', () => s.send(JSON.stringify(m)), { once: true })
   }
-  useEffect(() => { sendTo(DEFAULT.id, { type: 'catalog' }) }, [])
+  useEffect(() => { sendTo(DEFAULT.id, { type: 'catalog' }); sendTo(DEFAULT.id, { type: 'gpus' }) }, [])
   // P7: subscribe once to SSH tunnel progress from the Rust side (no-op outside Tauri).
   useEffect(() => {
     let unlisten: (() => void) | undefined
@@ -648,7 +653,7 @@ export default function App() {
   }, [])
   useEffect(() => {
     if (!kernelUp) return
-    const iv = setInterval(() => sendTo(focused(), { type: 'stats' }), 15000)
+    const iv = setInterval(() => { sendTo(focused(), { type: 'stats' }); sendTo(focused(), { type: 'gpus' }) }, 15000)
     return () => clearInterval(iv)
   }, [kernelUp])
   // splash → main: hand off when the kernel first comes up, or after 8s regardless (Tauri only; no-op in browser)
@@ -763,10 +768,11 @@ export default function App() {
       sockets.current[mid]?.send(JSON.stringify({ type: 'stop', model: mid }))
     }
   }
-  function openModel(id: string, label: string) {
+  function openModel(id: string, label: string, device?: string) {
     if (open.some((m) => m.id === id)) return
     const wasEmpty = open.length === 0
-    setOpen((o) => [...o, { id, label }]); patch(id, () => ({ ...empty(), loading: true })); sendTo(id, { type: 'open' })
+    setOpen((o) => [...o, { id, label }]); patch(id, () => ({ ...empty(), loading: true }))
+    sendTo(id, { type: 'open', ...(device ? { device } : {}) })
     if (wasEmpty) setCols((cs) => cs.map((c) => ({ ...c, tiles: c.tiles.map((t) => ({ ...t, model: id })) })))  // adopt the first model
   }
   function closeModel(id: string) {
@@ -1366,10 +1372,12 @@ export default function App() {
             const dl = data[m.id]?.download
             const elapsed = loading && loadStart.current[m.id] ? Math.floor((Date.now() - loadStart.current[m.id]) / 1000) : 0
             const gb = (mb: number) => (mb / 1024).toFixed(1)
+            const gpuIdx = gpus?.devices.find((d) => d.models.includes(m.id))?.index  // P16: which GPU this model landed on
             return (
               <span key={m.id} title={loading ? `downloading/loading… ${elapsed}s` : undefined} style={{ position: 'relative', overflow: 'hidden', fontSize: 11, padding: '2px 8px', borderRadius: 4, background: 'var(--bg-2)', border: '1px solid var(--line)' }}>
                 {loading ? <span style={{ color: 'var(--accent)' }}>⟳ </span> : data[m.id]?.busy ? <span style={{ color: 'var(--live)' }}>● </span> : ''}
                 <span className="mono">{m.label}</span>
+                {gpuIdx != null && <span className="mono" style={{ ...hint, marginLeft: 4 }}>GPU{gpuIdx}</span>}
                 {dl ? <span className="mono" style={hint}> {Math.round(dl.pct)}% · {gb(dl.done_mb)}/{gb(dl.total_mb)}GB</span> : loading && <span className="mono" style={hint}> {elapsed}s</span>}
                 <span onClick={() => closeModel(m.id)} title="unload model" style={{ marginLeft: 6, cursor: 'pointer', color: 'var(--text-2)' }}>×</span>
                 {loading && (dl
@@ -1381,8 +1389,8 @@ export default function App() {
           <select value="" onChange={(e) => {
             if (e.target.value === '__hf') { setAsking('hf'); setAskValue(''); return }  // inline input below
             const c = catalog.find((x) => x.id === e.target.value)
-            if (c) openModel(c.id, c.label)
-          }} style={{ fontSize: 11, background: 'var(--bg-2)', color: 'var(--text-1)', border: '1px solid var(--line-strong)', borderRadius: 4, padding: '2px 4px' }}>
+            if (c) openModel(c.id, c.label, openDevice || undefined)
+          }} onFocus={() => sendTo(focused(), { type: 'gpus' })} style={{ fontSize: 11, background: 'var(--bg-2)', color: 'var(--text-1)', border: '1px solid var(--line-strong)', borderRadius: 4, padding: '2px 4px' }}>
             <option value="">+ model</option>
             {closed.map((c) => {
               const gb = c.size_mb != null ? (c.size_mb / 1024).toFixed(1) : null
@@ -1391,10 +1399,17 @@ export default function App() {
             })}
             <option value="__hf">custom (HF id)…</option>
           </select>
+          {gpus && gpus.count > 1 && (
+            <select value={openDevice} onChange={(e) => setOpenDevice(e.target.value)} title="GPU to load the next model onto"
+              style={{ fontSize: 11, background: 'var(--bg-2)', color: 'var(--text-1)', border: '1px solid var(--line-strong)', borderRadius: 4, padding: '2px 4px' }}>
+              <option value="">Auto</option>
+              {gpus.devices.map((d) => <option key={d.index} value={`cuda:${d.index}`}>GPU {d.index}</option>)}
+            </select>
+          )}
           {asking === 'hf' && (
             <input autoFocus value={askValue} onChange={(e) => setAskValue(e.target.value)} placeholder="org/model-id (Llama/Qwen-style) · Enter"
               onKeyDown={(e) => {
-                if (e.key === 'Enter' && askValue.trim()) { const id = askValue.trim(); openModel(id, id.split('/').pop() ?? id); setAsking(null) }
+                if (e.key === 'Enter' && askValue.trim()) { const id = askValue.trim(); openModel(id, id.split('/').pop() ?? id, openDevice || undefined); setAsking(null) }
                 if (e.key === 'Escape') setAsking(null)
               }} onBlur={() => setAsking(null)}
               style={{ fontSize: 11, width: 240, background: 'var(--bg-2)', color: 'var(--text-0)', border: '1px solid var(--accent)', borderRadius: 4, padding: '2px 6px', outline: 'none' }} />
@@ -1712,7 +1727,10 @@ export default function App() {
           ? <span style={{ color: 'var(--danger)' }}>● kernel offline · reconnecting…</span>
           : kernelUp === null
             ? <span style={hint}>○ connecting to kernel :8000…</span>
-            : <>kernel {isRemoteConnected() ? `${sshHost || 'remote'} (ssh)` : (() => { try { return new URL(WS_URL.replace(/^ws/, 'http')).host } catch { return WS_URL } })()} · mps · bf16 · {open.length} model{open.length > 1 ? 's' : ''}{kernelStats && ` · rss ${(kernelStats.rss_mb / 1024).toFixed(1)}G`}</>}</span>
+            : <>kernel {isRemoteConnected() ? `${sshHost || 'remote'} (ssh)` : (() => { try { return new URL(WS_URL.replace(/^ws/, 'http')).host } catch { return WS_URL } })()} · mps · bf16 · {open.length} model{open.length > 1 ? 's' : ''}{kernelStats && ` · rss ${(kernelStats.rss_mb / 1024).toFixed(1)}G`}
+              {gpus && gpus.count > 0 && (
+                <span className="mono"> · {gpus.count}× {gpus.devices[0]?.name || 'GPU'}{gpus.count > 1 && ' · ' + gpus.devices.map((d) => `GPU${d.index} ${Math.round(d.mem_used_mb / 1024)}/${Math.round(d.mem_total_mb / 1024)}G`).join(' · ')}</span>
+              )}</>}</span>
         <span style={{ display: 'flex', gap: 10 }}>
           {!inTauri() && <button onClick={() => setSettingsOpen(true)} style={{ ...iconBtn, padding: 0 }}>Settings</button>}
           <span>{sync ? 'sync: broadcast' : 'sync: focused'} · {tileCount()} pane{tileCount() > 1 ? 's' : ''}</span>

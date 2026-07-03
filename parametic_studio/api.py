@@ -20,9 +20,9 @@ TRAINING: set = set()  # model ids mid-training — other ops on them get error:
 _BUSY_OPS = ("generate", "spot", "intervene", "clear", "suspend", "resume", "ppl", "drilldown", "train", "reset_train", "save_region", "eval_code")
 
 
-async def _ensure(model_id, on_progress=None):
+async def _ensure(model_id, on_progress=None, device=None):
     if model_id in SESSIONS:
-        return SESSIONS[model_id]  # already resident → no download, no progress
+        return SESSIONS[model_id]  # already resident → no download, no progress (device ignored — loaded)
     lock = _locks.setdefault(model_id, asyncio.Lock())
     async with lock:
         if model_id not in SESSIONS:
@@ -30,7 +30,9 @@ async def _ensure(model_id, on_progress=None):
             # pre-download with progress (cache-hit fast path if already local), then load from cache.
             await _download_model(model_id, on_progress)
             # off the event loop: a blocking from_pretrained here would freeze all other models.
-            SESSIONS[model_id] = await asyncio.to_thread(ModelSession.from_pretrained, model_id)
+            # device "auto"/None → freest CUDA card, so a 2nd model lands on the idle GPU.
+            SESSIONS[model_id] = await asyncio.to_thread(
+                ModelSession.from_pretrained, model_id, device or "auto")
     return SESSIONS[model_id]
 
 
@@ -147,6 +149,25 @@ def _catalog_models():
         if mid not in known:
             models.append({"id": mid, "label": mid.split("/")[-1], "installed": True, "size_mb": size})
     return models
+
+
+def _gpu_report():
+    """Per-CUDA-card usage + which loaded models sit on each (for device selection in the UI).
+    cuda absent (mps/cpu) → count 0, no devices; the web branches on count."""
+    import torch
+    if not torch.cuda.is_available():
+        return {"type": "gpus", "count": 0, "devices": []}
+    devices = []
+    for i in range(torch.cuda.device_count()):
+        free, total = torch.cuda.mem_get_info(i)
+        devices.append({
+            "index": i,
+            "name": torch.cuda.get_device_name(i),
+            "mem_used_mb": round((total - free) / 1024 / 1024),
+            "mem_total_mb": round(total / 1024 / 1024),
+            "models": [mid for mid, s in SESSIONS.items() if str(s.device) == f"cuda:{i}"],
+        })
+    return {"type": "gpus", "count": len(devices), "devices": devices}
 
 
 async def _target(msg):
@@ -542,7 +563,7 @@ async def _dispatch(websocket, msg, t):
                                            "done_mb": done_mb, "total_mb": total_mb, "pct": pct})
 
             try:
-                await _ensure(model, on_progress)  # non-blocking (thread); other models keep streaming
+                await _ensure(model, on_progress, msg.get("device"))  # device? → that card; else freest
             except Exception as e:
                 await websocket.send_json({"type": "load_failed", "model": model})
                 await websocket.send_json({"type": "error", "model": model, "op": "open", "reason": str(e)})
@@ -731,6 +752,8 @@ async def _dispatch(websocket, msg, t):
             cached = len(getattr(session, "regions", {})) if session is not None else 0
             await websocket.send_json({"type": "stats", "model": msg.get("model"),
                                        "rss_mb": rss, "models": len(SESSIONS), "regions_cached": cached})
+        elif t == "gpus":
+            await websocket.send_json(await asyncio.to_thread(_gpu_report))
         elif t == "clear":
             await asyncio.to_thread((await _target(msg)).clear, msg.get("key"))  # key → one knob; None → all. off the loop
             await websocket.send_json({"type": "cleared", "model": msg.get("model"), "key": msg.get("key")})

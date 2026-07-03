@@ -6,7 +6,7 @@ from pathlib import Path
 
 import torch
 
-from parametic_studio.device import dtype_for, resolve_device
+from parametic_studio.device import dtype_for, pick_device
 
 _LAYER_RE = re.compile(r"^model\.layers\.(\d+)\.(?!.*lora_)(.+)$")  # lora_* params never enter spot/probe grids
 
@@ -22,7 +22,7 @@ class ModelSession:
     def from_pretrained(cls, model_id, device="auto"):
         from transformers import AutoModelForCausalLM, AutoTokenizer
 
-        dev = resolve_device(device)
+        dev = pick_device(device)  # "cuda:1" honored; "auto" lands on the freest card
         tok = AutoTokenizer.from_pretrained(model_id)
         model = AutoModelForCausalLM.from_pretrained(
             model_id, torch_dtype=dtype_for(dev), attn_implementation="eager"
