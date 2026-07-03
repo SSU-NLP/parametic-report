@@ -32,7 +32,11 @@ const DEFAULT_WS = 'ws://localhost:8000/ws'
 const SSH_TUNNEL_WS = 'ws://localhost:8422/ws'  // P7: local end of the Rust-owned SSH tunnel to a remote kernel
 const WS_URL = localStorage.getItem('ps_kernel_url') || DEFAULT_WS
 const WS_TOKEN = localStorage.getItem('ps_kernel_token') || ''
-const isRemoteConnected = () => WS_URL === SSH_TUNNEL_WS
+const isRemoteConnected = () => WS_URL === SSH_TUNNEL_WS  // URL points at the tunnel (was in remote mode)
+// The SSH tunnel is Rust-owned and dies with the process, so it survives a webview reload but NOT an
+// app restart. sessionStorage has the same lifetime (kept on reload, cleared on a fresh app launch),
+// so it tells the two apart: tunnel is actually live only if the flag is still here.
+const isTunnelLive = () => isRemoteConnected() && sessionStorage.getItem('ps_tunnel_live') === '1'
 const DEFAULT = { id: 'Qwen/Qwen2.5-1.5B-Instruct', label: 'Qwen2.5-1.5B' }
 const VIEWS = ['output', 'attention', 'activations', 'logitlens', 'spot', 'train', 'eval', 'log'] as const
 type View = typeof VIEWS[number]
@@ -415,17 +419,28 @@ export default function App() {
   // P7 remote (SSH) kernel: Local|Remote mode toggle + connect form. Boots into 'remote' if already
   // tunneled (ps_kernel_url points at the SSH tunnel port) so reload keeps showing Disconnect.
   const [kernelMode, setKernelMode] = useState<'local' | 'remote'>(isRemoteConnected() ? 'remote' : 'local')
-  const [sshHost, setSshHost] = useState('')
-  const [sshPort, setSshPort] = useState('22')
-  const [sshUser, setSshUser] = useState('')
-  const [sshAuth, setSshAuth] = useState<'password' | 'key'>('password')
+  // non-secret SSH connection fields persist to localStorage so a restart can reconnect without
+  // re-entering everything; password/passphrase are state-only and never persisted (see below).
+  const ls = (k: string, d = '') => localStorage.getItem(k) || d
+  const [sshHost, setSshHost] = useState(() => ls('ps_ssh_host'))
+  const [sshPort, setSshPort] = useState(() => ls('ps_ssh_port', '22'))
+  const [sshUser, setSshUser] = useState(() => ls('ps_ssh_user'))
+  const [sshAuth, setSshAuth] = useState<'password' | 'key'>(() => (ls('ps_ssh_auth') === 'key' ? 'key' : 'password'))
   const [sshPassword, setSshPassword] = useState('')  // state only — never persisted
-  const [sshKeyPath, setSshKeyPath] = useState('')  // e.g. ~/.ssh/gpu.pem — not sensitive, ok to persist
+  const [sshKeyPath, setSshKeyPath] = useState(() => ls('ps_ssh_key_path'))  // e.g. ~/.ssh/gpu.pem — not sensitive
   const [sshKeyPassphrase, setSshKeyPassphrase] = useState('')  // state only — never persisted
-  const [sshRepoDir, setSshRepoDir] = useState('')
-  const [sshModel, setSshModel] = useState('')
-  const [sshPythonPath, setSshPythonPath] = useState('')  // e.g. /opt/conda/bin/python — GPU boxes keep torch in a non-default python
-  const [sshHfHome, setSshHfHome] = useState(() => localStorage.getItem('ps_ssh_hf_home') || '')  // remote HF cache dir — point at a roomy volume (e.g. /shared/...) so big models don't fill the home disk
+  const [sshRepoDir, setSshRepoDir] = useState(() => ls('ps_ssh_repo_dir'))
+  const [sshModel, setSshModel] = useState(() => ls('ps_ssh_model'))
+  const [sshPythonPath, setSshPythonPath] = useState(() => ls('ps_ssh_python_path'))  // e.g. /opt/conda/bin/python — GPU boxes keep torch in a non-default python
+  const [sshHfHome, setSshHfHome] = useState(() => ls('ps_ssh_hf_home'))  // remote HF cache dir — point at a roomy volume (e.g. /shared/...) so big models don't fill the home disk
+  useEffect(() => {
+    const kv: Record<string, string> = {
+      ps_ssh_host: sshHost, ps_ssh_port: sshPort, ps_ssh_user: sshUser, ps_ssh_auth: sshAuth,
+      ps_ssh_key_path: sshKeyPath, ps_ssh_repo_dir: sshRepoDir, ps_ssh_model: sshModel,
+      ps_ssh_python_path: sshPythonPath, ps_ssh_hf_home: sshHfHome,
+    }
+    for (const [k, v] of Object.entries(kv)) localStorage.setItem(k, v)
+  }, [sshHost, sshPort, sshUser, sshAuth, sshKeyPath, sshRepoDir, sshModel, sshPythonPath, sshHfHome])
   const [sshConnecting, setSshConnecting] = useState(false)
   const [sshStatus, setSshStatus] = useState<{ state: string; detail?: string } | null>(null)
   const [installed, setInstalled] = useState<{ id: string; size_mb: number | null }[] | null>(null)
@@ -745,8 +760,8 @@ export default function App() {
         repoDir: sshRepoDir.trim(), pythonPath: sshPythonPath.trim(), model: sshModel.trim(),
         hfHome: sshHfHome.trim(),
       })
-      sshHfHome.trim() ? localStorage.setItem('ps_ssh_hf_home', sshHfHome.trim()) : localStorage.removeItem('ps_ssh_hf_home')
-      localStorage.setItem('ps_kernel_url', SSH_TUNNEL_WS)
+      localStorage.setItem('ps_kernel_url', SSH_TUNNEL_WS)  // ssh_* fields persist via the effect above
+      sessionStorage.setItem('ps_tunnel_live', '1')  // tunnel now up; cleared on app restart (see isTunnelLive)
       window.location.reload()
     } catch (err) {
       setSshConnecting(false)
@@ -757,6 +772,7 @@ export default function App() {
     try { await tauriInvokeResult('ssh_disconnect') } catch (err) { toast(`[ssh] ${err instanceof Error ? err.message : String(err)}`) }
     localStorage.removeItem('ps_kernel_url')
     localStorage.removeItem('ps_kernel_token')
+    sessionStorage.removeItem('ps_tunnel_live')
     window.location.reload()
   }
   function send() {
@@ -1795,23 +1811,23 @@ export default function App() {
                 <div style={{ display: 'grid', gap: 6, marginBottom: 4 }}>
                   <label style={{ display: 'grid', gap: 2 }}>
                     <span style={{ ...hint, fontSize: 11 }}>host</span>
-                    <input value={sshHost} onChange={(e) => setSshHost(e.target.value)} placeholder="gpu.lab.edu or 1.2.3.4" spellCheck={false} disabled={isRemoteConnected()} style={inp} />
+                    <input value={sshHost} onChange={(e) => setSshHost(e.target.value)} placeholder="gpu.lab.edu or 1.2.3.4" spellCheck={false} disabled={isTunnelLive()} style={inp} />
                   </label>
                   <label style={{ display: 'grid', gap: 2 }}>
                     <span style={{ ...hint, fontSize: 11 }}>port</span>
-                    <input value={sshPort} onChange={(e) => setSshPort(e.target.value)} placeholder="22" spellCheck={false} disabled={isRemoteConnected()} style={inp} />
+                    <input value={sshPort} onChange={(e) => setSshPort(e.target.value)} placeholder="22" spellCheck={false} disabled={isTunnelLive()} style={inp} />
                   </label>
                   <label style={{ display: 'grid', gap: 2 }}>
                     <span style={{ ...hint, fontSize: 11 }}>username</span>
-                    <input value={sshUser} onChange={(e) => setSshUser(e.target.value)} spellCheck={false} disabled={isRemoteConnected()} style={inp} />
+                    <input value={sshUser} onChange={(e) => setSshUser(e.target.value)} spellCheck={false} disabled={isTunnelLive()} style={inp} />
                   </label>
                   <div style={{ display: 'flex', gap: 6, margin: '2px 0' }}>
                     {(['password', 'key'] as const).map((auth) => (
-                      <button key={auth} onClick={() => setSshAuth(auth)} disabled={isRemoteConnected()}
-                        style={{ flex: 1, padding: '4px 8px', fontSize: 11, borderRadius: 4, cursor: isRemoteConnected() ? 'default' : 'pointer',
+                      <button key={auth} onClick={() => setSshAuth(auth)} disabled={isTunnelLive()}
+                        style={{ flex: 1, padding: '4px 8px', fontSize: 11, borderRadius: 4, cursor: isTunnelLive() ? 'default' : 'pointer',
                           border: `1px solid ${sshAuth === auth ? 'var(--accent)' : 'var(--line-strong)'}`,
                           color: sshAuth === auth ? 'var(--accent)' : 'var(--text-1)',
-                          background: 'var(--bg-2)', opacity: isRemoteConnected() ? 0.5 : 1 }}>
+                          background: 'var(--bg-2)', opacity: isTunnelLive() ? 0.5 : 1 }}>
                         {auth === 'password' ? 'Password' : 'Key (.pem)'}
                       </button>
                     ))}
@@ -1819,44 +1835,44 @@ export default function App() {
                   {sshAuth === 'password' ? (
                     <label style={{ display: 'grid', gap: 2 }}>
                       <span style={{ ...hint, fontSize: 11 }}>password</span>
-                      <input type="password" value={sshPassword} onChange={(e) => setSshPassword(e.target.value)} spellCheck={false} disabled={isRemoteConnected()} style={inp} />
+                      <input type="password" value={sshPassword} onChange={(e) => setSshPassword(e.target.value)} spellCheck={false} disabled={isTunnelLive()} style={inp} />
                     </label>
                   ) : (
                     <>
                       <label style={{ display: 'grid', gap: 2 }}>
                         <span style={{ ...hint, fontSize: 11 }}>key path</span>
                         <div style={{ display: 'flex', gap: 6 }}>
-                          <input value={sshKeyPath} onChange={(e) => setSshKeyPath(e.target.value)} placeholder="~/.ssh/gpu.pem" spellCheck={false} disabled={isRemoteConnected()} style={{ ...inp, flex: 1 }} />
-                          <Btn onClick={browseSshKeyPath} disabled={isRemoteConnected() || !inTauri()}
+                          <input value={sshKeyPath} onChange={(e) => setSshKeyPath(e.target.value)} placeholder="~/.ssh/gpu.pem" spellCheck={false} disabled={isTunnelLive()} style={{ ...inp, flex: 1 }} />
+                          <Btn onClick={browseSshKeyPath} disabled={isTunnelLive() || !inTauri()}
                             title={inTauri() ? undefined : 'file picker is only available in the desktop app'}
                             style={{ flexShrink: 0 }}>Browse…</Btn>
                         </div>
                       </label>
                       <label style={{ display: 'grid', gap: 2 }}>
                         <span style={{ ...hint, fontSize: 11 }}>key passphrase (optional)</span>
-                        <input type="password" value={sshKeyPassphrase} onChange={(e) => setSshKeyPassphrase(e.target.value)} placeholder="passphrase (encrypted keys only)" spellCheck={false} disabled={isRemoteConnected()} style={inp} />
+                        <input type="password" value={sshKeyPassphrase} onChange={(e) => setSshKeyPassphrase(e.target.value)} placeholder="passphrase (encrypted keys only)" spellCheck={false} disabled={isTunnelLive()} style={inp} />
                       </label>
                     </>
                   )}
                   <label style={{ display: 'grid', gap: 2 }}>
                     <span style={{ ...hint, fontSize: 11 }}>remote repo dir</span>
-                    <input value={sshRepoDir} onChange={(e) => setSshRepoDir(e.target.value)} placeholder="~/parametic-report" spellCheck={false} disabled={isRemoteConnected()} style={inp} />
+                    <input value={sshRepoDir} onChange={(e) => setSshRepoDir(e.target.value)} placeholder="~/parametic-report" spellCheck={false} disabled={isTunnelLive()} style={inp} />
                   </label>
                   <label style={{ display: 'grid', gap: 2 }}>
                     <span style={{ ...hint, fontSize: 11 }}>python path (optional)</span>
-                    <input value={sshPythonPath} onChange={(e) => setSshPythonPath(e.target.value)} placeholder="/opt/conda/bin/python (where torch lives)" spellCheck={false} disabled={isRemoteConnected()} style={inp} />
+                    <input value={sshPythonPath} onChange={(e) => setSshPythonPath(e.target.value)} placeholder="/opt/conda/bin/python (where torch lives)" spellCheck={false} disabled={isTunnelLive()} style={inp} />
                   </label>
                   <label style={{ display: 'grid', gap: 2 }}>
                     <span style={{ ...hint, fontSize: 11 }}>HF cache dir (optional)</span>
-                    <input value={sshHfHome} onChange={(e) => setSshHfHome(e.target.value)} placeholder="/shared/you/hf_cache — roomy volume for big models" spellCheck={false} disabled={isRemoteConnected()} style={inp} />
+                    <input value={sshHfHome} onChange={(e) => setSshHfHome(e.target.value)} placeholder="/shared/you/hf_cache — roomy volume for big models" spellCheck={false} disabled={isTunnelLive()} style={inp} />
                   </label>
                   <label style={{ display: 'grid', gap: 2 }}>
                     <span style={{ ...hint, fontSize: 11 }}>model (optional)</span>
-                    <input value={sshModel} onChange={(e) => setSshModel(e.target.value)} placeholder="Qwen/Qwen2.5-1.5B-Instruct" spellCheck={false} disabled={isRemoteConnected()} style={inp} />
+                    <input value={sshModel} onChange={(e) => setSshModel(e.target.value)} placeholder="Qwen/Qwen2.5-1.5B-Instruct" spellCheck={false} disabled={isTunnelLive()} style={inp} />
                   </label>
                 </div>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8, margin: '6px 0 4px' }}>
-                  {isRemoteConnected() ? (
+                  {isTunnelLive() ? (
                     <Btn onClick={sshDisconnect} color="var(--danger)">Disconnect</Btn>
                   ) : (
                     <Btn onClick={sshConnect} disabled={sshConnecting} color="var(--accent)">{sshConnecting ? 'Connecting…' : 'Connect'}</Btn>
