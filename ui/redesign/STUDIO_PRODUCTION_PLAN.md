@@ -177,7 +177,8 @@
 | **P3 UX 패스 ✅ (2026-07-03 완료, opus/sonnet 위임)** | 에러 토스트(error{model,op,reason} 통일+연결 생존)+locate_progress 스트림, pending 레지스트리(⟳/disabled), load 실패 토스트, Btn 공통화(25곳)·Esc stop·클램프·로그 자동 스크롤. 109 tests, 토스트 라이브 e2e | 중 | P1(상태바) |
 | **P4 원격 커널 ✅ (2026-07-03 완료, opus/sonnet 위임)** | kernel URL/token 설정(전환=reload), `PARAMETIC_STUDIO_TOKEN` auth 게이트(첫 프레임/4401), studio-remote.sh(ssh)+workspace.sh(EXPERIMENTAL)+REMOTE_KERNEL.md. 113 tests, 토큰 커널 라이브 e2e. 미검증: VESSL 라이브·bf16 cuda·다중 커널(후속) | 중~대 | P1(재연결이 원격에서 필수), P3(에러 표면) |
 | **P5 UI 개선 ✅ (2026-07-03 완료, opus×2/sonnet 순차 위임)** | IDE 스타일 전환: 산세리프 UI+모노 데이터 전용, 브래킷 34곳 제거, 트리 IDE화(SVG 아이콘·인덴트 가이드·선택), 우클릭 ContextMenu+Del/Cmd+S, CodeMirror 6 에디터(gzip +174KB). 113 tests, build 통과 | 중 | P3(Btn/토스트 기반) |
-| (후속) | 완전 번들 배포판(python+torch 포함 DMG, 코드사이닝), frames binary, 다중 커널, CodeMirror 코드 스플리팅 | 대 | P1~P5 |
+| **P6 패키징 ✅ (2026-07-03 완료)** | Windows 호환(lib.rs env/콘솔/python 후보, 부모감시 posix 전용), CI(tauri-action mac+win), PACKAGING.md. 로컬 mac dmg 3.2MB 빌드·attach 검증. Windows 실기기 미검증 | 중 | P1' |
+| (후속) | 완전 번들 배포판(python+torch 포함, 코드사이닝/notarize), Windows 고아 커널 가드, frames binary, 다중 커널, CodeMirror 코드 스플리팅 | 대 | P1~P6 |
 
 각 라운드 완료 기준: 기존 원칙 유지 — pytest green + tsc 0 + 라이브 검증 + HANDOFF 갱신.
 

@@ -622,7 +622,8 @@ def serve(model_id, host="127.0.0.1", port=8000):
 
     from parametic_studio.kernel.model_session import ModelSession
 
-    if os.environ.get("PARAMETIC_STUDIO_PARENT_WATCH") == "1":
+    # windows: ppid는 부모 사망 후에도 불변 — 고아 감시는 posix 전용, RunEvent::Exit kill이 주 방어선
+    if os.environ.get("PARAMETIC_STUDIO_PARENT_WATCH") == "1" and os.name == "posix":
         _watch_parent()
 
     global SESSION, DEFAULT_MODEL

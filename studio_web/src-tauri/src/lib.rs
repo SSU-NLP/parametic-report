@@ -24,27 +24,43 @@ fn studio_home() -> PathBuf {
     std::env::var("PARAMETIC_STUDIO_HOME")
         .map(PathBuf::from)
         .unwrap_or_else(|_| {
-            PathBuf::from(std::env::var("HOME").unwrap_or_default()).join(".parametic_studio")
+            let home = std::env::var("HOME")
+                .or_else(|_| std::env::var("USERPROFILE")) // windows
+                .unwrap_or_default();
+            PathBuf::from(home).join(".parametic_studio")
         })
 }
 
 /// ~/.parametic_studio/config.json: {"python_path": "...", "kernel_dir": "...", "model": "..."}
 /// (system-python packaging: the kernel source lives in the repo checkout, python is the user's)
-fn load_config() -> (String, Option<PathBuf>, Option<String>) {
+/// python_path is optional — absent → try `python3`/`python` candidates at spawn time.
+fn load_config() -> (Option<String>, Option<PathBuf>, Option<String>) {
     let p = studio_home().join("config.json");
     if let Ok(mut f) = std::fs::File::open(&p) {
         let mut s = String::new();
         if f.read_to_string(&mut s).is_ok() {
             if let Ok(v) = serde_json::from_str::<serde_json::Value>(&s) {
                 return (
-                    v["python_path"].as_str().unwrap_or("python").to_string(),
+                    v["python_path"].as_str().map(String::from),
                     v["kernel_dir"].as_str().map(PathBuf::from),
                     v["model"].as_str().map(String::from),
                 );
             }
         }
     }
-    ("python".into(), None, None)
+    (None, None, None)
+}
+
+/// Configured python_path, else platform-ordered candidates (windows: `python` first).
+fn python_candidates(configured: Option<String>) -> Vec<String> {
+    if let Some(p) = configured {
+        return vec![p];
+    }
+    if cfg!(windows) {
+        vec!["python".into(), "python3".into()]
+    } else {
+        vec!["python3".into(), "python".into()]
+    }
 }
 
 fn spawn_kernel() -> Option<Child> {
@@ -52,30 +68,39 @@ fn spawn_kernel() -> Option<Child> {
         log::info!("kernel already on :8000 — attach mode, not spawning");
         return None;
     }
-    let (python, kernel_dir, model) = load_config();
+    let (python_path, kernel_dir, model) = load_config();
     // dev fallback: `tauri dev` runs with cwd = studio_web/src-tauri → repo root is two levels up
+    // (std Path .parent() is separator-agnostic → works on windows too)
     let dir = kernel_dir.or_else(|| {
         std::env::current_dir()
             .ok()
             .and_then(|d| d.parent().and_then(|p| p.parent()).map(|p| p.to_path_buf()))
     })?;
-    let mut cmd = Command::new(&python);
-    cmd.args(["-m", "parametic_studio.api"])
-        .current_dir(&dir)
-        .env("PARAMETIC_STUDIO_PARENT_WATCH", "1"); // kernel self-exits if the app dies uncleanly
-    if let Some(m) = model {
-        cmd.env("PARAMETIC_STUDIO_MODEL", m);
-    }
-    match cmd.spawn() {
-        Ok(child) => {
-            log::info!("kernel spawned (pid {}) via {} in {:?}", child.id(), python, dir);
-            Some(child)
+    let candidates = python_candidates(python_path);
+    for python in &candidates {
+        let mut cmd = Command::new(python);
+        cmd.args(["-m", "parametic_studio.api"])
+            .current_dir(&dir)
+            .env("PARAMETIC_STUDIO_PARENT_WATCH", "1"); // kernel self-exits if the app dies uncleanly
+        if let Some(m) = &model {
+            cmd.env("PARAMETIC_STUDIO_MODEL", m);
         }
-        Err(e) => {
-            log::error!("kernel spawn failed ({} in {:?}): {e}", python, dir);
-            None // frontend shows "kernel offline · reconnecting…" — fix config.json and relaunch
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW — no console popup
+        }
+        match cmd.spawn() {
+            Ok(child) => {
+                log::info!("kernel spawned (pid {}) via {} in {:?}", child.id(), python, dir);
+                return Some(child);
+            }
+            Err(e) => log::warn!("kernel spawn via {python} failed: {e}"),
         }
     }
+    // frontend shows "kernel offline · reconnecting…" — fix config.json (python_path) and relaunch
+    log::error!("kernel spawn failed for all candidates {candidates:?} in {dir:?}");
+    None
 }
 
 /// Splash → main handoff: the frontend calls this once the kernel is reachable
