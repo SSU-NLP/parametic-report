@@ -3,7 +3,33 @@ import math
 import torch
 from transformers import LlamaConfig, LlamaForCausalLM
 
-from parametic_studio.kernel.model_session import ModelSession
+from parametic_studio.kernel.model_session import ModelSession, _BYTE_DECODER
+
+
+def test_byte_decoder_reconstructs_gpt2_markers():
+    # some code tokenizers (deepseek-coder on transformers 5.x) leak the byte-level alphabet
+    # from .decode() instead of real text; _BYTE_DECODER inverts it. Ġ=space, Ċ=newline.
+    assert _BYTE_DECODER["Ġ"] == 32 and _BYTE_DECODER["Ċ"] == 10
+    garbled = "ĊĠĠĠĠifĠlen(arr)Ġ<Ġ2"
+    assert bytearray(_BYTE_DECODER[c] for c in garbled).decode("utf-8") == "\n    if len(arr) < 2"
+
+
+def test_decode_unwraps_bytelevel_leak():
+    class LeakTok:  # .decode returns the byte-level alphabet (the bug) instead of real text
+        eos_token_id = -1
+        def decode(self, ids):
+            return "".join({32: "Ġ", 10: "Ċ"}.get(i, chr(i)) for i in ids)
+    s = ModelSession(_tiny(), LeakTok(), torch.device("cpu"))
+    assert s._decode([ord("h"), ord("i"), 32, ord("y"), ord("o"), ord("u")]) == "hi you"
+
+
+def test_decode_passthrough_when_clean():
+    class CleanTok:
+        eos_token_id = -1
+        def decode(self, ids):
+            return "".join(chr(i) for i in ids)
+    s = ModelSession(_tiny(), CleanTok(), torch.device("cpu"))
+    assert s._decode([ord("h"), ord("i")]) == "hi"  # no markers → untouched
 
 CELL = "mlp.gate_proj.weight"  # a real per-layer param in tiny Llama
 

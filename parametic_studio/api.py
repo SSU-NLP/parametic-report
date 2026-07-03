@@ -20,7 +20,7 @@ TRAINING: set = set()  # model ids mid-training — other ops on them get error:
 _BUSY_OPS = ("generate", "spot", "intervene", "clear", "suspend", "resume", "ppl", "drilldown", "train", "reset_train", "save_region", "eval_code")
 
 
-async def _ensure(model_id, on_progress=None, device=None):
+async def _ensure(model_id, on_progress=None, device=None, on_stage=None):
     if model_id in SESSIONS:
         return SESSIONS[model_id]  # already resident → no download, no progress (device ignored — loaded)
     lock = _locks.setdefault(model_id, asyncio.Lock())
@@ -29,6 +29,8 @@ async def _ensure(model_id, on_progress=None, device=None):
             from parametic_studio.kernel.model_session import ModelSession
             # pre-download with progress (cache-hit fast path if already local), then load from cache.
             await _download_model(model_id, on_progress)
+            if on_stage:
+                await on_stage("loading_weights")  # download done → GPU load (minutes, no progress) → UI goes indeterminate
             # off the event loop: a blocking from_pretrained here would freeze all other models.
             # device "auto"/None → freest CUDA card, so a 2nd model lands on the idle GPU.
             SESSIONS[model_id] = await asyncio.to_thread(
@@ -562,8 +564,11 @@ async def _dispatch(websocket, msg, t):
                 await websocket.send_json({"type": "download_progress", "model": model,
                                            "done_mb": done_mb, "total_mb": total_mb, "pct": pct})
 
+            async def on_stage(stage):  # download done → weights loading onto GPU (no % available)
+                await websocket.send_json({"type": stage, "model": model})
+
             try:
-                await _ensure(model, on_progress, msg.get("device"))  # device? → that card; else freest
+                await _ensure(model, on_progress, msg.get("device"), on_stage)  # device? → that card; else freest
             except Exception as e:
                 await websocket.send_json({"type": "load_failed", "model": model})
                 await websocket.send_json({"type": "error", "model": model, "op": "open", "reason": str(e)})

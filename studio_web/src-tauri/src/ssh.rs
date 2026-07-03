@@ -44,7 +44,9 @@ impl SshState {
             conn.accept_loop.abort();
             let session = conn.session.clone();
             // best-effort graceful disconnect; the drop of `session` closes the socket regardless.
-            tokio::spawn(async move {
+            // tauri::async_runtime::spawn (not tokio::spawn) so this is safe from the main-thread
+            // RunEvent::Exit handler, which has no ambient Tokio runtime — tokio::spawn panics there.
+            tauri::async_runtime::spawn(async move {
                 let _ = session
                     .disconnect(Disconnect::ByApplication, "client disconnect", "")
                     .await;

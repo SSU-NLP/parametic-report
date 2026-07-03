@@ -542,6 +542,7 @@ export default function App() {
     if (m.type === 'opened') { delete loadStart.current[mid]; patch(mid, (d) => ({ ...d, loading: false, download: null })); sendTo(mid, { type: 'regions' }); return }
     if (m.type === 'loading') { loadStart.current[mid] ??= Date.now(); patch(mid, (d) => ({ ...d, loading: true })); return }
     if (m.type === 'download_progress') { patch(mid, (d) => ({ ...d, download: { pct: m.pct, done_mb: m.done_mb, total_mb: m.total_mb } })); return }
+    if (m.type === 'loading_weights') { patch(mid, (d) => ({ ...d, download: null })); return }  // download done, GPU load begins → drop to indeterminate
     if (m.type === 'load_failed') { delete loadStart.current[mid]; toast(`[open] ${openRef.current.find((o) => o.id === mid)?.label ?? mid} failed to load`); closeModel(mid); return }
     if (m.type === 'token') patch(mid, (d) => ({ ...d, output: d.output + m.text, count: d.count + 1 }))
     else if (m.type === 'attention') patch(mid, (d) => ({ ...d, frames: [...d.frames, m.data] }))
@@ -1378,7 +1379,7 @@ export default function App() {
                 {loading ? <span style={{ color: 'var(--accent)' }}>⟳ </span> : data[m.id]?.busy ? <span style={{ color: 'var(--live)' }}>● </span> : ''}
                 <span className="mono">{m.label}</span>
                 {gpuIdx != null && <span className="mono" style={{ ...hint, marginLeft: 4 }}>GPU{gpuIdx}</span>}
-                {dl ? <span className="mono" style={hint}> {Math.round(dl.pct)}% · {gb(dl.done_mb)}/{gb(dl.total_mb)}GB</span> : loading && <span className="mono" style={hint}> {elapsed}s</span>}
+                {dl ? <span className="mono" style={hint}> {Math.round(dl.pct)}% · {gb(dl.done_mb)}/{gb(dl.total_mb)}GB</span> : loading && <span className="mono" style={hint}> loading… {elapsed}s</span>}
                 <span onClick={() => closeModel(m.id)} title="unload model" style={{ marginLeft: 6, cursor: 'pointer', color: 'var(--text-2)' }}>×</span>
                 {loading && (dl
                   ? <span style={{ position: 'absolute', bottom: 0, left: 0, height: 2, width: `${Math.max(0, Math.min(100, dl.pct))}%`, background: 'var(--accent)' }} />

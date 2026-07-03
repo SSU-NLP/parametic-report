@@ -11,6 +11,24 @@ from parametic_studio.device import dtype_for, pick_device
 _LAYER_RE = re.compile(r"^model\.layers\.(\d+)\.(?!.*lora_)(.+)$")  # lora_* params never enter spot/probe grids
 
 
+def _gpt2_byte_decoder():
+    """GPT-2 byte-level unicode→byte map. Some tokenizers' .decode() leaks the byte-level alphabet
+    (Ġ=space, Ċ=newline, …) instead of reconstructing bytes; this inverts it. ponytail: standard
+    GPT-2 table, built once."""
+    bs = list(range(ord("!"), ord("~") + 1)) + list(range(ord("¡"), ord("¬") + 1)) + list(range(ord("®"), ord("ÿ") + 1))
+    cs = bs[:]
+    n = 0
+    for b in range(256):
+        if b not in bs:
+            bs.append(b)
+            cs.append(256 + n)
+            n += 1
+    return {chr(c): b for b, c in zip(bs, cs)}
+
+
+_BYTE_DECODER = _gpt2_byte_decoder()
+
+
 class ModelSession:
     """A live inference session: model resident, manual token-by-token decode.
 
@@ -517,6 +535,18 @@ class ModelSession:
     def drilldown(self, layer):
         return self.last_raw[layer]  # [heads, kv] of the last step
 
+    def _decode(self, ids):
+        """Decode token ids to text. Falls back to the GPT-2 byte decoder when the tokenizer's own
+        .decode() leaks the byte-level alphabet (Ġ/Ċ/… — seen on some code tokenizers like
+        deepseek-coder), so streamed output is real text, not raw BPE markers."""
+        text = self.tok.decode(ids)
+        if "Ġ" in text or "Ċ" in text or "ĉ" in text:
+            try:
+                return bytearray(_BYTE_DECODER[c] for c in text).decode("utf-8", "replace")
+            except KeyError:
+                return text  # not pure byte-level (mixed alphabet) → leave as-is
+        return text
+
     def generate_text(self, prompt, max_tokens, probes=("attention",), temperature=0.0):
         tmpl = getattr(self.tok, "apply_chat_template", None)
         if tmpl and getattr(self.tok, "chat_template", None):
@@ -540,6 +570,8 @@ class ModelSession:
         eos = self.tok.eos_token_id
         want_attn = "attention" in probes
         want_logit = "logitlens" in probes
+        gen_ids, prev_text = [], ""  # decode the running sequence, emit the delta — byte-level BPE
+        # (Ġ/Ċ markers) only reconstructs correctly across whole tokens, not one id at a time.
         for step in range(max_tokens):
             if self._stop:
                 return
@@ -553,7 +585,10 @@ class ModelSession:
                 nxt = int(logits.argmax())
             if nxt == eos:
                 return
-            event = {"step": step, "token_id": nxt, "text": self.tok.decode([nxt])}
+            gen_ids.append(nxt)
+            full = self._decode(gen_ids)
+            piece, prev_text = full[len(prev_text):], full
+            event = {"step": step, "token_id": nxt, "text": piece}
             if want_logit:
                 # decode each layer's residual through the final norm + lm_head → top-1 prediction.
                 norm, head = self.model.model.norm, self.model.lm_head
