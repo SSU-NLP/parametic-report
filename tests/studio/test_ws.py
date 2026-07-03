@@ -335,8 +335,8 @@ class _FakeDataset(list):
 def _fake_datasets_module(rows):
     import types
     mod = types.ModuleType("datasets")
-    # token kwarg is always passed by _fetch_hf_to_jsonl (gated repos) — accept and ignore it here.
-    mod.load_dataset = lambda repo, config=None, split=None, token=None: _FakeDataset(rows)
+    # _fetch_hf_to_jsonl streams first (streaming=True) and always passes token — accept both.
+    mod.load_dataset = lambda repo, config=None, split=None, streaming=False, token=None: _FakeDataset(rows)
     return mod
 
 
@@ -435,7 +435,7 @@ def test_ws_load_hf_dataset_passes_env_token(tmp_path, monkeypatch):
     seen = {}
     import types
     mod = types.ModuleType("datasets")
-    def _cap(repo, config=None, split=None, token=None):
+    def _cap(repo, config=None, split=None, streaming=False, token=None):
         seen["token"] = token
         return _FakeDataset([{"q": "a"}])
     mod.load_dataset = _cap

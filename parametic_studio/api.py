@@ -167,6 +167,7 @@ def _datasets_root():
 
 # HF datasets can be huge — cap rows written to the store so a stray id can't fill the disk.
 HF_DATASET_ROW_CAP = 5000
+HF_STREAM_SCAN_CAP = 500_000  # when filtering, stop scanning after this many rows even if unfilled
 
 
 def _list_datasets(root):
@@ -195,42 +196,64 @@ def _sanitize_name(s):
 
 
 def _fetch_hf_to_jsonl(repo, split, config, root, filter_column=None, filter_value=None):
-    """Download a HF dataset (blocking) → write one json line per row into the store. Returns (name, truncated).
-    gated repos need a token: env HF_TOKEN / HUGGING_FACE_HUB_TOKEN, else config hf_token. filter_column+value
-    keep only matching rows (before the cap) so a language subset can be pulled from a 1.6M-row dataset."""
+    """Download a HF dataset → write one json line per row into the store. Returns (name, truncated).
+    gated repos need a token: env HF_TOKEN / HUGGING_FACE_HUB_TOKEN, else config hf_token.
+    **Streaming**: rows are pulled shard-by-shard and filtered on the fly, stopping at the cap — so a
+    per-language subset of a 1.6M-row dataset (e.g. tiny-codes) only downloads what it needs, never the
+    whole thing. Datasets that can't stream fall back to a full load."""
     from datasets import load_dataset  # imported here so a missing dep only errors when this op runs
     token = (os.environ.get("HF_TOKEN") or os.environ.get("HUGGING_FACE_HUB_TOKEN")
-             or _read_config().get("hf_token"))
-    ds = load_dataset(repo, config or None, split=split or None, token=token or None)
-    if hasattr(ds, "keys") and not hasattr(ds, "features"):  # DatasetDict → pick a split
-        chosen = split or ("train" if "train" in ds else next(iter(ds)))
-        ds = ds[chosen]
-    else:
-        chosen = split
-    if filter_column and filter_value is not None:
-        ds = ds.filter(lambda r: str(r.get(filter_column, "")) == str(filter_value))
+             or _read_config().get("hf_token")) or None
+    filtering = bool(filter_column and filter_value is not None)
+
+    def matches(row):
+        return not filtering or str(row.get(filter_column, "")) == str(filter_value)
+
+    def pick_split(ds):  # DatasetDict / IterableDatasetDict → choose a split
+        if hasattr(ds, "keys") and not hasattr(ds, "features"):
+            key = split or ("train" if "train" in ds else next(iter(ds)))
+            return ds[key], key
+        return ds, split
+
+    rows, truncated, chosen = [], False, split
+    try:  # stream first — only downloads the shards needed to fill the cap
+        sds, chosen = pick_split(load_dataset(repo, config or None, split=split or "train",
+                                              streaming=True, token=token))
+        for scanned, row in enumerate(sds):
+            if matches(row):
+                rows.append(dict(row))
+                if len(rows) >= HF_DATASET_ROW_CAP:
+                    truncated = True
+                    break
+            if scanned + 1 >= HF_STREAM_SCAN_CAP:
+                break
+    except ValueError:
+        raise  # 0-row filter etc. — don't mask as a streaming failure
+    except Exception:  # dataset can't stream → full load, then filter/cap in memory
+        ds, chosen = pick_split(load_dataset(repo, config or None, split=split or None, token=token))
+        for row in ds:
+            if matches(row):
+                rows.append(dict(row))
+                if len(rows) >= HF_DATASET_ROW_CAP:
+                    truncated = True
+                    break
+
+    if filtering and not rows:
+        raise ValueError(f"filter {filter_column}={filter_value} matched 0 rows")
+
     parts = [_sanitize_name(repo.replace("/", "__"))]
     if config:
         parts.append(_sanitize_name(config))
     if chosen:
         parts.append(_sanitize_name(chosen))
-    if filter_column and filter_value is not None:
+    if filtering:
         parts.append(_sanitize_name(f"{filter_column}={filter_value}"))
     name = "__".join(parts) + ".jsonl"
     dst = root / name
     dst.parent.mkdir(parents=True, exist_ok=True)
-    truncated = False
-    wrote = 0
     with dst.open("w") as fh:
-        for i, row in enumerate(ds):
-            if i >= HF_DATASET_ROW_CAP:
-                truncated = True
-                break
-            fh.write(json.dumps(dict(row), ensure_ascii=False) + "\n")
-            wrote += 1
-    if filter_column and filter_value is not None and wrote == 0:
-        dst.unlink(missing_ok=True)
-        raise ValueError(f"filter {filter_column}={filter_value} matched 0 rows")
+        for row in rows:
+            fh.write(json.dumps(row, ensure_ascii=False) + "\n")
     return name, truncated
 
 
