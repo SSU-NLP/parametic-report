@@ -376,7 +376,7 @@ export default function App() {
     return pool.slice(0, n)
   }
   const [regionInfo, setRegionInfo] = useState<Record<string, { layers: number; modules: string[]; grid: number[][]; importance: number[][] | null; count: number; base_topk?: number }>>({})
-  const [compareSel, setCompareSel] = useState<string[]>([])  // region names in the compare tab (order = hue)
+  const [compareSel, setCompareSel] = useState<string[]>([])  // selected region names (a toggle set; hue is fixed per region, see regHue)
   const [compareHover, setCompareHover] = useState<string | null>(null)  // shared "L.module" cell — cross-highlights every compare grid
   const [interMetric, setInterMetric] = useState<'shared' | 'lift' | 'fraction'>('shared')  // intersection grid coloring
   const [compareData, setCompareData] = useState<{ names: string[]; layers: number; modules: string[]; grids: Record<string, number[][]>; kinds: Record<string, string>; intersection: number[][]; intersectionLift: number[][] | null; jaccard: Record<string, number> } | null>(null)
@@ -969,23 +969,25 @@ export default function App() {
     if (view === 'compare') {  // cross-dataset spot comparison (saved regions, one hue each)
       const regs = data[focused()]?.regions ?? []
       const cd = compareData
+      // colour by the region's fixed slot in the saved list, not its position in the selection —
+      // so toggling one region off doesn't recolour the others (order-independent, a real toggle).
+      const regHue = (name: string) => hueAt(Math.max(0, regs.findIndex((r) => r.name === name)))
       return (<>
         <div style={{ color: 'var(--text-1)', marginBottom: 4 }}>region compare<span style={hint}> · pick 2+ saved regions (e.g. per-language spots)</span></div>
         <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', marginBottom: 10 }}>
           {regs.map((r) => {
-            const idx = compareSel.indexOf(r.name)
-            const on = idx >= 0
-            return <span key={r.name} onClick={() => toggleCompare(r.name)} style={{ fontSize: 11, padding: '1px 8px', borderRadius: 4, cursor: 'pointer', border: `1px solid ${on ? hueCss(hueAt(idx)) : 'var(--line-strong)'}`, color: on ? hueCss(hueAt(idx)) : 'var(--text-2)' }}>{on ? '● ' : ''}◈ {r.name}</span>
+            const on = compareSel.includes(r.name)
+            return <span key={r.name} onClick={() => toggleCompare(r.name)} style={{ fontSize: 11, padding: '1px 8px', borderRadius: 4, cursor: 'pointer', border: `1px solid ${on ? hueCss(regHue(r.name)) : 'var(--line-strong)'}`, color: on ? hueCss(regHue(r.name)) : 'var(--text-2)' }}>{on ? '● ' : ''}◈ {r.name}</span>
           })}
           {regs.length < 2 && <span style={{ ...hint, fontSize: 11 }}>save regions in the spot view first (one per dataset)</span>}
         </div>
         {compareSel.length >= 2 && !cd && <span style={hint}>comparing…</span>}
         {cd && (<>
           <div style={{ display: 'grid', gridTemplateColumns: `repeat(${Math.min(cd.names.length, 2)}, 1fr)`, gap: 12, marginBottom: 10 }}>
-            {cd.names.map((n, i) => (
+            {cd.names.map((n) => (
               <div key={n}>
-                <div style={{ fontSize: 11, color: hueCss(hueAt(i)), marginBottom: 3 }}>◈ {n}<span style={hint}> · {cd.kinds[n] === 'importance' ? '|g×w| importance' : 'selection fraction — legacy region, re-save to get the importance map'}</span></div>
-                <SpotGrid grid={cd.grids[n]} modules={cd.modules} color={hueRamp(hueAt(i))} onHover={setCompareHover} hovered={compareHover} />
+                <div style={{ fontSize: 11, color: hueCss(regHue(n)), marginBottom: 3 }}>◈ {n}<span style={hint}> · {cd.kinds[n] === 'importance' ? '|g×w| importance' : 'selection fraction — legacy region, re-save to get the importance map'}</span></div>
+                <SpotGrid grid={cd.grids[n]} modules={cd.modules} color={hueRamp(regHue(n))} onHover={setCompareHover} hovered={compareHover} />
               </div>
             ))}
           </div>
@@ -1029,7 +1031,7 @@ export default function App() {
             <span style={hint}>pairwise Jaccard (|A∩B| / |A∪B|):</span>
             {Object.entries(cd.jaccard).map(([k, v]) => {
               const [a, b] = k.split('|')
-              return <div key={k} style={{ color: 'var(--text-1)' }}><span style={{ color: hueCss(hueAt(cd.names.indexOf(a))) }}>{a}</span> ∩ <span style={{ color: hueCss(hueAt(cd.names.indexOf(b))) }}>{b}</span> = <span style={{ color: 'var(--text-0)' }}>{(v * 100).toFixed(1)}%</span></div>
+              return <div key={k} style={{ color: 'var(--text-1)' }}><span style={{ color: hueCss(regHue(a)) }}>{a}</span> ∩ <span style={{ color: hueCss(regHue(b)) }}>{b}</span> = <span style={{ color: 'var(--text-0)' }}>{(v * 100).toFixed(1)}%</span></div>
             })}
           </div>
         </>)}
