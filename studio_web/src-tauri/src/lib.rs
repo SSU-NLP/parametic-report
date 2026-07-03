@@ -76,6 +76,11 @@ fn spawn_kernel() -> Option<Child> {
             .ok()
             .and_then(|d| d.parent().and_then(|p| p.parent()).map(|p| p.to_path_buf()))
     })?;
+    if !dir.join("parametic_studio").is_dir() {
+        // packaged app with no kernel_dir in config.json: cwd fallback points nowhere useful
+        log::error!("no kernel source at {dir:?} — set kernel_dir in ~/.parametic_studio/config.json");
+        return None;
+    }
     let candidates = python_candidates(python_path);
     for python in &candidates {
         let mut cmd = Command::new(python);
@@ -103,10 +108,8 @@ fn spawn_kernel() -> Option<Child> {
     None
 }
 
-/// Splash → main handoff: the frontend calls this once the kernel is reachable
-/// (or after a timeout). Show + focus the main window, close the splash.
-#[tauri::command]
-fn close_splash(app: tauri::AppHandle) {
+/// Splash → main handoff: show + focus the main window, close the splash. Idempotent.
+fn do_close_splash(app: &tauri::AppHandle) {
     if let Some(main) = app.get_webview_window("main") {
         let _ = main.show();
         let _ = main.set_focus();
@@ -114,6 +117,14 @@ fn close_splash(app: tauri::AppHandle) {
     if let Some(splash) = app.get_webview_window("splash") {
         let _ = splash.close();
     }
+}
+
+/// Frontend calls this once the kernel is reachable. The 8s fallback lives in Rust (setup),
+/// NOT the frontend: the main window is hidden at boot and WKWebView suspends timers in
+/// hidden webviews, so a JS setTimeout never fires when the kernel is down → stuck splash.
+#[tauri::command]
+fn close_splash(app: tauri::AppHandle) {
+    do_close_splash(&app);
 }
 
 /// Native menubar. Custom items emit `menu` events to the webview so App.tsx drives the UI.
@@ -169,6 +180,12 @@ pub fn run() {
                 let _ = app.emit("menu", event.id().0.as_str());
             });
             app.manage(Kernel(Mutex::new(spawn_kernel())));
+            // hard 8s splash fallback — must be Rust-side (hidden webview timers are suspended)
+            let handle = app.handle().clone();
+            std::thread::spawn(move || {
+                std::thread::sleep(Duration::from_secs(8));
+                do_close_splash(&handle);
+            });
             Ok(())
         })
         .build(tauri::generate_context!())

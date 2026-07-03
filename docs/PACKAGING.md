@@ -60,6 +60,17 @@ Bundles are uploaded as workflow artifacts. **Unsigned** — no notarization / A
 - **No `mps`.** The kernel auto-selects cuda (if available) or cpu. No Apple GPU on Windows.
 - **Unverified.** v1 is validated on macOS dev only; the Windows path is untested end-to-end.
 
+## Troubleshooting
+
+- **App opens but says `kernel offline · reconnecting…`** — the packaged app couldn't spawn a
+  kernel: `kernel_dir`/`python_path` missing or wrong in `~/.parametic_studio/config.json`
+  (a Finder-launched app has cwd `/` and a minimal `PATH`, so the dev fallbacks don't apply).
+  Fix the config and relaunch, or point Settings → kernel connection at a remote kernel.
+- **Force-quit semantics** — a kernel the app *spawned* self-exits within ~2s of the app dying
+  (posix parent-watch), even on force-quit. A kernel the app *attached* to (something was
+  already on `:8000` at launch — e.g. your own dev kernel) is intentionally left running: the
+  app never kills a kernel it didn't start.
+
 ## Follow-up
 
 - Bundle Python + torch so no user-side Python setup is needed (v2).
