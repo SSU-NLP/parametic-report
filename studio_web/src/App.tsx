@@ -388,6 +388,11 @@ export default function App() {
     return meta
   }, [datasets])
   const dsExamples = useMemo(() => toExamples(ds), [ds])  // spot-view editor content, parsed once per edit
+  // the exact example array the last spot ran on. region()/save_region reuse THIS, not toExamples(ds):
+  // multi-line examples (code) don't survive the ex.join('\n')→toExamples split round-trip, so re-parsing
+  // the editor yields a different set → importance cache miss → save recomputes. Keeping the array fixes it.
+  const [spotExamples, setSpotExamples] = useState<string[]>([])
+  const emitSpot = (mid: string, ex: string[]) => { setSpotExamples(ex); setDs(ex.join('\n')); sendTo(mid, { type: 'spot', examples: ex }) }
   const [expModels, setExpModels] = useState<Set<string>>(new Set())  // models with their tensor tree expanded
   const [expPaths, setExpPaths] = useState<Set<string>>(new Set())    // expanded folder paths (model-id prefixed)
   // explorer selection: `${section}:${name}` — target of Del key + context menu ('model:'|'data:'|'region:')
@@ -943,7 +948,7 @@ export default function App() {
       return (<>
         <div style={{ display: 'flex', gap: 6, alignItems: 'center', marginBottom: 6 }}>
           <span style={{ color: 'var(--text-1)' }}><span className="mono">▤ {name}</span><span style={hint}> · {examples.length} examples</span></span>
-          <Btn onClick={() => { const ex = sample(examples); setDs(ex.join('\n')); sendTo(focused(), { type: 'spot', examples: ex }) }} title="compute spot on the focused model with the parsed examples (sampling applies)" color="var(--accent)" style={{ padding: '2px 10px' }}>Spot</Btn>
+          <Btn onClick={() => emitSpot(focused(), sample(examples))} title="compute spot on the focused model with the parsed examples (sampling applies)" color="var(--accent)" style={{ padding: '2px 10px' }}>Spot</Btn>
           <Btn onClick={() => setTrainDs(examples.join('\n'))} title="use the parsed examples as the training dataset" style={{ padding: '2px 10px' }}>→ Train data</Btn>
           <Btn onClick={() => sendTo(focused(), { type: 'save_dataset', name, content: dset.content })} title="write to ~/.parametic_studio/datasets (persists across restarts)" style={{ padding: '2px 10px' }}>{dset.server ? 'Save' : 'Save to disk'}</Btn>
         </div>
@@ -1224,7 +1229,7 @@ export default function App() {
         )}
       </>)
     }
-    const runSpot = (text: string) => { const ex = sample(toExamples(text)); setDs(ex.join('\n')); sendTo(mid, { type: 'spot', examples: ex }) }  // materialize the sampled set — what you see is what ran
+    const runSpot = (text: string) => emitSpot(mid, sample(toExamples(text)))  // materialize the sampled set — what you see is what ran (and what save reuses)
     return (<>
       <div style={{ color: 'var(--text-1)', marginBottom: 6 }}>dataset → grad×param<span style={hint}> · top cells = spot</span></div>
       <div style={{ display: 'flex', gap: 6, alignItems: 'center', marginBottom: 6 }}>
@@ -1249,7 +1254,7 @@ export default function App() {
       <Btn onClick={() => runSpot(ds)} color="var(--accent)" style={{ padding: '4px 12px', marginBottom: 10 }}>Compute spot</Btn>
       {d.spotProg && <div style={{ marginBottom: 8 }}><div style={{ display: 'flex', gap: 8, alignItems: 'center' }}><span style={hint}>computing · {d.spotProg.i}/{d.spotProg.total}</span><Btn onClick={() => sendTo(mid, { type: 'stop_spot' })} color="var(--danger)" style={{ padding: '0 8px' }}>Stop</Btn></div><div style={{ background: 'var(--bg-2)', borderRadius: 2, height: 4, marginTop: 3 }}><div style={{ height: 4, width: `${Math.round((d.spotProg.i / d.spotProg.total) * 100)}%`, background: 'var(--accent)', borderRadius: 2 }} /></div></div>}
       {d.spot && (() => {
-        const examples = dsExamples                      // spot data — always drives region()/mask selection
+        const examples = spotExamples.length ? spotExamples : dsExamples  // reuse the exact set the spot ran on (cache hit on save); fall back to the editor before any compute
         const evalExamples = evalDsName ? (dsMeta[evalDsName]?.examples ?? examples) : examples  // kppl measurement set — may differ from spot data
         const selected = new Set(d.knobs.map((k) => k.key))
         const measure = () => sendTo(mid, { type: 'ppl', examples: evalExamples, tag: 'inter' })
@@ -1507,7 +1512,7 @@ export default function App() {
           const useForSpot = (name: string) => {
             const dset = datasets.find((x) => x.name === name); if (!dset) return
             if (dset.content == null) { sendTo(focused(), { type: 'read_dataset', name }); return }  // fetch first; re-invoke after it lands
-            const ex = sample(toExamples(dset.content, dset.fields)); setDs(ex.join('\n')); sendTo(focused(), { type: 'spot', examples: ex })
+            emitSpot(focused(), sample(toExamples(dset.content, dset.fields)))
           }
           const useAsTrainData = (name: string) => {
             const dset = datasets.find((x) => x.name === name); if (!dset) return
