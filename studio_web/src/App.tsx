@@ -412,6 +412,7 @@ export default function App() {
   const [sshRepoDir, setSshRepoDir] = useState('')
   const [sshModel, setSshModel] = useState('')
   const [sshPythonPath, setSshPythonPath] = useState('')  // e.g. /opt/conda/bin/python — GPU boxes keep torch in a non-default python
+  const [sshHfHome, setSshHfHome] = useState(() => localStorage.getItem('ps_ssh_hf_home') || '')  // remote HF cache dir — point at a roomy volume (e.g. /shared/...) so big models don't fill the home disk
   const [sshConnecting, setSshConnecting] = useState(false)
   const [sshStatus, setSshStatus] = useState<{ state: string; detail?: string } | null>(null)
   const [installed, setInstalled] = useState<{ id: string; size_mb: number | null }[] | null>(null)
@@ -715,7 +716,9 @@ export default function App() {
         keyPath: sshAuth === 'key' ? sshKeyPath.trim() : '',
         keyPassphrase: sshAuth === 'key' ? sshKeyPassphrase : '',
         repoDir: sshRepoDir.trim(), pythonPath: sshPythonPath.trim(), model: sshModel.trim(),
+        hfHome: sshHfHome.trim(),
       })
+      sshHfHome.trim() ? localStorage.setItem('ps_ssh_hf_home', sshHfHome.trim()) : localStorage.removeItem('ps_ssh_hf_home')
       localStorage.setItem('ps_kernel_url', SSH_TUNNEL_WS)
       window.location.reload()
     } catch (err) {
@@ -1719,6 +1722,10 @@ export default function App() {
                   <label style={{ display: 'grid', gap: 2 }}>
                     <span style={{ ...hint, fontSize: 11 }}>python path (optional)</span>
                     <input value={sshPythonPath} onChange={(e) => setSshPythonPath(e.target.value)} placeholder="/opt/conda/bin/python (where torch lives)" spellCheck={false} disabled={isRemoteConnected()} style={inp} />
+                  </label>
+                  <label style={{ display: 'grid', gap: 2 }}>
+                    <span style={{ ...hint, fontSize: 11 }}>HF cache dir (optional)</span>
+                    <input value={sshHfHome} onChange={(e) => setSshHfHome(e.target.value)} placeholder="/shared/you/hf_cache — roomy volume for big models" spellCheck={false} disabled={isRemoteConnected()} style={inp} />
                   </label>
                   <label style={{ display: 'grid', gap: 2 }}>
                     <span style={{ ...hint, fontSize: 11 }}>model (optional)</span>

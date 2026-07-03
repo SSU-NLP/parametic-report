@@ -95,10 +95,20 @@ fn kernel_launch_command(
     repo_dir: &str,
     python: &str,
     model: &Option<String>,
+    hf_home: &Option<String>,
 ) -> String {
     let model_env = match model {
         Some(m) => format!("PARAMETIC_STUDIO_MODEL={} ", sh_quote(m)),
         None => String::new(),
+    };
+    // HF cache location — cloud GPU boxes often have a tiny home disk; point HF_HOME at a roomy
+    // volume (e.g. /shared) so multi-GB model downloads don't fill the root partition.
+    let hf_env = match hf_home {
+        Some(h) if !h.trim().is_empty() => {
+            let q = sh_quote(h);
+            format!("HF_HOME={q} HF_HUB_CACHE={q}/hub ")
+        }
+        _ => String::new(),
     };
     // -s (not -sf): the kernel returns 404 on `/` (only /ws is a route), and `curl -f` treats any
     // 4xx as failure — so any HTTP response at all means the kernel is up. ss is the fallback.
@@ -107,9 +117,10 @@ fn kernel_launch_command(
         p = REMOTE_KERNEL_PORT
     );
     let launch = format!(
-        "cd {dir} && PARAMETIC_STUDIO_HOST=127.0.0.1 PARAMETIC_STUDIO_PORT={port} {model}nohup {py} -m parametic_studio.api > /tmp/studio-kernel.log 2>&1 &",
+        "cd {dir} && PARAMETIC_STUDIO_HOST=127.0.0.1 PARAMETIC_STUDIO_PORT={port} {hf}{model}nohup {py} -m parametic_studio.api > /tmp/studio-kernel.log 2>&1 &",
         dir = sh_quote(repo_dir),
         port = REMOTE_KERNEL_PORT,
+        hf = hf_env,
         model = model_env,
         py = python,
     );
@@ -214,6 +225,7 @@ pub async fn ssh_connect(
     repo_dir: String,
     python_path: Option<String>,
     model: Option<String>,
+    hf_home: Option<String>,
 ) -> Result<(), String> {
     // tear down any existing tunnel first so a reconnect is clean.
     if let Some(state) = app.try_state::<SshState>() {
@@ -312,7 +324,7 @@ pub async fn ssh_connect(
     let python = python_path
         .filter(|s| !s.trim().is_empty())
         .unwrap_or_else(|| "$(command -v python3 || command -v python)".to_string());
-    let launch = kernel_launch_command(&repo_dir, &python, &model);
+    let launch = kernel_launch_command(&repo_dir, &python, &model, &hf_home);
     remote_exec(&session, &launch).await.map_err(|e| {
         let msg = format!("start kernel: {e}");
         emit_status(&app, &error_json(&msg));

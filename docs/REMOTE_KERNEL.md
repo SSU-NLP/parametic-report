@@ -16,6 +16,7 @@ Open **Settings → Kernel connection → Remote (SSH)** and fill in your GPU se
 | password / key path | password, or path to your private key e.g. `~/.ssh/gpu.pem` (+ passphrase if the key is encrypted) |
 | remote repo dir | absolute path to the checkout, e.g. `/shared/you/parametic/code` or `~/parametic-report` |
 | python path | the interpreter that has the deps, e.g. `/opt/conda/bin/python` — **on GPU boxes torch usually lives in a conda python, not the system `python3`**. Leave blank only if the default `python3` has the deps |
+| HF cache dir | optional, e.g. `/shared/you/hf_cache` — **cloud GPU boxes often have a tiny home disk; point this at a roomy volume so multi-GB model downloads don't fill `/root`**. Sets `HF_HOME`/`HF_HUB_CACHE` on the remote kernel |
 | model | optional, e.g. `Qwen/Qwen2.5-1.5B-Instruct` |
 
 Password and key passphrase are kept in memory only, never written to disk.
