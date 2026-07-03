@@ -27,3 +27,8 @@ platform_scratch/
 
 # Claude Code personal project permissions (do not commit)
 .claude/settings.local.json
+
+# tauri
+studio_web/src-tauri/target/
+studio_web/src-tauri/gen/schemas/
+studio_web/dist/
