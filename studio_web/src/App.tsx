@@ -391,8 +391,8 @@ export default function App() {
   // the exact example array the last spot ran on. region()/save_region reuse THIS, not toExamples(ds):
   // multi-line examples (code) don't survive the ex.join('\n')→toExamples split round-trip, so re-parsing
   // the editor yields a different set → importance cache miss → save recomputes. Keeping the array fixes it.
-  const [spotExamples, setSpotExamples] = useState<string[]>([])
-  const emitSpot = (mid: string, ex: string[]) => { setSpotExamples(ex); setDs(ex.join('\n')); sendTo(mid, { type: 'spot', examples: ex }) }
+  const [spotExamples, setSpotExamples] = useState<Record<string, string[]>>({})  // per-model: each keeps the array ITS spot ran on
+  const emitSpot = (mid: string, ex: string[]) => { setSpotExamples((s) => ({ ...s, [mid]: ex })); setDs(ex.join('\n')); sendTo(mid, { type: 'spot', examples: ex }) }
   const [expModels, setExpModels] = useState<Set<string>>(new Set())  // models with their tensor tree expanded
   const [expPaths, setExpPaths] = useState<Set<string>>(new Set())    // expanded folder paths (model-id prefixed)
   // explorer selection: `${section}:${name}` — target of Del key + context menu ('model:'|'data:'|'region:')
@@ -585,9 +585,9 @@ export default function App() {
       if (m.tag === 'code' || m.tag === 'general') patch(mid, (d) => ({ ...d, evals: { ...d.evals, [m.tag]: m.value } }))
       else patch(mid, (d) => ({ ...d, kppl: { ...d.kppl, [m.tag === 'base' ? 'base' : 'inter']: m.value } }))
     }
-    else if (m.type === 'intervened') { setPendingKey(`intervene:${mid}`, false); setLocateProg((p) => { const n = { ...p }; delete n.intervene; return n }) }
+    else if (m.type === 'intervened') { setPendingKey(`intervene:${mid}`, false); setLocateProg((p) => { const n = { ...p }; delete n[`${mid}:intervene`]; return n }) }
     else if (m.type === 'region_saved') {
-      setPendingKey(`save_region:${mid}`, false); setLocateProg((p) => { const n = { ...p }; delete n.save_region; return n })
+      setPendingKey(`save_region:${mid}`, false); setLocateProg((p) => { const n = { ...p }; delete n[`${mid}:save_region`]; return n })
       logEntry(mid, 'result', `region "${m.name}" saved (${m.count} weights)`); sendTo(mid, { type: 'regions' })
     }
     else if (m.type === 'region_info') { setPendingKey(`region_info:${mid}`, false); setRegionInfo((ri) => ({ ...ri, [m.name]: { layers: m.layers, modules: m.modules, grid: m.grid, importance: m.importance ?? null, count: m.count, base_topk: m.base_topk } })) }
@@ -603,12 +603,12 @@ export default function App() {
     }
     else if (m.type === 'train_reset') patch(mid, (d) => ({ ...d, train: emptyTrain() }))
     else if (m.type === 'tensors') patch(mid, (d) => ({ ...d, tensors: m.tensors }))
-    else if (m.type === 'locate_progress') setLocateProg((p) => ({ ...p, [m.op]: { i: m.i, total: m.total } }))
+    else if (m.type === 'locate_progress') setLocateProg((p) => ({ ...p, [`${mid}:${m.op}`]: { i: m.i, total: m.total } }))
     else if (m.type === 'error') {
       toast(`[${m.op ?? 'kernel'}] ${m.reason}`)
       if (m.op === 'load_hf_dataset') setHfLoading(null)
       if (m.op === 'save_dataset') setUploading([])  // error carries no name → clear the whole batch
-      if (m.op) { setPendingKey(`${m.op}:${mid}`, false); setLocateProg((p) => { const n = { ...p }; delete n[m.op]; return n }) }
+      if (m.op) { setPendingKey(`${m.op}:${mid}`, false); setLocateProg((p) => { const n = { ...p }; delete n[`${mid}:${m.op}`]; return n }) }
       if (m.op === 'train') patch(mid, (d) => ({ ...d, train: { ...d.train, running: false, error: m.reason } }))
       if (m.op === 'eval_code') patch(mid, (d) => ({ ...d, evalProg: null }))
     }
@@ -1254,7 +1254,7 @@ export default function App() {
       <Btn onClick={() => runSpot(ds)} color="var(--accent)" style={{ padding: '4px 12px', marginBottom: 10 }}>Compute spot</Btn>
       {d.spotProg && <div style={{ marginBottom: 8 }}><div style={{ display: 'flex', gap: 8, alignItems: 'center' }}><span style={hint}>computing · {d.spotProg.i}/{d.spotProg.total}</span><Btn onClick={() => sendTo(mid, { type: 'stop_spot' })} color="var(--danger)" style={{ padding: '0 8px' }}>Stop</Btn></div><div style={{ background: 'var(--bg-2)', borderRadius: 2, height: 4, marginTop: 3 }}><div style={{ height: 4, width: `${Math.round((d.spotProg.i / d.spotProg.total) * 100)}%`, background: 'var(--accent)', borderRadius: 2 }} /></div></div>}
       {d.spot && (() => {
-        const examples = spotExamples.length ? spotExamples : dsExamples  // reuse the exact set the spot ran on (cache hit on save); fall back to the editor before any compute
+        const examples = spotExamples[mid]?.length ? spotExamples[mid] : dsExamples  // reuse the exact set THIS model's spot ran on (cache hit on save); fall back to the editor before any compute
         const evalExamples = evalDsName ? (dsMeta[evalDsName]?.examples ?? examples) : examples  // kppl measurement set — may differ from spot data
         const selected = new Set(d.knobs.map((k) => k.key))
         const measure = () => sendTo(mid, { type: 'ppl', examples: evalExamples, tag: 'inter' })
@@ -1300,7 +1300,7 @@ export default function App() {
             <div style={{ marginBottom: 6, display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 6 }}>
               {!selected.has('spot') && <Btn onClick={() => addKnob({ key: 'spot', kind: 'spot', topk: 0.05, op: 'scale', alpha: 0 })} style={{ padding: '2px 10px' }}>+ Top-k% spot</Btn>}
               {d.knobs.length === 0 && <span style={hint}>or click a spot cell above ↑</span>}
-              {locateProg.intervene && <span style={{ ...hint, fontSize: 11 }}>locating… {locateProg.intervene.i}/{locateProg.intervene.total}</span>}
+              {locateProg[`${mid}:intervene`] && <span style={{ ...hint, fontSize: 11 }}>locating… {locateProg[`${mid}:intervene`].i}/{locateProg[`${mid}:intervene`].total}</span>}
               {d.regions.length > 0 && (() => {
                 const cap = d.regions.find((r) => r.name === namedRegionPick)?.base_topk  // saved % = adjustable upper bound
                 const capPct = cap != null ? cap * 100 : 100
@@ -1376,7 +1376,7 @@ export default function App() {
               <Btn onClick={() => { sendTo(mid, { type: 'ppl', examples: PRESETS.python.split('\n').filter(Boolean), tag: 'code' }); sendTo(mid, { type: 'ppl', examples: GENERAL_SET.split('\n').filter(Boolean), tag: 'general' }) }} disabled={pending.has(`ppl:${mid}`)} color="var(--accent)" style={{ padding: '2px 10px' }} title="PPL on code vs general text — selective damage shows here">{pending.has(`ppl:${mid}`) ? '⟳ ' : ''}Eval code｜general</Btn>
             </div>
             <div style={{ ...hint, fontSize: 11, marginBottom: 4 }}>saved % is the upper bound — reload as a knob and dial it down anytime, never up</div>
-            {locateProg.save_region && <div style={{ ...hint, fontSize: 11, marginTop: 4 }}>locating… {locateProg.save_region.i}/{locateProg.save_region.total}</div>}
+            {locateProg[`${mid}:save_region`] && <div style={{ ...hint, fontSize: 11, marginTop: 4 }}>locating… {locateProg[`${mid}:save_region`].i}/{locateProg[`${mid}:save_region`].total}</div>}
             {(d.evals.code != null || d.evals.general != null) && (
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, fontSize: 11 }}>
                 <div><span style={hint}>code PPL</span><div className="mono" style={{ color: 'var(--text-0)' }}>{d.evals.code?.toPrecision(4) ?? '…'}</div></div>
