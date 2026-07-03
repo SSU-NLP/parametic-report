@@ -404,7 +404,10 @@ export default function App() {
   const [sshHost, setSshHost] = useState('')
   const [sshPort, setSshPort] = useState('22')
   const [sshUser, setSshUser] = useState('')
+  const [sshAuth, setSshAuth] = useState<'password' | 'key'>('password')
   const [sshPassword, setSshPassword] = useState('')  // state only — never persisted
+  const [sshKeyPath, setSshKeyPath] = useState('')  // e.g. ~/.ssh/gpu.pem — not sensitive, ok to persist
+  const [sshKeyPassphrase, setSshKeyPassphrase] = useState('')  // state only — never persisted
   const [sshRepoDir, setSshRepoDir] = useState('')
   const [sshModel, setSshModel] = useState('')
   const [sshConnecting, setSshConnecting] = useState(false)
@@ -681,11 +684,15 @@ export default function App() {
   // point WS_URL at the local tunnel port and reload once it reports success.
   async function sshConnect() {
     if (!sshHost.trim() || !sshUser.trim()) { toast('[ssh] host and username are required'); return }
+    if (sshAuth === 'key' ? !sshKeyPath.trim() : !sshPassword) { toast(`[ssh] ${sshAuth === 'key' ? 'key path' : 'password'} is required`); return }
     setSshConnecting(true)
     try {
       await tauriInvokeResult('ssh_connect', {
         host: sshHost.trim(), port: Number(sshPort) || 22, username: sshUser.trim(),
-        password: sshPassword, repoDir: sshRepoDir.trim(), pythonPath: '', model: sshModel.trim(),
+        password: sshAuth === 'key' ? '' : sshPassword,
+        keyPath: sshAuth === 'key' ? sshKeyPath.trim() : '',
+        keyPassphrase: sshAuth === 'key' ? sshKeyPassphrase : '',
+        repoDir: sshRepoDir.trim(), pythonPath: '', model: sshModel.trim(),
       })
       localStorage.setItem('ps_kernel_url', SSH_TUNNEL_WS)
       window.location.reload()
@@ -1590,7 +1597,7 @@ export default function App() {
                 <div style={{ display: 'grid', gap: 6, marginBottom: 4 }}>
                   <label style={{ display: 'grid', gap: 2 }}>
                     <span style={{ ...hint, fontSize: 11 }}>host</span>
-                    <input value={sshHost} onChange={(e) => setSshHost(e.target.value)} placeholder="1.2.3.4" spellCheck={false} disabled={isRemoteConnected()} style={inp} />
+                    <input value={sshHost} onChange={(e) => setSshHost(e.target.value)} placeholder="gpu.lab.edu or 1.2.3.4" spellCheck={false} disabled={isRemoteConnected()} style={inp} />
                   </label>
                   <label style={{ display: 'grid', gap: 2 }}>
                     <span style={{ ...hint, fontSize: 11 }}>port</span>
@@ -1600,10 +1607,34 @@ export default function App() {
                     <span style={{ ...hint, fontSize: 11 }}>username</span>
                     <input value={sshUser} onChange={(e) => setSshUser(e.target.value)} spellCheck={false} disabled={isRemoteConnected()} style={inp} />
                   </label>
-                  <label style={{ display: 'grid', gap: 2 }}>
-                    <span style={{ ...hint, fontSize: 11 }}>password</span>
-                    <input type="password" value={sshPassword} onChange={(e) => setSshPassword(e.target.value)} spellCheck={false} disabled={isRemoteConnected()} style={inp} />
-                  </label>
+                  <div style={{ display: 'flex', gap: 6, margin: '2px 0' }}>
+                    {(['password', 'key'] as const).map((auth) => (
+                      <button key={auth} onClick={() => setSshAuth(auth)} disabled={isRemoteConnected()}
+                        style={{ flex: 1, padding: '4px 8px', fontSize: 11, borderRadius: 4, cursor: isRemoteConnected() ? 'default' : 'pointer',
+                          border: `1px solid ${sshAuth === auth ? 'var(--accent)' : 'var(--line-strong)'}`,
+                          color: sshAuth === auth ? 'var(--accent)' : 'var(--text-1)',
+                          background: 'var(--bg-2)', opacity: isRemoteConnected() ? 0.5 : 1 }}>
+                        {auth === 'password' ? 'Password' : 'Key (.pem)'}
+                      </button>
+                    ))}
+                  </div>
+                  {sshAuth === 'password' ? (
+                    <label style={{ display: 'grid', gap: 2 }}>
+                      <span style={{ ...hint, fontSize: 11 }}>password</span>
+                      <input type="password" value={sshPassword} onChange={(e) => setSshPassword(e.target.value)} spellCheck={false} disabled={isRemoteConnected()} style={inp} />
+                    </label>
+                  ) : (
+                    <>
+                      <label style={{ display: 'grid', gap: 2 }}>
+                        <span style={{ ...hint, fontSize: 11 }}>key path</span>
+                        <input value={sshKeyPath} onChange={(e) => setSshKeyPath(e.target.value)} placeholder="~/.ssh/gpu.pem" spellCheck={false} disabled={isRemoteConnected()} style={inp} />
+                      </label>
+                      <label style={{ display: 'grid', gap: 2 }}>
+                        <span style={{ ...hint, fontSize: 11 }}>key passphrase (optional)</span>
+                        <input type="password" value={sshKeyPassphrase} onChange={(e) => setSshKeyPassphrase(e.target.value)} placeholder="passphrase (encrypted keys only)" spellCheck={false} disabled={isRemoteConnected()} style={inp} />
+                      </label>
+                    </>
+                  )}
                   <label style={{ display: 'grid', gap: 2 }}>
                     <span style={{ ...hint, fontSize: 11 }}>remote repo dir</span>
                     <input value={sshRepoDir} onChange={(e) => setSshRepoDir(e.target.value)} placeholder="~/parametic-report" spellCheck={false} disabled={isRemoteConnected()} style={inp} />

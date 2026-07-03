@@ -10,10 +10,14 @@ Open **Settings → Kernel connection → Remote (SSH)** and fill in your GPU se
 
 | field | example |
 |-------|---------|
-| host / port | `gpu.lab.edu` / `22` |
-| username / password | your SSH login (password is kept in memory only, never stored) |
+| host / port | `gpu.lab.edu` (or `ec2-…amazonaws.com`) / `22` |
+| username | your SSH login (`ubuntu`, `ec2-user`, …) |
+| auth | **Password** or **Key (.pem)** — pick the toggle. Cloud GPU boxes (AWS/Lambda) use a `.pem` key |
+| password / key path | password, or path to your private key e.g. `~/.ssh/gpu.pem` (+ passphrase if the key is encrypted) |
 | remote repo dir | `~/parametic-report` (checkout with `pip install -r requirements-studio.txt`) |
 | model | optional, e.g. `Qwen/Qwen2.5-1.5B-Instruct` |
+
+Password and key passphrase are kept in memory only, never written to disk.
 
 Click **Connect**. The app SSHes in, starts the kernel on the remote (bound to
 `127.0.0.1:8000`, so it's reachable only through the tunnel), opens a local forward

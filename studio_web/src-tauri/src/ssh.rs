@@ -12,7 +12,7 @@ use std::sync::Mutex;
 use std::time::Duration;
 
 use russh::client::{self, Handle};
-use russh::keys::ssh_key;
+use russh::keys::{load_secret_key, ssh_key, PrivateKeyWithHashAlg};
 use russh::{ChannelMsg, Disconnect};
 use tauri::{AppHandle, Emitter, Manager};
 use tokio::io::AsyncWriteExt;
@@ -77,6 +77,18 @@ fn sh_quote(s: &str) -> String {
     format!("'{}'", s.replace('\'', "'\\''"))
 }
 
+/// Expand a leading `~` in a local filesystem path to the user's home directory (HOME on unix,
+/// USERPROFILE on windows). Only a leading `~` / `~/` is expanded; other `~user` forms are left
+/// as-is (they'd fail to open, which surfaces a clear "read key" error).
+fn expand_home(path: &str) -> String {
+    if path == "~" || path.starts_with("~/") {
+        if let Ok(home) = std::env::var("HOME").or_else(|_| std::env::var("USERPROFILE")) {
+            return format!("{}{}", home, &path[1..]);
+        }
+    }
+    path.to_string()
+}
+
 /// Build the remote command that reuses the kernel if :8000 is already listening, else launches it
 /// with `nohup`. `python` may carry candidates (`python3 || python`) chosen by the caller.
 fn kernel_launch_command(
@@ -88,8 +100,10 @@ fn kernel_launch_command(
         Some(m) => format!("PARAMETIC_STUDIO_MODEL={} ", sh_quote(m)),
         None => String::new(),
     };
+    // -s (not -sf): the kernel returns 404 on `/` (only /ws is a route), and `curl -f` treats any
+    // 4xx as failure — so any HTTP response at all means the kernel is up. ss is the fallback.
     let check = format!(
-        "curl -sf http://127.0.0.1:{p}/ >/dev/null 2>&1 || (command -v ss >/dev/null 2>&1 && ss -ltn 2>/dev/null | grep -q ':{p} ')",
+        "curl -s -o /dev/null http://127.0.0.1:{p}/ >/dev/null 2>&1 || (command -v ss >/dev/null 2>&1 && ss -ltn 2>/dev/null | grep -q ':{p} ')",
         p = REMOTE_KERNEL_PORT
     );
     let launch = format!(
@@ -127,8 +141,9 @@ async fn remote_exec(session: &Handle<Client>, command: &str) -> Result<String, 
 
 /// Poll the remote :8000 over SSH exec until it answers, or time out.
 async fn wait_kernel_ready(session: &Handle<Client>) -> Result<(), String> {
+    // -s not -sf: a 404 on `/` still means the kernel is answering (see kernel_launch_command).
     let probe = format!(
-        "curl -sf http://127.0.0.1:{}/ >/dev/null 2>&1 && echo ok",
+        "curl -s -o /dev/null http://127.0.0.1:{}/ >/dev/null 2>&1 && echo ok",
         REMOTE_KERNEL_PORT
     );
     let deadline = tokio::time::Instant::now() + Duration::from_secs(KERNEL_READY_TIMEOUT_SECS);
@@ -194,6 +209,8 @@ pub async fn ssh_connect(
     port: u16,
     username: String,
     password: String,
+    key_path: Option<String>,
+    key_passphrase: Option<String>,
     repo_dir: String,
     python_path: Option<String>,
     model: Option<String>,
@@ -217,19 +234,71 @@ pub async fn ssh_connect(
             msg
         })?;
 
-    let auth = session
-        .authenticate_password(&username, password)
+    // Branch on auth method: a non-empty key_path means .pem/public-key auth (cloud GPU hosts use
+    // keys, not passwords); otherwise fall back to password auth exactly as before.
+    let use_key = key_path.as_deref().map(|p| !p.is_empty()).unwrap_or(false);
+    if use_key {
+        let raw_path = key_path.unwrap();
+        let path = expand_home(&raw_path);
+        // load_secret_key is blocking file I/O; run it off the async reactor. The passphrase is
+        // moved into the closure and dropped there — never logged, never stored.
+        let passphrase = key_passphrase.clone();
+        let load_path = path.clone();
+        let key = tokio::task::spawn_blocking(move || {
+            load_secret_key(&load_path, passphrase.as_deref())
+        })
         .await
         .map_err(|e| {
-            let msg = format!("auth failed: {e}");
+            let msg = format!("read key {path}: {e}");
+            emit_status(&app, &error_json(&msg));
+            msg
+        })?
+        .map_err(|e| {
+            // Distinguish "encrypted key, no/blank passphrase given" so the user knows to supply one.
+            let msg = if matches!(e, russh::keys::Error::KeyIsEncrypted) {
+                format!("read key {path}: key is encrypted — passphrase required")
+            } else {
+                format!("read key {path}: {e}")
+            };
             emit_status(&app, &error_json(&msg));
             msg
         })?;
-    // password is consumed by authenticate_password (moved above) — never logged, never stored.
-    if !auth.success() {
-        let msg = "auth failed: password rejected".to_string();
-        emit_status(&app, &error_json(&msg));
-        return Err(msg);
+        // For RSA keys, negotiate the strongest hash the server supports (ssh-rsa vs rsa-sha2-*);
+        // non-RSA keys ignore the hash. Fall back to None if negotiation is inconclusive.
+        let hash_alg = session
+            .best_supported_rsa_hash()
+            .await
+            .ok()
+            .flatten()
+            .flatten();
+        let auth = session
+            .authenticate_publickey(&username, PrivateKeyWithHashAlg::new(Arc::new(key), hash_alg))
+            .await
+            .map_err(|e| {
+                let msg = format!("auth failed: {e}");
+                emit_status(&app, &error_json(&msg));
+                msg
+            })?;
+        if !auth.success() {
+            let msg = "auth failed: key rejected".to_string();
+            emit_status(&app, &error_json(&msg));
+            return Err(msg);
+        }
+    } else {
+        let auth = session
+            .authenticate_password(&username, password)
+            .await
+            .map_err(|e| {
+                let msg = format!("auth failed: {e}");
+                emit_status(&app, &error_json(&msg));
+                msg
+            })?;
+        // password is consumed by authenticate_password (moved above) — never logged, never stored.
+        if !auth.success() {
+            let msg = "auth failed: password rejected".to_string();
+            emit_status(&app, &error_json(&msg));
+            return Err(msg);
+        }
     }
 
     let session = Arc::new(session);
