@@ -634,4 +634,8 @@ def serve(model_id, host="127.0.0.1", port=8000):
 
 
 if __name__ == "__main__":
-    serve(os.environ.get("PARAMETIC_STUDIO_MODEL", "Qwen/Qwen2.5-1.5B-Instruct"))
+    # host/port overridable for remote serving — VESSL/exposed-port needs 0.0.0.0 (127.0.0.1
+    # isn't reachable through the port proxy); ssh-tunnel path keeps the 127.0.0.1 default.
+    serve(os.environ.get("PARAMETIC_STUDIO_MODEL", "Qwen/Qwen2.5-1.5B-Instruct"),
+          host=os.environ.get("PARAMETIC_STUDIO_HOST", "127.0.0.1"),
+          port=int(os.environ.get("PARAMETIC_STUDIO_PORT", "8000")))

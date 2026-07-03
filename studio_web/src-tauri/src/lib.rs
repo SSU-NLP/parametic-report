@@ -8,6 +8,9 @@ use std::time::Duration;
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem, Submenu};
 use tauri::{Emitter, Manager};
 
+mod ssh;
+use ssh::SshState;
+
 // The app owns the kernel: spawn on launch (unless one is already serving :8000 — dev/attach
 // mode), kill on exit. Lifecycle coupling is the whole point (STUDIO_PRODUCTION_PLAN P1').
 struct Kernel(Mutex<Option<Child>>);
@@ -165,8 +168,13 @@ fn build_menu(app: &tauri::AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
-        .invoke_handler(tauri::generate_handler![close_splash])
+        .invoke_handler(tauri::generate_handler![
+            close_splash,
+            ssh::ssh_connect,
+            ssh::ssh_disconnect
+        ])
         .setup(|app| {
+            app.manage(SshState::default());
             if cfg!(debug_assertions) {
                 app.handle().plugin(
                     tauri_plugin_log::Builder::default()
@@ -197,6 +205,10 @@ pub fn run() {
                         let _ = child.kill(); // window closed → kernel goes with it
                         let _ = child.wait();
                     }
+                }
+                // tear down the SSH tunnel (listener + session); the remote kernel is left running
+                if let Some(s) = app.try_state::<SshState>() {
+                    s.shutdown();
                 }
             }
         });

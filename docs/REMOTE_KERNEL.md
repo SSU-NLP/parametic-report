@@ -1,7 +1,28 @@
 # Remote kernel
 
-The frontend talks to the kernel over one WebSocket (`ws://localhost:8000/ws`). To run
-the kernel on a GPU box instead of your laptop, pick one of three paths.
+The frontend talks to the kernel over one WebSocket. To run the kernel on a GPU box
+instead of your laptop, pick one of the paths below. **In-app SSH (0) is the easy one** —
+the rest are for scripting / headless setups.
+
+## (0) In-app SSH — Settings → Remote (SSH)  ← easiest, desktop app only
+
+Open **Settings → Kernel connection → Remote (SSH)** and fill in your GPU server:
+
+| field | example |
+|-------|---------|
+| host / port | `gpu.lab.edu` / `22` |
+| username / password | your SSH login (password is kept in memory only, never stored) |
+| remote repo dir | `~/parametic-report` (checkout with `pip install -r requirements-studio.txt`) |
+| model | optional, e.g. `Qwen/Qwen2.5-1.5B-Instruct` |
+
+Click **Connect**. The app SSHes in, starts the kernel on the remote (bound to
+`127.0.0.1:8000`, so it's reachable only through the tunnel), opens a local forward
+`localhost:8422 → remote:8000`, and reconnects the UI there. The tunnel is owned by the
+Rust backend, so it survives webview reloads. **Disconnect** tears the tunnel down but
+leaves the remote kernel running (it's yours). Security is SSH — no token needed.
+
+Implemented with pure-Rust `russh` (no system SSH dependency), so it works on macOS and
+Windows alike. Uses password auth; key auth is a follow-up.
 
 ## (a) Point the frontend at a URL
 

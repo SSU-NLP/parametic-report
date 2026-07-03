@@ -14,6 +14,12 @@ async function tauriInvoke(cmd: string) {
   if (!inTauri()) return
   try { const { invoke } = await import('@tauri-apps/api/core'); await invoke(cmd) } catch { /* not in tauri */ }
 }
+// like tauriInvoke but takes args and surfaces success/failure — for commands the caller must await (ssh_connect/disconnect).
+async function tauriInvokeResult(cmd: string, args?: Record<string, unknown>): Promise<void> {
+  if (!inTauri()) throw new Error('not running in the desktop app')
+  const { invoke } = await import('@tauri-apps/api/core')
+  await invoke(cmd, args)
+}
 async function tauriListen(event: string, cb: (payload: string) => void): Promise<() => void> {
   if (!inTauri()) return () => {}
   try {
@@ -23,8 +29,10 @@ async function tauriListen(event: string, cb: (payload: string) => void): Promis
 }
 
 const DEFAULT_WS = 'ws://localhost:8000/ws'
+const SSH_TUNNEL_WS = 'ws://localhost:8422/ws'  // P7: local end of the Rust-owned SSH tunnel to a remote kernel
 const WS_URL = localStorage.getItem('ps_kernel_url') || DEFAULT_WS
 const WS_TOKEN = localStorage.getItem('ps_kernel_token') || ''
+const isRemoteConnected = () => WS_URL === SSH_TUNNEL_WS
 const DEFAULT = { id: 'Qwen/Qwen2.5-1.5B-Instruct', label: 'Qwen2.5-1.5B' }
 const VIEWS = ['output', 'attention', 'activations', 'logitlens', 'spot', 'train', 'log'] as const
 type View = typeof VIEWS[number]
@@ -390,6 +398,17 @@ export default function App() {
   // remote kernel: URL/token editable in settings, applied via reload (see WS_URL/WS_TOKEN module consts)
   const [kernelUrlInput, setKernelUrlInput] = useState(WS_URL)
   const [kernelTokenInput, setKernelTokenInput] = useState(WS_TOKEN)
+  // P7 remote (SSH) kernel: Local|Remote mode toggle + connect form. Boots into 'remote' if already
+  // tunneled (ps_kernel_url points at the SSH tunnel port) so reload keeps showing Disconnect.
+  const [kernelMode, setKernelMode] = useState<'local' | 'remote'>(isRemoteConnected() ? 'remote' : 'local')
+  const [sshHost, setSshHost] = useState('')
+  const [sshPort, setSshPort] = useState('22')
+  const [sshUser, setSshUser] = useState('')
+  const [sshPassword, setSshPassword] = useState('')  // state only — never persisted
+  const [sshRepoDir, setSshRepoDir] = useState('')
+  const [sshModel, setSshModel] = useState('')
+  const [sshConnecting, setSshConnecting] = useState(false)
+  const [sshStatus, setSshStatus] = useState<{ state: string; detail?: string } | null>(null)
   const [installed, setInstalled] = useState<{ id: string; size_mb: number | null }[] | null>(null)
   // error toasts: stack of {id, text}, 5s auto-dismiss + click-to-dismiss, capped at 4 (oldest dropped)
   const [toasts, setToasts] = useState<{ id: number; text: string }[]>([])
@@ -581,6 +600,18 @@ export default function App() {
     else s.addEventListener('open', () => s.send(JSON.stringify(m)), { once: true })
   }
   useEffect(() => { sendTo(DEFAULT.id, { type: 'catalog' }) }, [])
+  // P7: subscribe once to SSH tunnel progress from the Rust side (no-op outside Tauri).
+  useEffect(() => {
+    let unlisten: (() => void) | undefined
+    let cancelled = false
+    tauriListen('ssh-status', (payload) => {
+      let parsed: { state: string; detail?: string }
+      try { parsed = JSON.parse(payload) } catch { return }
+      setSshStatus(parsed)
+      if (parsed.state === 'error') toast(`[ssh] ${parsed.detail ?? 'connection failed'}`)
+    }).then((fn) => { if (cancelled) fn(); else unlisten = fn })
+    return () => { cancelled = true; unlisten?.() }
+  }, [])
   useEffect(() => {
     if (!kernelUp) return
     const iv = setInterval(() => sendTo(focused(), { type: 'stats' }), 15000)
@@ -646,6 +677,29 @@ export default function App() {
 
   const focused = () => (open.some((m) => m.id === focusModel) ? focusModel : (open[0]?.id ?? DEFAULT.id))
   const targets = () => (sync ? open.map((m) => m.id) : [focused()])
+  // P7: SSH remote kernel connect/disconnect. Rust owns the tunnel + kernel lifecycle; we just
+  // point WS_URL at the local tunnel port and reload once it reports success.
+  async function sshConnect() {
+    if (!sshHost.trim() || !sshUser.trim()) { toast('[ssh] host and username are required'); return }
+    setSshConnecting(true)
+    try {
+      await tauriInvokeResult('ssh_connect', {
+        host: sshHost.trim(), port: Number(sshPort) || 22, username: sshUser.trim(),
+        password: sshPassword, repoDir: sshRepoDir.trim(), pythonPath: '', model: sshModel.trim(),
+      })
+      localStorage.setItem('ps_kernel_url', SSH_TUNNEL_WS)
+      window.location.reload()
+    } catch (err) {
+      setSshConnecting(false)
+      toast(`[ssh] ${err instanceof Error ? err.message : String(err)}`)
+    }
+  }
+  async function sshDisconnect() {
+    try { await tauriInvokeResult('ssh_disconnect') } catch (err) { toast(`[ssh] ${err instanceof Error ? err.message : String(err)}`) }
+    localStorage.removeItem('ps_kernel_url')
+    localStorage.removeItem('ps_kernel_token')
+    window.location.reload()
+  }
   function send() {
     if (!prompt.trim()) return
     for (const mid of targets()) { patch(mid, (d) => ({ ...empty(), spot: d.spot, knobs: d.knobs, kppl: d.kppl, regions: d.regions, evals: d.evals, train: d.train, tensors: d.tensors, busy: true })); sendTo(mid, { type: 'generate', prompt, max_tokens: maxTokens, temperature, probes: ['attention', 'activation', 'logitlens'].filter((p) => probesOn[p]) }) }  // keep workspace (spot/knobs/regions/train) across re-runs
@@ -1472,7 +1526,7 @@ export default function App() {
           ? <span style={{ color: 'var(--danger)' }}>● kernel offline · reconnecting…</span>
           : kernelUp === null
             ? <span style={hint}>○ connecting to kernel :8000…</span>
-            : <>kernel {(() => { try { return new URL(WS_URL.replace(/^ws/, 'http')).host } catch { return WS_URL } })()} · mps · bf16 · {open.length} model{open.length > 1 ? 's' : ''}{kernelStats && ` · rss ${(kernelStats.rss_mb / 1024).toFixed(1)}G`}</>}</span>
+            : <>kernel {isRemoteConnected() ? `${sshHost || 'remote'} (ssh)` : (() => { try { return new URL(WS_URL.replace(/^ws/, 'http')).host } catch { return WS_URL } })()} · mps · bf16 · {open.length} model{open.length > 1 ? 's' : ''}{kernelStats && ` · rss ${(kernelStats.rss_mb / 1024).toFixed(1)}G`}</>}</span>
         <span style={{ display: 'flex', gap: 10 }}>
           {!inTauri() && <button onClick={() => setSettingsOpen(true)} style={{ ...iconBtn, padding: 0 }}>Settings</button>}
           <span>{sync ? 'sync: broadcast' : 'sync: focused'} · {tileCount()} pane{tileCount() > 1 ? 's' : ''}</span>
@@ -1490,27 +1544,95 @@ export default function App() {
             </div>
 
             <div className="section-h" style={{ marginBottom: 6 }}>Kernel connection</div>
-            <div style={{ display: 'grid', gap: 6, marginBottom: 4 }}>
-              <label style={{ display: 'grid', gap: 2 }}>
-                <span style={{ ...hint, fontSize: 11 }}>url</span>
-                <input value={kernelUrlInput} onChange={(e) => setKernelUrlInput(e.target.value)} placeholder={DEFAULT_WS} spellCheck={false} style={inp} />
-              </label>
-              <label style={{ display: 'grid', gap: 2 }}>
-                <span style={{ ...hint, fontSize: 11 }}>token</span>
-                <input type="password" value={kernelTokenInput} onChange={(e) => setKernelTokenInput(e.target.value)} spellCheck={false} style={inp} />
-              </label>
+            <div style={{ display: 'flex', gap: 6, marginBottom: 8 }}>
+              {(['local', 'remote'] as const).map((mode) => (
+                <button key={mode} onClick={() => { if (mode === 'remote' && !inTauri()) return; setKernelMode(mode) }}
+                  disabled={mode === 'remote' && !inTauri()}
+                  title={mode === 'remote' && !inTauri() ? 'Remote (SSH) is only available in the desktop app' : undefined}
+                  style={{ flex: 1, padding: '4px 8px', fontSize: 11, borderRadius: 4, cursor: mode === 'remote' && !inTauri() ? 'default' : 'pointer',
+                    border: `1px solid ${kernelMode === mode ? 'var(--accent)' : 'var(--line-strong)'}`,
+                    color: mode === 'remote' && !inTauri() ? 'var(--text-2)' : kernelMode === mode ? 'var(--accent)' : 'var(--text-1)',
+                    background: 'var(--bg-2)', opacity: mode === 'remote' && !inTauri() ? 0.5 : 1 }}>
+                  {mode === 'local' ? 'Local' : 'Remote (SSH)'}
+                </button>
+              ))}
             </div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, margin: '6px 0 4px' }}>
-              <Btn onClick={() => {
-                const url = kernelUrlInput.trim()
-                url && url !== DEFAULT_WS ? localStorage.setItem('ps_kernel_url', url) : localStorage.removeItem('ps_kernel_url')
-                const token = kernelTokenInput.trim()
-                token ? localStorage.setItem('ps_kernel_token', token) : localStorage.removeItem('ps_kernel_token')
-                window.location.reload()
-              }} color="var(--accent)">Connect</Btn>
-              <span style={{ ...hint, fontSize: 11 }}>reloads the app</span>
-            </div>
-            <div style={{ ...hint, fontSize: 11, marginBottom: 14 }}>remote kernel: regions/datasets are stored on that machine, not here — e.g. ws(s)://host:port/ws</div>
+            {!inTauri() && kernelMode === 'remote' && (
+              <div style={{ ...hint, fontSize: 11, marginBottom: 10 }}>Remote (SSH) is only available in the desktop app.</div>
+            )}
+
+            {kernelMode === 'local' ? (
+              <>
+                <div style={{ display: 'grid', gap: 6, marginBottom: 4 }}>
+                  <label style={{ display: 'grid', gap: 2 }}>
+                    <span style={{ ...hint, fontSize: 11 }}>url</span>
+                    <input value={kernelUrlInput} onChange={(e) => setKernelUrlInput(e.target.value)} placeholder={DEFAULT_WS} spellCheck={false} style={inp} />
+                  </label>
+                  <label style={{ display: 'grid', gap: 2 }}>
+                    <span style={{ ...hint, fontSize: 11 }}>token</span>
+                    <input type="password" value={kernelTokenInput} onChange={(e) => setKernelTokenInput(e.target.value)} spellCheck={false} style={inp} />
+                  </label>
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, margin: '6px 0 4px' }}>
+                  <Btn onClick={() => {
+                    const url = kernelUrlInput.trim()
+                    url && url !== DEFAULT_WS ? localStorage.setItem('ps_kernel_url', url) : localStorage.removeItem('ps_kernel_url')
+                    const token = kernelTokenInput.trim()
+                    token ? localStorage.setItem('ps_kernel_token', token) : localStorage.removeItem('ps_kernel_token')
+                    window.location.reload()
+                  }} color="var(--accent)">Connect</Btn>
+                  <span style={{ ...hint, fontSize: 11 }}>reloads the app</span>
+                </div>
+                <div style={{ ...hint, fontSize: 11, marginBottom: 14 }}>remote kernel: regions/datasets are stored on that machine, not here — e.g. ws(s)://host:port/ws</div>
+              </>
+            ) : (
+              <>
+                <div style={{ display: 'grid', gap: 6, marginBottom: 4 }}>
+                  <label style={{ display: 'grid', gap: 2 }}>
+                    <span style={{ ...hint, fontSize: 11 }}>host</span>
+                    <input value={sshHost} onChange={(e) => setSshHost(e.target.value)} placeholder="1.2.3.4" spellCheck={false} disabled={isRemoteConnected()} style={inp} />
+                  </label>
+                  <label style={{ display: 'grid', gap: 2 }}>
+                    <span style={{ ...hint, fontSize: 11 }}>port</span>
+                    <input value={sshPort} onChange={(e) => setSshPort(e.target.value)} placeholder="22" spellCheck={false} disabled={isRemoteConnected()} style={inp} />
+                  </label>
+                  <label style={{ display: 'grid', gap: 2 }}>
+                    <span style={{ ...hint, fontSize: 11 }}>username</span>
+                    <input value={sshUser} onChange={(e) => setSshUser(e.target.value)} spellCheck={false} disabled={isRemoteConnected()} style={inp} />
+                  </label>
+                  <label style={{ display: 'grid', gap: 2 }}>
+                    <span style={{ ...hint, fontSize: 11 }}>password</span>
+                    <input type="password" value={sshPassword} onChange={(e) => setSshPassword(e.target.value)} spellCheck={false} disabled={isRemoteConnected()} style={inp} />
+                  </label>
+                  <label style={{ display: 'grid', gap: 2 }}>
+                    <span style={{ ...hint, fontSize: 11 }}>remote repo dir</span>
+                    <input value={sshRepoDir} onChange={(e) => setSshRepoDir(e.target.value)} placeholder="~/parametic-report" spellCheck={false} disabled={isRemoteConnected()} style={inp} />
+                  </label>
+                  <label style={{ display: 'grid', gap: 2 }}>
+                    <span style={{ ...hint, fontSize: 11 }}>model (optional)</span>
+                    <input value={sshModel} onChange={(e) => setSshModel(e.target.value)} placeholder="Qwen/Qwen2.5-1.5B-Instruct" spellCheck={false} disabled={isRemoteConnected()} style={inp} />
+                  </label>
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, margin: '6px 0 4px' }}>
+                  {isRemoteConnected() ? (
+                    <Btn onClick={sshDisconnect} color="var(--danger)">Disconnect</Btn>
+                  ) : (
+                    <Btn onClick={sshConnect} disabled={sshConnecting} color="var(--accent)">{sshConnecting ? 'Connecting…' : 'Connect'}</Btn>
+                  )}
+                  {sshStatus && (
+                    <span style={{ ...hint, fontSize: 11 }}>
+                      {sshStatus.state === 'connecting' && 'authenticating…'}
+                      {sshStatus.state === 'starting-kernel' && 'starting remote kernel…'}
+                      {sshStatus.state === 'forwarding' && 'forwarding…'}
+                      {sshStatus.state === 'connected' && 'connected'}
+                      {sshStatus.state === 'disconnected' && 'disconnected'}
+                      {sshStatus.state === 'error' && `error: ${sshStatus.detail ?? 'unknown'}`}
+                    </span>
+                  )}
+                </div>
+                <div style={{ ...hint, fontSize: 11, marginBottom: 14 }}>runs the studio kernel over SSH on a remote GPU box; the app tunnels to it at localhost:8422.</div>
+              </>
+            )}
 
             <div className="section-h" style={{ marginBottom: 6 }}>Kernel</div>
             <div style={{ display: 'grid', gap: 6, marginBottom: 4 }}>
