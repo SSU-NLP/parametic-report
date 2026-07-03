@@ -13,6 +13,22 @@
   --live: #30D158;
   --danger: #FF3B30;
   --mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  --font-ui: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Inter, sans-serif;
+  --radius: 6px;
+}
+
+[data-theme="light"] {
+  --bg-0: #FAFAF8;
+  --bg-1: #F1F0EE;
+  --bg-2: #E5E3E0;
+  --line: rgba(26, 23, 23, 0.10);
+  --line-strong: #B3B0AC;
+  --text-0: #1A1717;
+  --text-1: #55524F;
+  --text-2: #8B8884;
+  --accent: #0066D6;
+  --live: #1F9D48;
+  --danger: #D70015;
 }
 
 * { box-sizing: border-box; }
@@ -21,9 +37,72 @@ body {
   margin: 0;
   background: var(--bg-0);
   color: var(--text-0);
-  font-family: var(--mono);
+  font-family: var(--font-ui);
   font-size: 13px;
   line-height: 1.6;
   -webkit-font-smoothing: antialiased;
 }
 button, input, textarea { font-family: inherit; font-size: inherit; color: inherit; }
+.mono { font-family: var(--mono); }
+.hover-row:hover { outline: 1px solid var(--accent); outline-offset: 0; }
+@keyframes loading-slide { from { transform: translateX(-100%); } to { transform: translateX(350%); } }
+
+.btn { border: 1px solid var(--line-strong); border-radius: 4px; padding: 3px 10px; background: var(--bg-2); color: var(--text-1); cursor: pointer; }
+.btn:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+.btn:disabled { opacity: 0.55; cursor: default; }
+.btn-primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+.btn-primary:hover:not(:disabled) { color: #fff; opacity: 0.9; }
+.section-h { font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; font-weight: 600; color: var(--text-2); }
+.panel { background: var(--bg-1); border: 1px solid var(--line); border-radius: var(--radius); }
+
+/* ---- IDE explorer tree ---- */
+.tree-row {
+  display: flex; align-items: center; gap: 5px;
+  height: 22px; padding: 0 6px 0 4px;
+  cursor: pointer; user-select: none;
+  border-radius: 4px;
+  white-space: nowrap;
+}
+.tree-row:hover { background: var(--bg-2); }
+.tree-row.sel { background: color-mix(in srgb, var(--accent) 12%, transparent); }
+.tree-row.sel .tree-label { color: var(--accent); }
+.tree-row.sel .tree-icon { color: var(--accent); }
+.tree-label { flex: 1; overflow: hidden; text-overflow: ellipsis; }
+.tree-icon { flex-shrink: 0; color: var(--text-2); display: inline-flex; }
+.tree-chevron { flex-shrink: 0; width: 12px; color: var(--text-2); display: inline-flex; align-items: center; transition: transform 0.12s ease; }
+.tree-chevron.open { transform: rotate(90deg); }
+.tree-x { flex-shrink: 0; cursor: pointer; color: var(--text-2); opacity: 0; transition: opacity 0.1s; }
+.tree-row:hover .tree-x { opacity: 1; }
+.tree-x.armed { opacity: 1; color: var(--danger); }
+.tree-indent { position: relative; }
+.tree-indent::before { content: ""; position: absolute; top: 0; bottom: 0; left: 0; width: 1px; background: var(--line); }
+
+/* ---- context menu ---- */
+.ctx-menu {
+  position: fixed; z-index: 200; min-width: 168px;
+  background: var(--bg-1); border: 1px solid var(--line-strong);
+  border-radius: 6px; padding: 4px; font-size: 12px;
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.4);
+}
+.ctx-item {
+  display: flex; align-items: center; gap: 10px;
+  padding: 5px 8px; border-radius: 4px; cursor: pointer; color: var(--text-1);
+}
+.ctx-item:hover { background: var(--bg-2); color: var(--text-0); }
+.ctx-item.danger { color: var(--danger); }
+.ctx-item.danger:hover { background: color-mix(in srgb, var(--danger) 14%, transparent); color: var(--danger); }
+.ctx-item.disabled { opacity: 0.4; pointer-events: none; }
+.ctx-key { margin-left: auto; color: var(--text-2); font-size: 11px; }
+.ctx-sep { height: 1px; background: var(--line); margin: 4px 2px; }
+
+.toast-stack { position: fixed; bottom: 40px; right: 12px; display: flex; flex-direction: column-reverse; gap: 6px; z-index: 100; max-width: 320px; }
+.toast {
+  background: var(--bg-1);
+  border: 1px solid var(--danger);
+  border-radius: 4px;
+  padding: 6px 10px;
+  font-size: 11px;
+  color: var(--text-0);
+  cursor: pointer;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
+}
