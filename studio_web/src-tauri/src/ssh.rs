@@ -305,9 +305,12 @@ pub async fn ssh_connect(
 
     // start (or reuse) the remote kernel.
     emit_status(&app, r#"{"state":"starting-kernel"}"#);
-    // caller-provided python, else try python3 then python via shell `||`.
+    // caller-provided python, else try python3 then python via shell `||`. Treat an empty string
+    // like None — the frontend sends "" when the field is blank, and Some("") would otherwise make
+    // the launch `nohup  -m …` (empty python → nohup eats `-m`). GPU boxes often need an explicit
+    // interpreter (e.g. /opt/conda/bin/python where torch lives), so the field matters.
     let python = python_path
-        .clone()
+        .filter(|s| !s.trim().is_empty())
         .unwrap_or_else(|| "$(command -v python3 || command -v python)".to_string());
     let launch = kernel_launch_command(&repo_dir, &python, &model);
     remote_exec(&session, &launch).await.map_err(|e| {

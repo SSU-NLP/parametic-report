@@ -14,10 +14,17 @@ Open **Settings → Kernel connection → Remote (SSH)** and fill in your GPU se
 | username | your SSH login (`ubuntu`, `ec2-user`, …) |
 | auth | **Password** or **Key (.pem)** — pick the toggle. Cloud GPU boxes (AWS/Lambda) use a `.pem` key |
 | password / key path | password, or path to your private key e.g. `~/.ssh/gpu.pem` (+ passphrase if the key is encrypted) |
-| remote repo dir | `~/parametic-report` (checkout with `pip install -r requirements-studio.txt`) |
+| remote repo dir | absolute path to the checkout, e.g. `/shared/you/parametic/code` or `~/parametic-report` |
+| python path | the interpreter that has the deps, e.g. `/opt/conda/bin/python` — **on GPU boxes torch usually lives in a conda python, not the system `python3`**. Leave blank only if the default `python3` has the deps |
 | model | optional, e.g. `Qwen/Qwen2.5-1.5B-Instruct` |
 
 Password and key passphrase are kept in memory only, never written to disk.
+
+**One-time remote setup** (the app runs the kernel there, it doesn't install it): the repo
+must be on the box and that python must have the studio deps —
+`<python> -m pip install torch transformers fastapi uvicorn websockets` (or
+`-r requirements-studio.txt`). Verify with `<python> -c "import torch; print(torch.cuda.is_available())"`.
+If the kernel won't start, check `/tmp/studio-kernel.log` on the host.
 
 Click **Connect**. The app SSHes in, starts the kernel on the remote (bound to
 `127.0.0.1:8000`, so it's reachable only through the tunnel), opens a local forward

@@ -410,6 +410,7 @@ export default function App() {
   const [sshKeyPassphrase, setSshKeyPassphrase] = useState('')  // state only — never persisted
   const [sshRepoDir, setSshRepoDir] = useState('')
   const [sshModel, setSshModel] = useState('')
+  const [sshPythonPath, setSshPythonPath] = useState('')  // e.g. /opt/conda/bin/python — GPU boxes keep torch in a non-default python
   const [sshConnecting, setSshConnecting] = useState(false)
   const [sshStatus, setSshStatus] = useState<{ state: string; detail?: string } | null>(null)
   const [installed, setInstalled] = useState<{ id: string; size_mb: number | null }[] | null>(null)
@@ -705,7 +706,7 @@ export default function App() {
         password: sshAuth === 'key' ? '' : sshPassword,
         keyPath: sshAuth === 'key' ? sshKeyPath.trim() : '',
         keyPassphrase: sshAuth === 'key' ? sshKeyPassphrase : '',
-        repoDir: sshRepoDir.trim(), pythonPath: '', model: sshModel.trim(),
+        repoDir: sshRepoDir.trim(), pythonPath: sshPythonPath.trim(), model: sshModel.trim(),
       })
       localStorage.setItem('ps_kernel_url', SSH_TUNNEL_WS)
       window.location.reload()
@@ -1656,6 +1657,10 @@ export default function App() {
                   <label style={{ display: 'grid', gap: 2 }}>
                     <span style={{ ...hint, fontSize: 11 }}>remote repo dir</span>
                     <input value={sshRepoDir} onChange={(e) => setSshRepoDir(e.target.value)} placeholder="~/parametic-report" spellCheck={false} disabled={isRemoteConnected()} style={inp} />
+                  </label>
+                  <label style={{ display: 'grid', gap: 2 }}>
+                    <span style={{ ...hint, fontSize: 11 }}>python path (optional)</span>
+                    <input value={sshPythonPath} onChange={(e) => setSshPythonPath(e.target.value)} placeholder="/opt/conda/bin/python (where torch lives)" spellCheck={false} disabled={isRemoteConnected()} style={inp} />
                   </label>
                   <label style={{ display: 'grid', gap: 2 }}>
                     <span style={{ ...hint, fontSize: 11 }}>model (optional)</span>
