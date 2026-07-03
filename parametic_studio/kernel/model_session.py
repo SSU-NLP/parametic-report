@@ -283,8 +283,19 @@ class ModelSession:
             for n in names[1:]:
                 acc = acc & regions[n][p]
             inter_region[p] = acc
+        inter_grid = self._cell_grid(inter_region, L, modules)
+        # lift = observed ∩-fraction / expected under independence (product of per-region fractions).
+        # top-k% spots make raw fractions near-uniform and tiny — lift is the readable signal.
+        frac = {n: self._cell_grid(r, L, modules) for n, r in regions.items()}
+        lift = [[0.0] * len(modules) for _ in range(L)]
+        for l in range(L):
+            for c in range(len(modules)):
+                expected = 1.0
+                for n in names:
+                    expected *= frac[n][l][c]
+                lift[l][c] = inter_grid[l][c] / expected if expected > 0 else 0.0
         return {"layers": L, "modules": modules, "grids": grids, "kinds": kinds,
-                "intersection": self._cell_grid(inter_region, L, modules), "jaccard": jaccard}
+                "intersection": inter_grid, "intersection_lift": lift, "jaccard": jaccard}
 
     def intervene(self, region, op="scale", alpha=0.0, key="default"):
         """Edit: reversibly modify selected weights under `key`. op = scale|zero|mean|random.

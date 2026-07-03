@@ -132,7 +132,7 @@ function Grid({ rows, cols, rowH, onRow, onRowEnter, onLeave, cellTitle }: { row
     </div>
   )
 }
-function SpotGrid({ grid, modules, onCell, selected, color = ampColor }: { grid: number[][]; modules: string[]; onCell?: (l: number, module: string) => void; selected?: Set<string>; color?: (v: number, max: number) => string }) {
+function SpotGrid({ grid, modules, onCell, selected, color = ampColor, cellTitle }: { grid: number[][]; modules: string[]; onCell?: (l: number, module: string) => void; selected?: Set<string>; color?: (v: number, max: number) => string; cellTitle?: (l: number, module: string, v: number) => string }) {
   const flat = grid.flat(); const max = Math.max(...flat)
   const sorted = [...flat].sort((a, b) => b - a)
   const thr = sorted[Math.max(0, Math.floor(sorted.length * 0.05) - 1)] ?? Infinity
@@ -142,7 +142,7 @@ function SpotGrid({ grid, modules, onCell, selected, color = ampColor }: { grid:
         <div key={l} style={{ display: 'grid', gridTemplateColumns: `repeat(${modules.length}, 1fr)`, gap: 1 }}>
           {row.map((v, c) => {
             const sel = selected?.has(`${l}.${modules[c]}`)
-            return <div key={c} onClick={onCell ? () => onCell(l, modules[c]) : undefined} title={`L${l} · ${modules[c]} · ${v.toExponential(2)}${onCell ? ' — click → knob' : ''}`}
+            return <div key={c} onClick={onCell ? () => onCell(l, modules[c]) : undefined} title={cellTitle ? cellTitle(l, modules[c], v) : `L${l} · ${modules[c]} · ${v.toExponential(2)}${onCell ? ' — click → knob' : ''}`}
               style={{ background: color(v, max), cursor: onCell ? 'pointer' : 'default', outline: sel ? '1.5px solid var(--accent)' : v >= thr ? `1px solid ${isLight() ? '#1A1717' : '#FDFCFC'}` : 'none', outlineOffset: sel ? -1 : 0 }} />
           })}
         </div>
@@ -341,7 +341,7 @@ export default function App() {
   }
   const [regionInfo, setRegionInfo] = useState<Record<string, { layers: number; modules: string[]; grid: number[][]; importance: number[][] | null; count: number }>>({})
   const [compareSel, setCompareSel] = useState<string[]>([])  // region names in the compare tab (order = hue)
-  const [compareData, setCompareData] = useState<{ names: string[]; layers: number; modules: string[]; grids: Record<string, number[][]>; kinds: Record<string, string>; intersection: number[][]; jaccard: Record<string, number> } | null>(null)
+  const [compareData, setCompareData] = useState<{ names: string[]; layers: number; modules: string[]; grids: Record<string, number[][]>; kinds: Record<string, string>; intersection: number[][]; intersectionLift: number[][] | null; jaccard: Record<string, number> } | null>(null)
   // parse each dataset ONCE per change — parsing in render paths re-chewed megabytes of JSONL on
   // every token-stream re-render (GB-scale GC churn).
   const dsMeta = useMemo(() => {
@@ -508,7 +508,7 @@ export default function App() {
       logEntry(mid, 'result', `region "${m.name}" saved (${m.count} weights)`); sendTo(mid, { type: 'regions' })
     }
     else if (m.type === 'region_info') { setPendingKey(`region_info:${mid}`, false); setRegionInfo((ri) => ({ ...ri, [m.name]: { layers: m.layers, modules: m.modules, grid: m.grid, importance: m.importance ?? null, count: m.count } })) }
-    else if (m.type === 'region_comparison') { setPendingKey(`region_compare:${mid}`, false); setCompareData({ names: m.names, layers: m.layers, modules: m.modules, grids: m.grids, kinds: m.kinds ?? {}, intersection: m.intersection, jaccard: m.jaccard }) }
+    else if (m.type === 'region_comparison') { setPendingKey(`region_compare:${mid}`, false); setCompareData({ names: m.names, layers: m.layers, modules: m.modules, grids: m.grids, kinds: m.kinds ?? {}, intersection: m.intersection, intersectionLift: m.intersection_lift ?? null, jaccard: m.jaccard }) }
     else if (m.type === 'regions') patch(mid, (d) => ({ ...d, regions: m.regions }))
     else if (m.type === 'train_step') patch(mid, (d) => ({ ...d, train: { ...d.train, losses: [...d.train.losses, m.loss], total: m.total, running: true } }))
     else if (m.type === 'trained') {
@@ -844,8 +844,15 @@ export default function App() {
               </div>
             ))}
           </div>
-          <div style={{ color: 'var(--text-1)', marginBottom: 3 }}>intersection<span style={hint}> · weights selected by ALL {cd.names.length} regions (cell = fraction)</span></div>
-          <SpotGrid grid={cd.intersection} modules={cd.modules} />
+          <div style={{ color: 'var(--text-1)', marginBottom: 3 }}>intersection<span style={hint}> · weights selected by ALL {cd.names.length} regions · {cd.intersectionLift
+            ? <>color = <b>enrichment vs chance</b> (lift; independent top-k ⇒ 1×) · max {Math.max(...cd.intersectionLift.flat()).toFixed(0)}× · ∩ fraction ≤ {(Math.max(...cd.intersection.flat()) * 100).toFixed(1)}%</>
+            : 'cell = fraction'}</span></div>
+          <SpotGrid grid={cd.intersectionLift ?? cd.intersection} modules={cd.modules}
+            color={(() => {  // per-param top-k ⇒ expected is uniform ⇒ lift ∝ fraction; min-max stretch so the carpet shows contrast
+              const flat = (cd.intersectionLift ?? cd.intersection).flat(); const lo = Math.min(...flat), hi = Math.max(...flat)
+              return (v: number) => ampColor(hi > lo ? (v - lo) / (hi - lo) : 0, 1)
+            })()}
+            cellTitle={cd.intersectionLift ? (l, mod, v) => `L${l} · ${mod} · ${v.toFixed(1)}× vs chance · ∩ ${(cd.intersection[l][cd.modules.indexOf(mod)] * 100).toFixed(2)}% of weights` : undefined} />
           <div style={{ marginTop: 10, fontSize: 11 }}>
             <span style={hint}>pairwise Jaccard (|A∩B| / |A∪B|):</span>
             {Object.entries(cd.jaccard).map(([k, v]) => {

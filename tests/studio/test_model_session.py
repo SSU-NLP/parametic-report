@@ -271,6 +271,10 @@ def test_region_compare_jaccard_and_intersection():
     assert cmp3["jaccard"]["a|c"] == 0.0
     assert all(v == 0.0 for row in cmp3["intersection"] for v in row)
     assert set(cmp3["grids"]) == {"a", "c"}              # per-region grids included
+    # lift = observed ∩ / expected-under-independence. identical full-cell regions:
+    # observed 1.0, expected 1.0*1.0 → lift 1. disjoint: observed 0 → lift 0.
+    assert cmp2["intersection_lift"][0][gi] == 1.0
+    assert all(v == 0.0 for row in cmp3["intersection_lift"] for v in row)
 
 
 def test_region_grid_shows_selection_fraction():
