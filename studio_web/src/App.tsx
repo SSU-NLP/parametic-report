@@ -119,6 +119,14 @@ function ampColor(v: number, max: number) {   // amber ramp (spot importance)
 }
 // per-region hues for spot comparison — each saved region renders in its own color
 const REGION_HUES: [number, number, number][] = [[0x00, 0x7a, 0xff], [0xe0, 0xa8, 0x5e], [0x30, 0xd1, 0x58], [0xff, 0x64, 0x82]]
+function hslToRgb(h: number, s: number, l: number): [number, number, number] {
+  const c = (1 - Math.abs(2 * l - 1)) * s, x = c * (1 - Math.abs(((h / 60) % 2) - 1)), m = l - c / 2
+  const [r, g, b] = h < 60 ? [c, x, 0] : h < 120 ? [x, c, 0] : h < 180 ? [0, c, x] : h < 240 ? [0, x, c] : h < 300 ? [x, 0, c] : [c, 0, x]
+  return [Math.round((r + m) * 255), Math.round((g + m) * 255), Math.round((b + m) * 255)]
+}
+// distinct hue per compare region, unbounded: curated palette first, then golden-angle HSL so any
+// number of regions each get their own colour (no cap on how many spots you compare).
+const hueAt = (i: number): [number, number, number] => i < REGION_HUES.length ? REGION_HUES[i] : hslToRgb((i * 137.508) % 360, 0.62, 0.62)
 const hueRamp = (rgb: [number, number, number]) => (v: number, max: number) => {
   const t = max > 0 ? v / max : 0
   return ramp(t, isLight() ? [0xE9, 0xE7, 0xE4] : [0x20, 0x1d, 0x1d], rgb)
@@ -827,7 +835,7 @@ export default function App() {
   }
   function toggleCompare(name: string) {
     setCompareSel((sel) => {
-      const next = sel.includes(name) ? sel.filter((x) => x !== name) : [...sel, name].slice(-REGION_HUES.length)  // cap at palette size
+      const next = sel.includes(name) ? sel.filter((x) => x !== name) : [...sel, name]  // no cap — hueAt() colours any count
       if (next.length >= 2) sendTo(focused(), { type: 'region_compare', names: next })
       else setCompareData(null)
       return next
@@ -962,12 +970,12 @@ export default function App() {
       const regs = data[focused()]?.regions ?? []
       const cd = compareData
       return (<>
-        <div style={{ color: 'var(--text-1)', marginBottom: 4 }}>region compare<span style={hint}> · pick 2–{REGION_HUES.length} saved regions (e.g. per-language spots)</span></div>
+        <div style={{ color: 'var(--text-1)', marginBottom: 4 }}>region compare<span style={hint}> · pick 2+ saved regions (e.g. per-language spots)</span></div>
         <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', marginBottom: 10 }}>
           {regs.map((r) => {
             const idx = compareSel.indexOf(r.name)
             const on = idx >= 0
-            return <span key={r.name} onClick={() => toggleCompare(r.name)} style={{ fontSize: 11, padding: '1px 8px', borderRadius: 4, cursor: 'pointer', border: `1px solid ${on ? hueCss(REGION_HUES[idx]) : 'var(--line-strong)'}`, color: on ? hueCss(REGION_HUES[idx]) : 'var(--text-2)' }}>{on ? '● ' : ''}◈ {r.name}</span>
+            return <span key={r.name} onClick={() => toggleCompare(r.name)} style={{ fontSize: 11, padding: '1px 8px', borderRadius: 4, cursor: 'pointer', border: `1px solid ${on ? hueCss(hueAt(idx)) : 'var(--line-strong)'}`, color: on ? hueCss(hueAt(idx)) : 'var(--text-2)' }}>{on ? '● ' : ''}◈ {r.name}</span>
           })}
           {regs.length < 2 && <span style={{ ...hint, fontSize: 11 }}>save regions in the spot view first (one per dataset)</span>}
         </div>
@@ -976,8 +984,8 @@ export default function App() {
           <div style={{ display: 'grid', gridTemplateColumns: `repeat(${Math.min(cd.names.length, 2)}, 1fr)`, gap: 12, marginBottom: 10 }}>
             {cd.names.map((n, i) => (
               <div key={n}>
-                <div style={{ fontSize: 11, color: hueCss(REGION_HUES[i]), marginBottom: 3 }}>◈ {n}<span style={hint}> · {cd.kinds[n] === 'importance' ? '|g×w| importance' : 'selection fraction — legacy region, re-save to get the importance map'}</span></div>
-                <SpotGrid grid={cd.grids[n]} modules={cd.modules} color={hueRamp(REGION_HUES[i])} onHover={setCompareHover} hovered={compareHover} />
+                <div style={{ fontSize: 11, color: hueCss(hueAt(i)), marginBottom: 3 }}>◈ {n}<span style={hint}> · {cd.kinds[n] === 'importance' ? '|g×w| importance' : 'selection fraction — legacy region, re-save to get the importance map'}</span></div>
+                <SpotGrid grid={cd.grids[n]} modules={cd.modules} color={hueRamp(hueAt(i))} onHover={setCompareHover} hovered={compareHover} />
               </div>
             ))}
           </div>
@@ -1021,7 +1029,7 @@ export default function App() {
             <span style={hint}>pairwise Jaccard (|A∩B| / |A∪B|):</span>
             {Object.entries(cd.jaccard).map(([k, v]) => {
               const [a, b] = k.split('|')
-              return <div key={k} style={{ color: 'var(--text-1)' }}><span style={{ color: hueCss(REGION_HUES[cd.names.indexOf(a)]) }}>{a}</span> ∩ <span style={{ color: hueCss(REGION_HUES[cd.names.indexOf(b)]) }}>{b}</span> = <span style={{ color: 'var(--text-0)' }}>{(v * 100).toFixed(1)}%</span></div>
+              return <div key={k} style={{ color: 'var(--text-1)' }}><span style={{ color: hueCss(hueAt(cd.names.indexOf(a))) }}>{a}</span> ∩ <span style={{ color: hueCss(hueAt(cd.names.indexOf(b))) }}>{b}</span> = <span style={{ color: 'var(--text-0)' }}>{(v * 100).toFixed(1)}%</span></div>
             })}
           </div>
         </>)}
