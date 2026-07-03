@@ -57,12 +57,15 @@ class ModelSession:
     def _migrate_meta(self, pt_path, meta_path):
         """Legacy .pt without a sidecar: load once → count/grid → write meta → drop the mask (1-time at boot)."""
         blob = torch.load(pt_path, map_location="cpu")
-        if isinstance(blob, dict) and "masks" in blob:  # v2 format: masks + importance grid
+        if isinstance(blob, dict) and "masks" in blob:  # v2/v3: masks + grid (+ base_topk in v3)
             masks, grid = blob["masks"], blob.get("grid")
         else:  # v1: plain mask dict
             masks, grid = blob, None
         count = sum(int(v.sum()) for v in masks.values())
-        meta_path.write_text(json.dumps({"count": count, "grid": grid}))
+        meta = {"count": count, "grid": grid}
+        if isinstance(blob, dict) and blob.get("base_topk") is not None:  # v3 keeps re-threshold reach
+            meta["base_topk"] = blob["base_topk"]
+        meta_path.write_text(json.dumps(meta))
         del blob, masks
 
     def free_memory(self):
@@ -218,33 +221,73 @@ class ModelSession:
             self._region_order.remove(victim)
             self.regions.pop(victim, None)
 
-    def get_region(self, name):
-        """Return a saved region's masks, loading from disk (v1/v2) on cache miss. LRU-cached (cap 2)."""
-        if name in self.regions:
+    def get_region(self, name, topk=None):
+        """Return a saved region's masks, loading from disk (v1/v2/v3) on cache miss. LRU-cached (cap 2).
+
+        topk (v3 only): re-threshold to a *smaller* top-k% without recomputing. A saved region at
+        base_topk holds the union of every tighter %, so keeping the top new_count by the stored
+        importance in each param yields exactly the fresh top-topk% mask. topk None → full saved mask;
+        topk > base_topk (or no importance) → full saved mask (can't grow past what was saved)."""
+        if topk is None and name in self.regions:
             return self.regions[name]
-        blob = torch.load(self._region_files[name], map_location="cpu")
-        region = blob["masks"] if isinstance(blob, dict) and "masks" in blob else blob  # v2 | v1
-        self._cache_region(name, region)
+        blob = torch.load(self._region_files[name], map_location="cpu") if name in self._region_files else None
+        if blob is None:  # memory-only region (no backing .pt): full mask, no re-threshold data
+            return self.regions[name]
+        region = blob["masks"] if isinstance(blob, dict) and "masks" in blob else blob  # v3/v2 | v1
+        if topk is not None and isinstance(blob, dict) and "importance" in blob:
+            base = blob.get("base_topk")
+            if base is not None and topk <= base:
+                region = self._rethreshold(region, blob["importance"], base, topk)
+                return region  # derived mask — don't pollute the LRU cache of full masks
+        if topk is None:
+            self._cache_region(name, region)
         return region
 
-    def region_meta(self):
-        """Saved-region list without loading masks: [{name, count}] from the meta sidecars."""
-        return [{"name": n, "count": m.get("count", 0)} for n, m in self._region_meta.items()]
+    def _rethreshold(self, region, importance, base, topk):
+        """Per-param: keep the top new_count of the saved base-mask by stored importance → top-topk% mask."""
+        out = {}
+        for pname, mask in region.items():
+            new_count = max(1, round(mask.numel() * topk))          # min 1: never empty a selected param
+            idx = mask.nonzero(as_tuple=True)[0] if mask.dim() == 1 else mask.reshape(-1).nonzero(as_tuple=True)[0]
+            imp = importance[pname]                                  # 1D, aligned to mask.nonzero() order
+            new_count = min(new_count, imp.numel())                 # can't keep more than base selected
+            keep = torch.topk(imp, new_count, largest=True).indices  # tightest new_count of the base set
+            new_flat = torch.zeros(mask.numel(), dtype=torch.bool)
+            new_flat[idx[keep]] = True
+            out[pname] = new_flat.reshape(mask.shape)
+        return out
 
-    def save_region(self, name, region, grid=None):
-        """Locate: keep a named mask (+ its importance grid, for faithful viewing) in the workspace and on disk."""
+    def region_meta(self):
+        """Saved-region list without loading masks: [{name, count, base_topk?}] from the meta sidecars.
+        base_topk (v3) is the upper bound for re-thresholding a saved spot to a smaller %."""
+        return [{"name": n, "count": m.get("count", 0), "base_topk": m.get("base_topk")}
+                for n, m in self._region_meta.items()]
+
+    def save_region(self, name, region, grid=None, importance=None, base_topk=None):
+        """Locate: keep a named mask (+ its importance grid, for faithful viewing) in the workspace and on disk.
+
+        importance (v3): {param_name: 1D float tensor} — the |grad×param| value at each mask-True
+        position, ordered to match mask.nonzero(). Persisted only in the .pt (per-param, too big for
+        the meta sidecar). With base_topk it lets get_region re-threshold to any smaller top-k%."""
         self._cache_region(name, region)
         self.region_grids[name] = grid
         count = sum(int(v.sum()) for v in region.values())
-        self._region_meta[name] = {"count": count, "grid": grid}
+        meta = {"count": count, "grid": grid}
+        if importance is not None and base_topk is not None:
+            meta["base_topk"] = base_topk  # importance itself stays in the .pt — per-param, large
+        self._region_meta[name] = meta
         d = self._region_dir()
         if d:
             d.mkdir(parents=True, exist_ok=True)
             safe = re.sub(r"[^\w.-]", "_", name)
             pt = d / f"{safe}.pt"
+            blob = {"masks": {k: v.cpu() for k, v in region.items()}, "grid": grid}
+            if importance is not None and base_topk is not None:  # v3
+                blob["importance"] = {k: v.cpu() for k, v in importance.items()}
+                blob["base_topk"] = base_topk
             # ponytail: bool dump ≈ 1 byte/param (~0.4GB for a 0.5B full region) — pack indices if disk matters.
-            torch.save({"masks": {k: v.cpu() for k, v in region.items()}, "grid": grid}, pt)
-            (d / f"{safe}.meta.json").write_text(json.dumps({"count": count, "grid": grid}))
+            torch.save(blob, pt)
+            (d / f"{safe}.meta.json").write_text(json.dumps(meta))
             self._region_files[name] = pt
 
     def delete_region(self, name):
@@ -267,6 +310,7 @@ class ModelSession:
         L, modules = len(self.model.model.layers), self._modules()
         return {"layers": L, "modules": modules, "grid": self._cell_grid(region, L, modules),
                 "importance": self.region_grids.get(name),
+                "base_topk": self._region_meta.get(name, {}).get("base_topk"),
                 "count": sum(int(v.sum()) for v in region.values())}
 
     def _cell_grid(self, region, L, modules):

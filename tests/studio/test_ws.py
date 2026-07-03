@@ -210,7 +210,7 @@ def test_ws_save_region_then_named_intervene():
         assert saved["type"] == "region_saved" and saved["name"] == "r1" and saved["count"] > 0
         ws.send_json({"type": "regions"})
         lst = ws.receive_json()
-        assert lst["regions"] == [{"name": "r1", "count": saved["count"]}]
+        assert lst["regions"] == [{"name": "r1", "count": saved["count"], "base_topk": 0.5}]
         ws.send_json({"type": "ppl", "examples": ex})
         base = ws.receive_json()["value"]
         ws.send_json({"type": "intervene", "region": {"kind": "named", "name": "r1"}, "op": "zero"})

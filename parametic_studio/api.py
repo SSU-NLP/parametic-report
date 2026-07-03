@@ -333,7 +333,7 @@ def _resolve_region(session, r):
         return session.locate_spot(r["examples"], r.get("topk", 0.05))
     if r["kind"] == "cell":
         return session.locate_cell(r["layer"], r["module"])
-    return session.get_region(r["name"])  # named — lazy-loaded from disk (LRU cached)
+    return session.get_region(r["name"], r.get("topk"))  # named — lazy from disk; topk re-thresholds (v3)
 
 
 def _locate_emitter(websocket, msg, op):
@@ -634,11 +634,15 @@ async def _dispatch(websocket, msg, t):
             emit = _locate_emitter(websocket, msg, "save_region") if r["kind"] == "spot" else None
 
             def _save():
-                if r["kind"] == "spot":  # keep the importance heatmap alongside the mask
-                    region, grid = session.locate_spot(r["examples"], r.get("topk", 0.05), return_grid=True, progress=emit)
+                if r["kind"] == "spot":  # keep the importance heatmap + per-param values (re-thresholdable)
+                    base_topk = r.get("topk", 0.05)
+                    region, grid = session.locate_spot(r["examples"], base_topk, return_grid=True, progress=emit)
+                    acc = session._get_importance(r["examples"])  # P14 cache hit (no backward)
+                    importance = {n: acc[n][m.to(acc[n].device)].cpu() for n, m in region.items()}  # True vals, nonzero order
+                    session.save_region(msg["name"], region, grid=grid, importance=importance, base_topk=base_topk)
                 else:
-                    region, grid = _resolve_region(session, r), None
-                session.save_region(msg["name"], region, grid=grid)
+                    region = _resolve_region(session, r)
+                    session.save_region(msg["name"], region, grid=None)
                 session.free_memory()
                 return region
 

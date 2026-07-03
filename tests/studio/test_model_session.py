@@ -297,6 +297,78 @@ def test_saved_spot_region_keeps_importance_and_persists(tmp_path, monkeypatch):
     assert s.region_grid("legacy")["importance"] is None
 
 
+def _save_spot_with_importance(s, name, examples, base_topk):
+    """Mirror api.py _save: locate at base %, pull the True-position importance from the P14 cache, save v3."""
+    region, grid = s.locate_spot(examples, base_topk, return_grid=True)
+    acc = s._get_importance(examples)  # cache hit — same values locate_spot thresholded
+    importance = {n: acc[n][m.to(acc[n].device)].cpu() for n, m in region.items()}
+    s.save_region(name, region, grid=grid, importance=importance, base_topk=base_topk)
+    return region
+
+
+def test_get_region_rethreshold_matches_fresh_locate(tmp_path, monkeypatch):
+    # the core P15 claim: re-thresholding a saved base-% region == a fresh locate at the tighter %.
+    monkeypatch.setenv("PARAMETIC_STUDIO_HOME", str(tmp_path))
+    ex = ["alpha", "beta"]
+    s = ModelSession(_tiny(), _EncTok(eos=-1), torch.device("cpu"), model_id="p15/t")
+    base = _save_spot_with_importance(s, "spot", ex, base_topk=0.5)
+    tighter = s.get_region("spot", topk=0.25)
+    fresh = s.locate_spot(ex, topk=0.25)                      # same cached importance → must be bit-identical
+    assert set(tighter) == set(fresh)
+    for name in fresh:
+        assert torch.equal(tighter[name], fresh[name])
+        assert (tighter[name] & base[name]).sum() == tighter[name].sum()  # 0.25 ⊂ 0.5
+    assert sum(int(m.sum()) for m in tighter.values()) < sum(int(m.sum()) for m in base.values())
+
+
+def test_rethreshold_survives_restart(tmp_path, monkeypatch):
+    monkeypatch.setenv("PARAMETIC_STUDIO_HOME", str(tmp_path))
+    ex = ["alpha", "beta"]
+    s = ModelSession(_tiny(), _EncTok(eos=-1), torch.device("cpu"), model_id="p15/r")
+    _save_spot_with_importance(s, "spot", ex, base_topk=0.5)
+    s2 = ModelSession(_tiny(), _EncTok(eos=-1), torch.device("cpu"), model_id="p15/r")  # fresh boot, mask on disk
+    assert s2._region_meta["spot"].get("base_topk") == 0.5      # base % reaches the meta sidecar
+    tighter = s2.get_region("spot", topk=0.25)
+    fresh = s2.locate_spot(ex, topk=0.25)
+    for name in fresh:
+        assert torch.equal(tighter[name], fresh[name])
+
+
+def test_get_region_topk_none_returns_full_saved_mask(tmp_path, monkeypatch):
+    monkeypatch.setenv("PARAMETIC_STUDIO_HOME", str(tmp_path))
+    ex = ["alpha", "beta"]
+    s = ModelSession(_tiny(), _EncTok(eos=-1), torch.device("cpu"), model_id="p15/n")
+    base = _save_spot_with_importance(s, "spot", ex, base_topk=0.5)
+    full = s.get_region("spot")                                # None → whole saved mask
+    for name in base:
+        assert torch.equal(full[name], base[name])
+
+
+def test_get_region_topk_above_base_returns_base_mask(tmp_path, monkeypatch):
+    # can't grow past what was saved: topk > base_topk falls back to the full base mask.
+    monkeypatch.setenv("PARAMETIC_STUDIO_HOME", str(tmp_path))
+    ex = ["alpha", "beta"]
+    s = ModelSession(_tiny(), _EncTok(eos=-1), torch.device("cpu"), model_id="p15/a")
+    base = _save_spot_with_importance(s, "spot", ex, base_topk=0.25)
+    got = s.get_region("spot", topk=0.5)                       # above base → no re-threshold
+    for name in base:
+        assert torch.equal(got[name], base[name])
+
+
+def test_get_region_topk_ignored_for_legacy_region(tmp_path, monkeypatch):
+    # v2 region (no importance): topk is safely ignored, full mask returned either way.
+    monkeypatch.setenv("PARAMETIC_STUDIO_HOME", str(tmp_path))
+    s = ModelSession(_tiny(), _EncTok(eos=-1), torch.device("cpu"), model_id="p15/l")
+    region, grid = s.locate_spot(["alpha"], topk=0.5, return_grid=True)
+    s.save_region("v2", region, grid=grid)                     # v2: masks + grid, no importance
+    s2 = ModelSession(_tiny(), _EncTok(eos=-1), torch.device("cpu"), model_id="p15/l")  # reload from disk
+    full = s2.get_region("v2")
+    with_topk = s2.get_region("v2", topk=0.1)                  # no re-threshold data → full mask
+    for name in region:
+        assert torch.equal(full[name], region[name])
+        assert torch.equal(with_topk[name], region[name])
+
+
 def test_delete_region_removes_memory_and_disk(tmp_path, monkeypatch):
     monkeypatch.setenv("PARAMETIC_STUDIO_HOME", str(tmp_path))
     s = ModelSession(_tiny(), _EncTok(eos=-1), torch.device("cpu"), model_id="t/t")
@@ -331,7 +403,7 @@ def test_legacy_pt_migrates_to_meta_on_boot(tmp_path, monkeypatch):
     s = ModelSession(_tiny(), _EncTok(eos=-1), torch.device("cpu"), model_id="t/t")
     assert (d / "old.meta.json").exists()                                # migrated on boot
     count = sum(int(m.sum()) for m in region.values())
-    assert s.region_meta() == [{"name": "old", "count": count}]
+    assert s.region_meta() == [{"name": "old", "count": count, "base_topk": None}]  # legacy v2 → no re-threshold
 
 
 def test_region_compare_jaccard_and_intersection():

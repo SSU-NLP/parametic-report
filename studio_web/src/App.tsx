@@ -79,12 +79,12 @@ function cmLangExt(name: string) {
 
 type Logit = { token: string; prob: number }
 type Spot = { layers: number; modules: string[]; grid: number[][] }
-type KnobRow = { key: string; kind: 'cell' | 'spot'; layer?: number; module?: string; topk?: number; op: string; alpha: number }
+type KnobRow = { key: string; kind: 'cell' | 'spot' | 'named'; layer?: number; module?: string; name?: string; topk?: number; op: string; alpha: number }
 type ModelData = {
   output: string; frames: number[][][]; act: number[][] | null; logit: Logit[] | null;
   spot: Spot | null; spotProg: { i: number; total: number } | null; perhead: { layer: number; data: number[][] } | null
   knobs: KnobRow[]; kppl: { base: number | null; inter: number | null }; ab: { base: string | null; inter: string | null }
-  regions: { name: string; count: number }[]; evals: { code: number | null; general: number | null }
+  regions: { name: string; count: number; base_topk?: number }[]; evals: { code: number | null; general: number | null }
   evalProg: { i: number; total: number; passed: number } | null
   evalResult: { dataset: string; passed: number; total: number; pass_at_1: number; damaged: boolean; knobCount: number } | null
   evalPrev: { dataset: string; passed: number; total: number; pass_at_1: number; damaged: boolean; knobCount: number } | null
@@ -348,6 +348,8 @@ export default function App() {
   const [spotN, setSpotN] = useState('')                 // '' = all examples
   const [spotPick, setSpotPick] = useState<'first' | 'random'>('first')
   const [evalDsName, setEvalDsName] = useState('')       // '' = eval kppl on spot data (dsExamples); else a loaded dataset name
+  const [namedRegionPick, setNamedRegionPick] = useState('')   // knob board: "+ from saved region" picker
+  const [namedRegionTopk, setNamedRegionTopk] = useState(0.05) // its topk %, capped by the picked region's base_topk
   // P13: pass@k (HumanEvalPack) eval view — separate dataset pick + gen params from the spot kppl "eval on"
   const [codeEvalDsName, setCodeEvalDsName] = useState('')
   const [codeEvalTemp, setCodeEvalTemp] = useState(0)
@@ -361,7 +363,7 @@ export default function App() {
     for (let i = 0; i < n; i++) { const j = i + Math.floor(Math.random() * (pool.length - i)); [pool[i], pool[j]] = [pool[j], pool[i]] }
     return pool.slice(0, n)
   }
-  const [regionInfo, setRegionInfo] = useState<Record<string, { layers: number; modules: string[]; grid: number[][]; importance: number[][] | null; count: number }>>({})
+  const [regionInfo, setRegionInfo] = useState<Record<string, { layers: number; modules: string[]; grid: number[][]; importance: number[][] | null; count: number; base_topk?: number }>>({})
   const [compareSel, setCompareSel] = useState<string[]>([])  // region names in the compare tab (order = hue)
   const [compareHover, setCompareHover] = useState<string | null>(null)  // shared "L.module" cell — cross-highlights every compare grid
   const [interMetric, setInterMetric] = useState<'shared' | 'lift' | 'fraction'>('shared')  // intersection grid coloring
@@ -553,7 +555,7 @@ export default function App() {
       setPendingKey(`save_region:${mid}`, false); setLocateProg((p) => { const n = { ...p }; delete n.save_region; return n })
       logEntry(mid, 'result', `region "${m.name}" saved (${m.count} weights)`); sendTo(mid, { type: 'regions' })
     }
-    else if (m.type === 'region_info') { setPendingKey(`region_info:${mid}`, false); setRegionInfo((ri) => ({ ...ri, [m.name]: { layers: m.layers, modules: m.modules, grid: m.grid, importance: m.importance ?? null, count: m.count } })) }
+    else if (m.type === 'region_info') { setPendingKey(`region_info:${mid}`, false); setRegionInfo((ri) => ({ ...ri, [m.name]: { layers: m.layers, modules: m.modules, grid: m.grid, importance: m.importance ?? null, count: m.count, base_topk: m.base_topk } })) }
     else if (m.type === 'region_comparison') { setPendingKey(`region_compare:${mid}`, false); setCompareData({ names: m.names, layers: m.layers, modules: m.modules, grids: m.grids, kinds: m.kinds ?? {}, intersection: m.intersection, intersectionLift: m.intersection_lift ?? null, jaccard: m.jaccard }) }
     else if (m.type === 'regions') patch(mid, (d) => ({ ...d, regions: m.regions }))
     else if (m.type === 'train_step') patch(mid, (d) => ({ ...d, train: { ...d.train, losses: [...d.train.losses, m.loss], total: m.total, running: true } }))
@@ -1015,6 +1017,7 @@ export default function App() {
           : 'selection fraction per (layer, module) — legacy region without a saved importance map (re-save to get one). note: per-param top-k% makes this ~uniform by construction.'}</div>
         <ScaleBar max={Math.max(...g.flat())} color={ampColor} label={info.importance ? '|g×w|' : 'fraction'} />
         <SpotGrid grid={g} modules={info.modules} />
+        {info.base_topk != null && <div style={{ ...hint, fontSize: 11, marginTop: 4 }}>saved at top {(info.base_topk * 100).toFixed(3)}% — adjustable down from there as a knob, never up</div>}
         <div style={{ ...hint, fontSize: 11, marginTop: 8 }}>to use it: spot view → named-region knob · train view → region select</div>
       </>)
     }
@@ -1215,7 +1218,9 @@ export default function App() {
         const evalExamples = evalDsName ? (dsMeta[evalDsName]?.examples ?? examples) : examples  // kppl measurement set — may differ from spot data
         const selected = new Set(d.knobs.map((k) => k.key))
         const measure = () => sendTo(mid, { type: 'ppl', examples: evalExamples, tag: 'inter' })
-        const region = (k: KnobRow) => k.kind === 'spot' ? { kind: 'spot', examples, topk: k.topk ?? 0.05 } : { kind: 'cell', layer: k.layer, module: k.module }
+        const region = (k: KnobRow) => k.kind === 'spot' ? { kind: 'spot', examples, topk: k.topk ?? 0.05 }
+          : k.kind === 'named' ? { kind: 'named', name: k.name, ...(k.topk != null ? { topk: k.topk } : {}) }
+          : { kind: 'cell', layer: k.layer, module: k.module }
         const sendKnob = (k: KnobRow) => { sendTo(mid, { type: 'intervene', region: region(k), op: k.op, alpha: k.alpha, key: k.key }); measure() }
         const baselineOnce = () => { if (d.knobs.length === 0 && d.kppl.base == null) sendTo(mid, { type: 'ppl', examples: evalExamples, tag: 'base' }) }  // clean model baseline first
         const addKnob = (row: KnobRow) => { baselineOnce(); patch(mid, (dd) => ({ ...dd, knobs: [...dd.knobs, row] })); sendKnob(row) }
@@ -1252,15 +1257,44 @@ export default function App() {
                 </select>
               </span>
             </div>
-            <div style={{ marginBottom: 6 }}>
+            <div style={{ marginBottom: 6, display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 6 }}>
               {!selected.has('spot') && <Btn onClick={() => addKnob({ key: 'spot', kind: 'spot', topk: 0.05, op: 'scale', alpha: 0 })} style={{ padding: '2px 10px' }}>+ Top-k% spot</Btn>}
-              {d.knobs.length === 0 && <span style={{ ...hint, marginLeft: 8 }}>or click a spot cell above ↑</span>}
-              {locateProg.intervene && <span style={{ ...hint, fontSize: 11, marginLeft: 8 }}>locating… {locateProg.intervene.i}/{locateProg.intervene.total}</span>}
+              {d.knobs.length === 0 && <span style={hint}>or click a spot cell above ↑</span>}
+              {locateProg.intervene && <span style={{ ...hint, fontSize: 11 }}>locating… {locateProg.intervene.i}/{locateProg.intervene.total}</span>}
+              {d.regions.length > 0 && (() => {
+                const cap = d.regions.find((r) => r.name === namedRegionPick)?.base_topk  // saved % = adjustable upper bound
+                const capPct = cap != null ? cap * 100 : 100
+                return (<>
+                  <select value={namedRegionPick} onChange={(e) => setNamedRegionPick(e.target.value)} title="apply a saved region as a knob, re-thresholded to the % below" style={{ fontSize: 11, background: 'var(--bg-2)', color: 'var(--text-1)', border: '1px solid var(--line-strong)', borderRadius: 4, padding: '2px 4px' }}>
+                    <option value="">◈ from saved region…</option>
+                    {d.regions.map((r) => <option key={r.name} value={r.name}>{r.name}</option>)}
+                  </select>
+                  {namedRegionPick && <>
+                    <input type="number" min={0.001} max={capPct} step={0.005} value={+(namedRegionTopk * 100).toFixed(4)}
+                      onChange={(e) => setNamedRegionTopk(Math.min(capPct, Math.max(0.001, Number(e.target.value) || 0.001)) / 100)}
+                      title={cap != null ? `top-k% of the saved region · adjustable down from the saved ${capPct.toFixed(3)}%` : 'top-k% of the saved region'}
+                      style={{ width: 56, background: 'var(--bg-2)', color: 'var(--text-1)', border: '1px solid var(--line-strong)', borderRadius: 3, fontSize: 11, padding: '0 2px' }} />
+                    <span style={hint}>%{cap != null ? ` (≤ saved ${capPct.toFixed(3)}%)` : ''}</span>
+                    <Btn onClick={() => { const name = namedRegionPick; addKnob({ key: `named:${name}`, kind: 'named', name, topk: namedRegionTopk, op: 'scale', alpha: 0 }); setNamedRegionPick('') }}
+                      disabled={selected.has(`named:${namedRegionPick}`)} style={{ padding: '2px 10px' }}>+ Add</Btn>
+                  </>}
+                </>)
+              })()}
             </div>
             {d.knobs.map((k) => (
               <div key={k.key} style={{ display: 'flex', gap: 6, alignItems: 'center', marginBottom: 4 }}>
                 {k.kind === 'spot'
                   ? <span style={{ width: 108, display: 'flex', alignItems: 'center', gap: 2, color: 'var(--accent)', fontSize: 11 }}>spot top<input type="number" min={0.001} max={100} step={0.005} value={+((k.topk ?? 0.05) * 100).toFixed(4)} onChange={(e) => adjust(k.key, { topk: Math.min(100, Math.max(0.001, Number(e.target.value) || 0.001)) / 100 })} style={{ width: 52, background: 'var(--bg-2)', color: 'var(--text-1)', border: '1px solid var(--line-strong)', borderRadius: 3, fontSize: 11, padding: '0 2px' }} />%</span>
+                  : k.kind === 'named' ? (() => {
+                      const cap = d.regions.find((r) => r.name === k.name)?.base_topk
+                      const capPct = cap != null ? cap * 100 : 100
+                      return (
+                        <span style={{ width: 148, display: 'flex', alignItems: 'center', gap: 2, color: 'var(--accent)', fontSize: 11 }} title={cap != null ? `adjustable down from the saved ${capPct.toFixed(3)}%` : k.name}>
+                          <span className="mono" style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 70 }}>◈ {k.name}</span>
+                          <input type="number" min={0.001} max={capPct} step={0.005} value={+((k.topk ?? capPct / 100) * 100).toFixed(4)} onChange={(e) => adjust(k.key, { topk: Math.min(capPct, Math.max(0.001, Number(e.target.value) || 0.001)) / 100 })} style={{ width: 48, background: 'var(--bg-2)', color: 'var(--text-1)', border: '1px solid var(--line-strong)', borderRadius: 3, fontSize: 11, padding: '0 2px' }} />%
+                        </span>
+                      )
+                    })()
                   : <span className="mono" style={{ width: 96, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: 'var(--text-1)', fontSize: 11 }} title={`L${k.layer} · ${k.module}`}>L{k.layer}·{(k.module ?? '').replace('.weight', '').replace('_proj', '')}</span>}
                 <select value={k.op} onChange={(e) => adjust(k.key, { op: e.target.value })} style={{ fontSize: 11, background: 'var(--bg-2)', color: 'var(--text-1)', border: '1px solid var(--line-strong)', borderRadius: 4, padding: '1px 3px' }}>
                   {['scale', 'zero', 'mean', 'random'].map((o) => <option key={o} value={o}>{o}</option>)}
@@ -1301,6 +1335,7 @@ export default function App() {
               <Btn onClick={() => { const el = document.getElementById(`rn-${mid}`) as HTMLInputElement; const name = el?.value.trim(); if (name) { sendTo(mid, { type: 'save_region', name, region: { kind: 'spot', examples, topk: d.knobs.find((k) => k.kind === 'spot')?.topk ?? 0.05 } }); el.value = '' } }} disabled={pending.has(`save_region:${mid}`)} style={{ padding: '2px 10px' }} title="save the current top-k% spot mask to the workspace">{pending.has(`save_region:${mid}`) ? '⟳ ' : ''}Save region</Btn>
               <Btn onClick={() => { sendTo(mid, { type: 'ppl', examples: PRESETS.python.split('\n').filter(Boolean), tag: 'code' }); sendTo(mid, { type: 'ppl', examples: GENERAL_SET.split('\n').filter(Boolean), tag: 'general' }) }} disabled={pending.has(`ppl:${mid}`)} color="var(--accent)" style={{ padding: '2px 10px' }} title="PPL on code vs general text — selective damage shows here">{pending.has(`ppl:${mid}`) ? '⟳ ' : ''}Eval code｜general</Btn>
             </div>
+            <div style={{ ...hint, fontSize: 11, marginBottom: 4 }}>saved % is the upper bound — reload as a knob and dial it down anytime, never up</div>
             {locateProg.save_region && <div style={{ ...hint, fontSize: 11, marginTop: 4 }}>locating… {locateProg.save_region.i}/{locateProg.save_region.total}</div>}
             {(d.evals.code != null || d.evals.general != null) && (
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, fontSize: 11 }}>
