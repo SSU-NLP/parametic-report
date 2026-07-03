@@ -326,10 +326,17 @@ def test_ws_dataset_rejects_path_escape(tmp_path, monkeypatch):
         assert not (tmp_path.parent / "evil.txt").exists()
 
 
+class _FakeDataset(list):
+    """A list of dicts that also supports HF's .filter(fn) → a new filtered _FakeDataset."""
+    def filter(self, fn):
+        return _FakeDataset(r for r in self if fn(r))
+
+
 def _fake_datasets_module(rows):
     import types
     mod = types.ModuleType("datasets")
-    mod.load_dataset = lambda repo, config=None, split=None: rows  # iterable of dicts (a "Dataset")
+    # token kwarg is always passed by _fetch_hf_to_jsonl (gated repos) — accept and ignore it here.
+    mod.load_dataset = lambda repo, config=None, split=None, token=None: _FakeDataset(rows)
     return mod
 
 
@@ -387,6 +394,57 @@ def test_ws_load_hf_dataset_missing_lib_hints_pip(tmp_path, monkeypatch):
         ws.receive_json()
         err = ws.receive_json()
     assert err["type"] == "error" and err["op"] == "load_hf_dataset" and "pip install datasets" in err["reason"]
+
+
+def test_ws_load_hf_dataset_filters_rows_by_column(tmp_path, monkeypatch):
+    monkeypatch.setenv("PARAMETIC_STUDIO_HOME", str(tmp_path))
+    rows = [{"code": "a", "programming_language": "Python"},
+            {"code": "b", "programming_language": "Java"},
+            {"code": "c", "programming_language": "Python"}]
+    monkeypatch.setitem(__import__("sys").modules, "datasets", _fake_datasets_module(rows))
+    with TestClient(api.app).websocket_connect("/ws") as ws:
+        ws.send_json({"type": "load_hf_dataset", "repo": "nampdn-ai/tiny-codes",
+                      "filter_column": "programming_language", "filter_value": "Python"})
+        ws.receive_json()                                           # loading_dataset
+        done = ws.receive_json()
+    assert done["type"] == "datasets"
+    assert done["loaded"] == "nampdn-ai__tiny-codes__programming_language=Python.jsonl"
+    lines = (tmp_path / "datasets" / done["loaded"]).read_text().splitlines()
+    kept = [json.loads(l) for l in lines]
+    assert kept == [rows[0], rows[2]]                              # only Python rows survive the filter
+
+
+def test_ws_load_hf_dataset_filter_zero_rows_errors(tmp_path, monkeypatch):
+    monkeypatch.setenv("PARAMETIC_STUDIO_HOME", str(tmp_path))
+    rows = [{"programming_language": "Java"}, {"programming_language": "Go"}]
+    monkeypatch.setitem(__import__("sys").modules, "datasets", _fake_datasets_module(rows))
+    with TestClient(api.app).websocket_connect("/ws") as ws:
+        ws.send_json({"type": "load_hf_dataset", "repo": "nampdn-ai/tiny-codes",
+                      "filter_column": "programming_language", "filter_value": "Python"})
+        ws.receive_json()                                           # loading_dataset
+        err = ws.receive_json()
+        assert err["type"] == "error" and err["op"] == "load_hf_dataset"
+        assert err["reason"] == "filter programming_language=Python matched 0 rows"
+        ws.send_json({"type": "datasets"})                          # connection survives
+        assert ws.receive_json()["type"] == "datasets"
+
+
+def test_ws_load_hf_dataset_passes_env_token(tmp_path, monkeypatch):
+    monkeypatch.setenv("PARAMETIC_STUDIO_HOME", str(tmp_path))
+    monkeypatch.setenv("HF_TOKEN", "tok")
+    seen = {}
+    import types
+    mod = types.ModuleType("datasets")
+    def _cap(repo, config=None, split=None, token=None):
+        seen["token"] = token
+        return _FakeDataset([{"q": "a"}])
+    mod.load_dataset = _cap
+    monkeypatch.setitem(__import__("sys").modules, "datasets", mod)
+    with TestClient(api.app).websocket_connect("/ws") as ws:
+        ws.send_json({"type": "load_hf_dataset", "repo": "gated/repo"})
+        ws.receive_json()                                           # loading_dataset
+        assert ws.receive_json()["type"] == "datasets"
+    assert seen["token"] == "tok"                                  # env HF_TOKEN reached load_dataset
 
 
 def test_datasets_root_uses_config_dir(tmp_path, monkeypatch):

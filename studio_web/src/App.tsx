@@ -344,6 +344,7 @@ export default function App() {
   ])
   const [spotN, setSpotN] = useState('')                 // '' = all examples
   const [spotPick, setSpotPick] = useState<'first' | 'random'>('first')
+  const [evalDsName, setEvalDsName] = useState('')       // '' = eval kppl on spot data (dsExamples); else a loaded dataset name
   const sample = (ex: string[]) => {
     const n = Number(spotN)
     if (!n || n >= ex.length) return ex
@@ -457,6 +458,8 @@ export default function App() {
   const [asking, setAsking] = useState<'hf' | 'editor' | 'path' | 'hf-dataset' | null>(null)
   const [askValue, setAskValue] = useState('')
   const [askSplit, setAskSplit] = useState('')
+  const [askConfig, setAskConfig] = useState('')          // HF dataset config (e.g. humanevalpack language)
+  const [askFilter, setAskFilter] = useState('')           // 'col=value' row filter (e.g. tiny-codes programming_language=Python)
   const [hfLoading, setHfLoading] = useState<string | null>(null)  // repo id currently loading, for the Data section hint
   const [armed, setArmed] = useState<string | null>(null)
   const armedTimer = useRef<number | null>(null)
@@ -1136,12 +1139,13 @@ export default function App() {
       <Btn onClick={() => runSpot(ds)} color="var(--accent)" style={{ padding: '4px 12px', marginBottom: 10 }}>Compute spot</Btn>
       {d.spotProg && <div style={{ marginBottom: 8 }}><div style={{ display: 'flex', gap: 8, alignItems: 'center' }}><span style={hint}>computing · {d.spotProg.i}/{d.spotProg.total}</span><Btn onClick={() => sendTo(mid, { type: 'stop_spot' })} color="var(--danger)" style={{ padding: '0 8px' }}>Stop</Btn></div><div style={{ background: 'var(--bg-2)', borderRadius: 2, height: 4, marginTop: 3 }}><div style={{ height: 4, width: `${Math.round((d.spotProg.i / d.spotProg.total) * 100)}%`, background: 'var(--accent)', borderRadius: 2 }} /></div></div>}
       {d.spot && (() => {
-        const examples = dsExamples
+        const examples = dsExamples                      // spot data — always drives region()/mask selection
+        const evalExamples = evalDsName ? (dsMeta[evalDsName]?.examples ?? examples) : examples  // kppl measurement set — may differ from spot data
         const selected = new Set(d.knobs.map((k) => k.key))
-        const measure = () => sendTo(mid, { type: 'ppl', examples, tag: 'inter' })
+        const measure = () => sendTo(mid, { type: 'ppl', examples: evalExamples, tag: 'inter' })
         const region = (k: KnobRow) => k.kind === 'spot' ? { kind: 'spot', examples, topk: k.topk ?? 0.05 } : { kind: 'cell', layer: k.layer, module: k.module }
         const sendKnob = (k: KnobRow) => { sendTo(mid, { type: 'intervene', region: region(k), op: k.op, alpha: k.alpha, key: k.key }); measure() }
-        const baselineOnce = () => { if (d.knobs.length === 0 && d.kppl.base == null) sendTo(mid, { type: 'ppl', examples, tag: 'base' }) }  // clean model baseline first
+        const baselineOnce = () => { if (d.knobs.length === 0 && d.kppl.base == null) sendTo(mid, { type: 'ppl', examples: evalExamples, tag: 'base' }) }  // clean model baseline first
         const addKnob = (row: KnobRow) => { baselineOnce(); patch(mid, (dd) => ({ ...dd, knobs: [...dd.knobs, row] })); sendKnob(row) }
         const addCell = (l: number, module: string) => {
           const key = `${l}.${module}`
@@ -1166,7 +1170,16 @@ export default function App() {
           <ScaleBar max={Math.max(...d.spot.grid.flat())} color={ampColor} label="|g×w|" />
           <div style={{ marginTop: 2 }}><SpotGrid grid={d.spot.grid} modules={d.spot.modules} onCell={addCell} selected={selected} /></div>
           <div style={{ marginTop: 14, borderTop: '1px solid var(--line)', paddingTop: 10 }}>
-            <div style={{ color: 'var(--text-1)', marginBottom: 6 }}>knob board<span style={hint}> · {d.knobs.length} active · reversible</span></div>
+            <div style={{ color: 'var(--text-1)', marginBottom: 6, display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 6 }}>
+              knob board<span style={hint}> · {d.knobs.length} active · reversible</span>
+              <span style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 4, fontSize: 11 }}>
+                <span style={hint}>eval on</span>
+                <select value={evalDsName} onChange={(e) => setEvalDsName(e.target.value)} title="dataset used to measure baseline/combined PPL (kppl) — separate from the spot data above" style={{ fontSize: 11, background: 'var(--bg-2)', color: 'var(--text-1)', border: '1px solid var(--line-strong)', borderRadius: 4, padding: '2px 4px' }}>
+                  <option value="">spot data ({examples.length})</option>
+                  {datasets.map((x) => <option key={x.name} value={x.name}>{x.name} ({dsMeta[x.name]?.count ?? '…'})</option>)}
+                </select>
+              </span>
+            </div>
             <div style={{ marginBottom: 6 }}>
               {!selected.has('spot') && <Btn onClick={() => addKnob({ key: 'spot', kind: 'spot', topk: 0.05, op: 'scale', alpha: 0 })} style={{ padding: '2px 10px' }}>+ Top-k% spot</Btn>}
               {d.knobs.length === 0 && <span style={{ ...hint, marginLeft: 8 }}>or click a spot cell above ↑</span>}
@@ -1193,9 +1206,12 @@ export default function App() {
                 <Btn onClick={runAB} disabled={d.busy} color="var(--accent)" style={{ padding: '2px 10px' }} title="run the prompt twice: knobs off (baseline) then on (intervened)">A/B compare</Btn>
               </div>
               {base != null && (
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, fontSize: 11 }}>
-                  <div><span style={hint}>baseline PPL</span><div className="mono" style={{ color: 'var(--text-0)' }}>{base.toPrecision(4)}</div></div>
-                  <div><span style={hint}>combined PPL</span><div className="mono" style={{ color: inter != null && inter > base ? 'var(--danger)' : 'var(--text-0)' }}>{inter != null ? `${inter.toPrecision(4)}  (×${(inter / base).toPrecision(3)})` : '…'}</div></div>
+                <div style={{ fontSize: 11 }}>
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+                    <div><span style={hint}>baseline PPL</span><div className="mono" style={{ color: 'var(--text-0)' }}>{base.toPrecision(4)}</div></div>
+                    <div><span style={hint}>combined PPL</span><div className="mono" style={{ color: inter != null && inter > base ? 'var(--danger)' : 'var(--text-0)' }}>{inter != null ? `${inter.toPrecision(4)}  (×${(inter / base).toPrecision(3)})` : '…'}</div></div>
+                  </div>
+                  <div style={{ ...hint, marginTop: 3 }}>measured on {evalDsName ? `${evalDsName} (${evalExamples.length})` : `spot data (${evalExamples.length})`}</div>
                 </div>
               )}
               {(d.ab.base != null || d.ab.inter != null) && (
@@ -1430,7 +1446,7 @@ export default function App() {
               <label style={addBtn}>+ Folder<input type="file" multiple style={{ display: 'none' }} {...({ webkitdirectory: '', directory: '' } as object)} onChange={(e) => { addFiles(e.target.files); e.target.value = '' }} /></label>
               <button onClick={() => { setAsking('path'); setAskValue('') }} title="symlink an external path into ~/.parametic_studio/datasets" style={addBtn}>+ Path</button>
               <button onClick={() => { setAsking('editor'); setAskValue('') }} title="save the spot-view editor content to the dataset store" style={addBtn}>+ Editor</button>
-              <button onClick={() => { setAsking('hf-dataset'); setAskValue(''); setAskSplit('') }} title="load a dataset from the Hugging Face Hub by repo id" style={addBtn}>+ HF</button>
+              <button onClick={() => { setAsking('hf-dataset'); setAskValue(''); setAskSplit(''); setAskConfig(''); setAskFilter('') }} title="load a dataset from the Hugging Face Hub by repo id" style={addBtn}>+ HF</button>
             </div>
             {(asking === 'path' || asking === 'editor') && (
               <input autoFocus value={askValue} onChange={(e) => setAskValue(e.target.value)}
@@ -1445,28 +1461,38 @@ export default function App() {
                 }} onBlur={() => setAsking(null)}
                 style={{ fontSize: 11, width: '100%', marginTop: 4, background: 'var(--bg-2)', color: 'var(--text-0)', border: '1px solid var(--accent)', borderRadius: 4, padding: '2px 6px', outline: 'none' }} />
             )}
-            {asking === 'hf-dataset' && (
-              <div style={{ display: 'flex', gap: 4, marginTop: 4 }}>
-                <input autoFocus value={askValue} onChange={(e) => setAskValue(e.target.value)} placeholder="openai/gsm8k · Enter"
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter' && askValue.trim()) {
-                      sendTo(focused(), { type: 'load_hf_dataset', repo: askValue.trim(), ...(askSplit.trim() ? { split: askSplit.trim() } : {}) })
-                      setAsking(null)
-                    }
-                    if (e.key === 'Escape') setAsking(null)
-                  }} onBlur={(e) => { if (!e.relatedTarget) setAsking(null) }}
-                  style={{ fontSize: 11, flex: 2, minWidth: 0, background: 'var(--bg-2)', color: 'var(--text-0)', border: '1px solid var(--accent)', borderRadius: 4, padding: '2px 6px', outline: 'none' }} />
-                <input value={askSplit} onChange={(e) => setAskSplit(e.target.value)} placeholder="train"
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter' && askValue.trim()) {
-                      sendTo(focused(), { type: 'load_hf_dataset', repo: askValue.trim(), ...(askSplit.trim() ? { split: askSplit.trim() } : {}) })
-                      setAsking(null)
-                    }
-                    if (e.key === 'Escape') setAsking(null)
-                  }} onBlur={(e) => { if (!e.relatedTarget) setAsking(null) }}
-                  style={{ fontSize: 11, flex: 1, minWidth: 0, background: 'var(--bg-2)', color: 'var(--text-0)', border: '1px solid var(--accent)', borderRadius: 4, padding: '2px 6px', outline: 'none' }} />
-              </div>
-            )}
+            {asking === 'hf-dataset' && (() => {
+              const submitHfDataset = () => {
+                if (!askValue.trim()) return
+                const [filterCol, ...rest] = askFilter.split('=')
+                const filterVal = rest.join('=').trim()
+                sendTo(focused(), {
+                  type: 'load_hf_dataset', repo: askValue.trim(),
+                  ...(askSplit.trim() ? { split: askSplit.trim() } : {}),
+                  ...(askConfig.trim() ? { config: askConfig.trim() } : {}),
+                  ...(filterCol.trim() && filterVal ? { filter_column: filterCol.trim(), filter_value: filterVal } : {}),
+                })
+                setAsking(null)
+              }
+              const onKey = (e: React.KeyboardEvent) => {
+                if (e.key === 'Enter') submitHfDataset()
+                if (e.key === 'Escape') setAsking(null)
+              }
+              const onBlur = (e: React.FocusEvent) => { if (!e.relatedTarget) setAsking(null) }
+              const fieldStyle = { fontSize: 11, minWidth: 0, background: 'var(--bg-2)', color: 'var(--text-0)', border: '1px solid var(--accent)', borderRadius: 4, padding: '2px 6px', outline: 'none' } as const
+              return (
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginTop: 4 }}>
+                  <input autoFocus value={askValue} onChange={(e) => setAskValue(e.target.value)} placeholder="openai/gsm8k · Enter"
+                    onKeyDown={onKey} onBlur={onBlur} style={{ ...fieldStyle, flex: 2 }} />
+                  <input value={askSplit} onChange={(e) => setAskSplit(e.target.value)} placeholder="train"
+                    onKeyDown={onKey} onBlur={onBlur} style={{ ...fieldStyle, flex: 1 }} />
+                  <input value={askConfig} onChange={(e) => setAskConfig(e.target.value)} placeholder="python  (humanevalpack)"
+                    onKeyDown={onKey} onBlur={onBlur} style={{ ...fieldStyle, flex: 1 }} title="dataset config (e.g. humanevalpack language)" />
+                  <input value={askFilter} onChange={(e) => setAskFilter(e.target.value)} placeholder="programming_language=Python  (tiny-codes)"
+                    onKeyDown={onKey} onBlur={onBlur} style={{ ...fieldStyle, flex: 2 }} title="row filter: col=value, applied before capping rows" />
+                </div>
+              )
+            })()}
             {hfLoading && <div style={{ ...hint, fontSize: 11, marginTop: 4 }}>loading {hfLoading}…</div>}
 
             <div style={{ display: 'flex', alignItems: 'center', margin: '10px 0 4px' }}>
@@ -1729,6 +1755,11 @@ export default function App() {
                 <span style={{ ...hint, fontSize: 11 }}>datasets_dir</span>
                 <input value={config.datasets_dir ?? ''} onChange={(e) => setC('datasets_dir', e.target.value)} spellCheck={false}
                   placeholder="~/.parametic_studio/datasets (default)" style={inp} />
+              </label>
+              <label style={{ display: 'grid', gap: 2 }}>
+                <span style={{ ...hint, fontSize: 11 }}>hf_token</span>
+                <input type="password" value={config.hf_token ?? ''} onChange={(e) => setC('hf_token', e.target.value)} spellCheck={false}
+                  autoComplete="off" placeholder="for gated datasets" style={inp} />
               </label>
             </div>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, margin: '6px 0 14px' }}>

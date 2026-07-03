@@ -2,6 +2,7 @@ import asyncio
 import gzip
 import json
 import os
+import re
 import time
 from pathlib import Path
 
@@ -188,42 +189,63 @@ def _dataset_path(root, name):
     return root / name
 
 
-def _fetch_hf_to_jsonl(repo, split, config, root):
-    """Download a HF dataset (blocking) → write one json line per row into the store. Returns (name, truncated)."""
+def _sanitize_name(s):
+    """Keep filename-safe chars; everything else → _. So `programming_language=Python` stays legible."""
+    return re.sub(r"[^0-9A-Za-z._=-]+", "_", str(s))
+
+
+def _fetch_hf_to_jsonl(repo, split, config, root, filter_column=None, filter_value=None):
+    """Download a HF dataset (blocking) → write one json line per row into the store. Returns (name, truncated).
+    gated repos need a token: env HF_TOKEN / HUGGING_FACE_HUB_TOKEN, else config hf_token. filter_column+value
+    keep only matching rows (before the cap) so a language subset can be pulled from a 1.6M-row dataset."""
     from datasets import load_dataset  # imported here so a missing dep only errors when this op runs
-    ds = load_dataset(repo, config or None, split=split or None)
+    token = (os.environ.get("HF_TOKEN") or os.environ.get("HUGGING_FACE_HUB_TOKEN")
+             or _read_config().get("hf_token"))
+    ds = load_dataset(repo, config or None, split=split or None, token=token or None)
     if hasattr(ds, "keys") and not hasattr(ds, "features"):  # DatasetDict → pick a split
         chosen = split or ("train" if "train" in ds else next(iter(ds)))
         ds = ds[chosen]
     else:
         chosen = split
-    parts = [repo.replace("/", "__")]
+    if filter_column and filter_value is not None:
+        ds = ds.filter(lambda r: str(r.get(filter_column, "")) == str(filter_value))
+    parts = [_sanitize_name(repo.replace("/", "__"))]
     if config:
-        parts.append(str(config))
+        parts.append(_sanitize_name(config))
     if chosen:
-        parts.append(str(chosen))
+        parts.append(_sanitize_name(chosen))
+    if filter_column and filter_value is not None:
+        parts.append(_sanitize_name(f"{filter_column}={filter_value}"))
     name = "__".join(parts) + ".jsonl"
     dst = root / name
     dst.parent.mkdir(parents=True, exist_ok=True)
     truncated = False
+    wrote = 0
     with dst.open("w") as fh:
         for i, row in enumerate(ds):
             if i >= HF_DATASET_ROW_CAP:
                 truncated = True
                 break
             fh.write(json.dumps(dict(row), ensure_ascii=False) + "\n")
+            wrote += 1
+    if filter_column and filter_value is not None and wrote == 0:
+        dst.unlink(missing_ok=True)
+        raise ValueError(f"filter {filter_column}={filter_value} matched 0 rows")
     return name, truncated
 
 
 async def _load_hf_dataset(websocket, msg):
-    """load_hf_dataset{model,repo,split?,config?} → jsonl in the store, then a refreshed datasets list.
-    Failure (gated/missing/no-network/datasets not installed) → error{op:load_hf_dataset,reason}, connection kept."""
+    """load_hf_dataset{model,repo,split?,config?,filter_column?,filter_value?} → jsonl in the store, then a
+    refreshed datasets list. filter_column+value keep only matching rows (before the cap) so a language subset
+    can be pulled from a big dataset. Failure (gated/missing/no-network/datasets not installed/filter matched 0
+    rows) → error{op:load_hf_dataset,reason}, connection kept."""
     model, repo = msg.get("model"), msg.get("repo")
     await websocket.send_json({"type": "loading_dataset", "model": model, "repo": repo})  # spinner cue
     root = _datasets_root()
     try:
         name, truncated = await asyncio.to_thread(
-            _fetch_hf_to_jsonl, repo, msg.get("split"), msg.get("config"), root)
+            _fetch_hf_to_jsonl, repo, msg.get("split"), msg.get("config"), root,
+            msg.get("filter_column"), msg.get("filter_value"))
     except ImportError:
         await websocket.send_json({"type": "error", "model": model, "op": "load_hf_dataset",
                                    "reason": "datasets library not installed — run: pip install datasets"})
