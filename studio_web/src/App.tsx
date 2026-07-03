@@ -454,8 +454,10 @@ export default function App() {
     }, delay)
   }
   // webview-safe dialogs: inline inputs replace window.prompt, two-step "sure?" replaces window.confirm
-  const [asking, setAsking] = useState<'hf' | 'editor' | 'path' | null>(null)
+  const [asking, setAsking] = useState<'hf' | 'editor' | 'path' | 'hf-dataset' | null>(null)
   const [askValue, setAskValue] = useState('')
+  const [askSplit, setAskSplit] = useState('')
+  const [hfLoading, setHfLoading] = useState<string | null>(null)  // repo id currently loading, for the Data section hint
   const [armed, setArmed] = useState<string | null>(null)
   const armedTimer = useRef<number | null>(null)
   function confirmClick(key: string, action: () => void) {
@@ -507,10 +509,12 @@ export default function App() {
         const names = new Set(server.map((s) => s.name))
         return [...dd.filter((x) => !x.server && !names.has(x.name)), ...server]  // client presets + server store
       })
+      setHfLoading(null)
       return
     }
     if (m.type === 'dataset_content') { setDatasets((dd) => dd.map((x) => (x.name === m.name ? { ...x, content: m.content } : x))); return }
     if (m.type === 'dataset_saved') { sendTo(m.model, { type: 'datasets' }); return }
+    if (m.type === 'loading_dataset') { setHfLoading(m.repo); return }
     if (m.type === 'stats') { setKernelStats({ rss_mb: m.rss_mb }); return }
     if (m.type === 'config') { setConfig(m.config ?? {}); return }
     if (m.type === 'installed_models') { setInstalled(m.items ?? []); return }
@@ -553,6 +557,7 @@ export default function App() {
     else if (m.type === 'locate_progress') setLocateProg((p) => ({ ...p, [m.op]: { i: m.i, total: m.total } }))
     else if (m.type === 'error') {
       toast(`[${m.op ?? 'kernel'}] ${m.reason}`)
+      if (m.op === 'load_hf_dataset') setHfLoading(null)
       if (m.op) { setPendingKey(`${m.op}:${mid}`, false); setLocateProg((p) => { const n = { ...p }; delete n[m.op]; return n }) }
       if (m.op === 'train') patch(mid, (d) => ({ ...d, train: { ...d.train, running: false, error: m.reason } }))
     }
@@ -1425,6 +1430,7 @@ export default function App() {
               <label style={addBtn}>+ Folder<input type="file" multiple style={{ display: 'none' }} {...({ webkitdirectory: '', directory: '' } as object)} onChange={(e) => { addFiles(e.target.files); e.target.value = '' }} /></label>
               <button onClick={() => { setAsking('path'); setAskValue('') }} title="symlink an external path into ~/.parametic_studio/datasets" style={addBtn}>+ Path</button>
               <button onClick={() => { setAsking('editor'); setAskValue('') }} title="save the spot-view editor content to the dataset store" style={addBtn}>+ Editor</button>
+              <button onClick={() => { setAsking('hf-dataset'); setAskValue(''); setAskSplit('') }} title="load a dataset from the Hugging Face Hub by repo id" style={addBtn}>+ HF</button>
             </div>
             {(asking === 'path' || asking === 'editor') && (
               <input autoFocus value={askValue} onChange={(e) => setAskValue(e.target.value)}
@@ -1439,6 +1445,29 @@ export default function App() {
                 }} onBlur={() => setAsking(null)}
                 style={{ fontSize: 11, width: '100%', marginTop: 4, background: 'var(--bg-2)', color: 'var(--text-0)', border: '1px solid var(--accent)', borderRadius: 4, padding: '2px 6px', outline: 'none' }} />
             )}
+            {asking === 'hf-dataset' && (
+              <div style={{ display: 'flex', gap: 4, marginTop: 4 }}>
+                <input autoFocus value={askValue} onChange={(e) => setAskValue(e.target.value)} placeholder="openai/gsm8k · Enter"
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' && askValue.trim()) {
+                      sendTo(focused(), { type: 'load_hf_dataset', repo: askValue.trim(), ...(askSplit.trim() ? { split: askSplit.trim() } : {}) })
+                      setAsking(null)
+                    }
+                    if (e.key === 'Escape') setAsking(null)
+                  }} onBlur={(e) => { if (!e.relatedTarget) setAsking(null) }}
+                  style={{ fontSize: 11, flex: 2, minWidth: 0, background: 'var(--bg-2)', color: 'var(--text-0)', border: '1px solid var(--accent)', borderRadius: 4, padding: '2px 6px', outline: 'none' }} />
+                <input value={askSplit} onChange={(e) => setAskSplit(e.target.value)} placeholder="train"
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' && askValue.trim()) {
+                      sendTo(focused(), { type: 'load_hf_dataset', repo: askValue.trim(), ...(askSplit.trim() ? { split: askSplit.trim() } : {}) })
+                      setAsking(null)
+                    }
+                    if (e.key === 'Escape') setAsking(null)
+                  }} onBlur={(e) => { if (!e.relatedTarget) setAsking(null) }}
+                  style={{ fontSize: 11, flex: 1, minWidth: 0, background: 'var(--bg-2)', color: 'var(--text-0)', border: '1px solid var(--accent)', borderRadius: 4, padding: '2px 6px', outline: 'none' }} />
+              </div>
+            )}
+            {hfLoading && <div style={{ ...hint, fontSize: 11, marginTop: 4 }}>loading {hfLoading}…</div>}
 
             <div style={{ display: 'flex', alignItems: 'center', margin: '10px 0 4px' }}>
               <span className="section-h">Regions</span>
@@ -1696,6 +1725,11 @@ export default function App() {
                   <input value={config[k] ?? ''} onChange={(e) => setC(k, e.target.value)} spellCheck={false} style={inp} />
                 </label>
               ))}
+              <label style={{ display: 'grid', gap: 2 }}>
+                <span style={{ ...hint, fontSize: 11 }}>datasets_dir</span>
+                <input value={config.datasets_dir ?? ''} onChange={(e) => setC('datasets_dir', e.target.value)} spellCheck={false}
+                  placeholder="~/.parametic_studio/datasets (default)" style={inp} />
+              </label>
             </div>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, margin: '6px 0 14px' }}>
               <Btn onClick={() => sendTo(focused(), { type: 'set_config', config })} color="var(--accent)">Save</Btn>

@@ -156,9 +156,29 @@ async def _target(msg):
 
 
 def _datasets_root():
-    root = Path(os.environ.get("PARAMETIC_STUDIO_HOME", os.path.expanduser("~/.parametic_studio"))) / "datasets"
+    # config wins → env override → default under STUDIO_HOME. Empty string is ignored (falls through).
+    home = os.environ.get("PARAMETIC_STUDIO_HOME", os.path.expanduser("~/.parametic_studio"))
+    cfg_dir = _read_config().get("datasets_dir")
+    root = Path(cfg_dir or os.environ.get("PARAMETIC_STUDIO_DATASETS") or f"{home}/datasets")
     root.mkdir(parents=True, exist_ok=True)
     return root
+
+
+# HF datasets can be huge — cap rows written to the store so a stray id can't fill the disk.
+HF_DATASET_ROW_CAP = 5000
+
+
+def _list_datasets(root):
+    """[{name, size, link}] for every file under root, following symlinks. link = top folder if behind a symlink."""
+    items = []
+    for dirpath, _dirs, files in os.walk(root, followlinks=True):
+        for f in files:
+            p = Path(dirpath) / f
+            rel = p.relative_to(root)
+            top = root / rel.parts[0]
+            link = rel.parts[0] if top.is_symlink() else None  # item lives behind a link → × must unlink, never delete
+            items.append({"name": str(rel), "size": p.stat().st_size, "link": link})
+    return sorted(items, key=lambda x: x["name"])
 
 
 def _dataset_path(root, name):
@@ -166,6 +186,53 @@ def _dataset_path(root, name):
     if ".." in Path(name).parts or Path(name).is_absolute():
         raise ValueError(f"bad dataset name: {name}")
     return root / name
+
+
+def _fetch_hf_to_jsonl(repo, split, config, root):
+    """Download a HF dataset (blocking) → write one json line per row into the store. Returns (name, truncated)."""
+    from datasets import load_dataset  # imported here so a missing dep only errors when this op runs
+    ds = load_dataset(repo, config or None, split=split or None)
+    if hasattr(ds, "keys") and not hasattr(ds, "features"):  # DatasetDict → pick a split
+        chosen = split or ("train" if "train" in ds else next(iter(ds)))
+        ds = ds[chosen]
+    else:
+        chosen = split
+    parts = [repo.replace("/", "__")]
+    if config:
+        parts.append(str(config))
+    if chosen:
+        parts.append(str(chosen))
+    name = "__".join(parts) + ".jsonl"
+    dst = root / name
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    truncated = False
+    with dst.open("w") as fh:
+        for i, row in enumerate(ds):
+            if i >= HF_DATASET_ROW_CAP:
+                truncated = True
+                break
+            fh.write(json.dumps(dict(row), ensure_ascii=False) + "\n")
+    return name, truncated
+
+
+async def _load_hf_dataset(websocket, msg):
+    """load_hf_dataset{model,repo,split?,config?} → jsonl in the store, then a refreshed datasets list.
+    Failure (gated/missing/no-network/datasets not installed) → error{op:load_hf_dataset,reason}, connection kept."""
+    model, repo = msg.get("model"), msg.get("repo")
+    await websocket.send_json({"type": "loading_dataset", "model": model, "repo": repo})  # spinner cue
+    root = _datasets_root()
+    try:
+        name, truncated = await asyncio.to_thread(
+            _fetch_hf_to_jsonl, repo, msg.get("split"), msg.get("config"), root)
+    except ImportError:
+        await websocket.send_json({"type": "error", "model": model, "op": "load_hf_dataset",
+                                   "reason": "datasets library not installed — run: pip install datasets"})
+        return
+    except Exception as e:
+        await websocket.send_json({"type": "error", "model": model, "op": "load_hf_dataset", "reason": str(e)})
+        return
+    await websocket.send_json({"type": "datasets", "model": model, "items": _list_datasets(root),
+                               "loaded": name, "truncated": truncated})
 
 
 def _runs_dir(model_id):
@@ -512,18 +579,11 @@ async def _dispatch(websocket, msg, t):
         elif t == "tensors":
             ts = (await _target(msg)).tensor_list()
             await websocket.send_json({"type": "tensors", "model": msg.get("model"), "tensors": ts})
-        elif t == "datasets":  # kernel-side dataset store: $PARAMETIC_STUDIO_HOME/datasets (files + symlinks)
-            root = _datasets_root()
-            items = []
-            for dirpath, _dirs, files in os.walk(root, followlinks=True):
-                for f in files:
-                    p = Path(dirpath) / f
-                    rel = p.relative_to(root)
-                    top = root / rel.parts[0]
-                    link = rel.parts[0] if top.is_symlink() else None  # item lives behind a link → × must unlink, never delete
-                    items.append({"name": str(rel), "size": p.stat().st_size, "link": link})
-            await websocket.send_json({"type": "datasets", "model": msg.get("model"),
-                                       "items": sorted(items, key=lambda x: x["name"])})
+        elif t == "datasets":  # kernel-side dataset store: <datasets_root> (files + symlinks)
+            items = _list_datasets(_datasets_root())
+            await websocket.send_json({"type": "datasets", "model": msg.get("model"), "items": items})
+        elif t == "load_hf_dataset":
+            await _load_hf_dataset(websocket, msg)
         elif t in ("read_dataset", "save_dataset", "delete_dataset", "link_path"):
             root = _datasets_root()
             try:

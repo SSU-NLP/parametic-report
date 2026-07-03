@@ -326,6 +326,78 @@ def test_ws_dataset_rejects_path_escape(tmp_path, monkeypatch):
         assert not (tmp_path.parent / "evil.txt").exists()
 
 
+def _fake_datasets_module(rows):
+    import types
+    mod = types.ModuleType("datasets")
+    mod.load_dataset = lambda repo, config=None, split=None: rows  # iterable of dicts (a "Dataset")
+    return mod
+
+
+def test_ws_load_hf_dataset_writes_jsonl_and_refreshes(tmp_path, monkeypatch):
+    monkeypatch.setenv("PARAMETIC_STUDIO_HOME", str(tmp_path))
+    rows = [{"q": "a", "a": "1"}, {"q": "b", "a": "2"}]
+    monkeypatch.setitem(__import__("sys").modules, "datasets", _fake_datasets_module(rows))
+    with TestClient(api.app).websocket_connect("/ws") as ws:
+        ws.send_json({"type": "load_hf_dataset", "repo": "openai/gsm8k", "config": "main", "split": "test"})
+        assert ws.receive_json()["type"] == "loading_dataset"       # spinner cue first
+        done = ws.receive_json()
+    assert done["type"] == "datasets"
+    assert done["loaded"] == "openai__gsm8k__main__test.jsonl" and done["truncated"] is False
+    assert [i["name"] for i in done["items"]] == ["openai__gsm8k__main__test.jsonl"]
+    lines = (tmp_path / "datasets" / "openai__gsm8k__main__test.jsonl").read_text().splitlines()
+    assert [json.loads(l) for l in lines] == rows                   # one json line per row
+
+
+def test_ws_load_hf_dataset_truncates_over_cap(tmp_path, monkeypatch):
+    monkeypatch.setenv("PARAMETIC_STUDIO_HOME", str(tmp_path))
+    monkeypatch.setattr(api, "HF_DATASET_ROW_CAP", 3)
+    rows = [{"i": n} for n in range(10)]
+    monkeypatch.setitem(__import__("sys").modules, "datasets", _fake_datasets_module(rows))
+    with TestClient(api.app).websocket_connect("/ws") as ws:
+        ws.send_json({"type": "load_hf_dataset", "repo": "me/big"})
+        ws.receive_json()                                           # loading_dataset
+        done = ws.receive_json()
+    assert done["truncated"] is True
+    lines = (tmp_path / "datasets" / "me__big.jsonl").read_text().splitlines()
+    assert len(lines) == 3                                          # capped
+
+
+def test_ws_load_hf_dataset_error_keeps_connection(tmp_path, monkeypatch):
+    monkeypatch.setenv("PARAMETIC_STUDIO_HOME", str(tmp_path))
+    import types
+    mod = types.ModuleType("datasets")
+    def _boom(*a, **k):
+        raise RuntimeError("gated repo: access denied")
+    mod.load_dataset = _boom
+    monkeypatch.setitem(__import__("sys").modules, "datasets", mod)
+    with TestClient(api.app).websocket_connect("/ws") as ws:
+        ws.send_json({"type": "load_hf_dataset", "repo": "meta/private"})
+        ws.receive_json()                                           # loading_dataset
+        err = ws.receive_json()
+        assert err["type"] == "error" and err["op"] == "load_hf_dataset" and "gated" in err["reason"]
+        ws.send_json({"type": "datasets"})                          # same connection still serves ops
+        assert ws.receive_json()["type"] == "datasets"
+
+
+def test_ws_load_hf_dataset_missing_lib_hints_pip(tmp_path, monkeypatch):
+    monkeypatch.setenv("PARAMETIC_STUDIO_HOME", str(tmp_path))
+    monkeypatch.setitem(__import__("sys").modules, "datasets", None)  # import → ImportError
+    with TestClient(api.app).websocket_connect("/ws") as ws:
+        ws.send_json({"type": "load_hf_dataset", "repo": "x/y"})
+        ws.receive_json()
+        err = ws.receive_json()
+    assert err["type"] == "error" and err["op"] == "load_hf_dataset" and "pip install datasets" in err["reason"]
+
+
+def test_datasets_root_uses_config_dir(tmp_path, monkeypatch):
+    monkeypatch.setenv("PARAMETIC_STUDIO_HOME", str(tmp_path / "home"))
+    custom = tmp_path / "custom_ds"
+    api._write_config({"datasets_dir": str(custom)})
+    assert api._datasets_root() == custom and custom.is_dir()
+    api._write_config({"datasets_dir": ""})                         # empty string ignored → default
+    assert api._datasets_root() == tmp_path / "home" / "datasets"
+
+
 def test_ws_stop_spot_ends_early_with_partial_map():
     api.SESSION = _tiny_session()
     with TestClient(api.app).websocket_connect("/ws") as ws:
