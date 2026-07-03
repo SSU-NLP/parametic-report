@@ -347,6 +347,7 @@ export default function App() {
   const [regionInfo, setRegionInfo] = useState<Record<string, { layers: number; modules: string[]; grid: number[][]; importance: number[][] | null; count: number }>>({})
   const [compareSel, setCompareSel] = useState<string[]>([])  // region names in the compare tab (order = hue)
   const [compareHover, setCompareHover] = useState<string | null>(null)  // shared "L.module" cell — cross-highlights every compare grid
+  const [interMetric, setInterMetric] = useState<'shared' | 'lift' | 'fraction'>('shared')  // intersection grid coloring
   const [compareData, setCompareData] = useState<{ names: string[]; layers: number; modules: string[]; grids: Record<string, number[][]>; kinds: Record<string, string>; intersection: number[][]; intersectionLift: number[][] | null; jaccard: Record<string, number> } | null>(null)
   // parse each dataset ONCE per change — parsing in render paths re-chewed megabytes of JSONL on
   // every token-stream re-render (GB-scale GC churn).
@@ -851,24 +852,38 @@ export default function App() {
             ))}
           </div>
           {(() => {
-            // "shared core" = where ALL spots agree the important weights live. Color by the geometric
-            // mean of the per-region importance grids (gated to cells that actually share weights). This
-            // avoids the lift artifact: biases/norms are tiny + data-independent, so their top-k always
-            // overlaps 100% → astronomical lift, burying the real signal in the big weight matrices.
+            // intersection panel, 3 selectable metrics over the weights ALL regions selected:
+            //  · shared  — geo-mean of per-region importance (where all agree the important weights live)
+            //  · lift    — observed ∩ / chance; explodes on tiny data-independent cells (biases/norms)
+            //  · fraction— raw shared-weight density
+            // 'shared' is the honest default: lift/fraction saturate on biases and bury the real signal.
             const allImp = cd.names.every((n) => cd.kinds[n] === 'importance')
-            const shared = allImp
+            const metric = interMetric === 'shared' && !allImp ? 'fraction' : interMetric
+            const grid = metric === 'shared'
               ? cd.grids[cd.names[0]].map((row, l) => row.map((_, c) =>
                   cd.intersection[l][c] > 0 ? Math.exp(cd.names.reduce((s, n) => s + Math.log(cd.grids[n][l][c] || 1e-30), 0) / cd.names.length) : 0))
-              : (cd.intersectionLift ?? cd.intersection)
-            const flat = shared.flat(); const lo = Math.min(...flat), hi = Math.max(...flat)
+              : metric === 'lift' ? (cd.intersectionLift ?? cd.intersection) : cd.intersection
+            const flat = grid.flat(); const lo = Math.min(...flat), hi = Math.max(...flat)
+            const label = {
+              shared: <>color = <b>importance all {cd.names.length} agree on</b> (geo-mean |g×w|) — biases/norms don't saturate it</>,
+              lift: <>color = <b>enrichment vs chance</b> (lift; independent top-k ⇒ 1×) — ⚠ tiny data-independent cells (biases) blow up</>,
+              fraction: <>color = <b>shared-weight density</b> (∩ fraction) — ~uniform by construction</>,
+            }
+            const Seg = ({ id, txt }: { id: 'shared' | 'lift' | 'fraction'; txt: string }) => (
+              <Btn onClick={() => setInterMetric(id)} title={`color the intersection by ${id}`}
+                color={interMetric === id ? 'var(--accent)' : 'var(--text-2)'}
+                style={{ borderColor: interMetric === id ? 'var(--accent)' : 'var(--line-strong)', padding: '1px 8px', fontSize: 11 }}>{txt}</Btn>
+            )
             return (<>
-              <div style={{ color: 'var(--text-1)', marginBottom: 3 }}>shared core<span style={hint}> · weights selected by ALL {cd.names.length} regions · {allImp
-                ? <>color = <b>importance all {cd.names.length} agree on</b> (geo-mean |g×w|) — not raw overlap, which biases/norms saturate</>
-                : 'color = selection fraction (legacy regions — re-save for importance)'}</span></div>
-              <SpotGrid grid={shared} modules={cd.modules}
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 3, flexWrap: 'wrap' }}>
+                <span style={{ color: 'var(--text-1)' }}>intersection<span style={hint}> · weights selected by ALL {cd.names.length} regions</span></span>
+                <div style={{ display: 'flex', gap: 4 }}><Seg id="shared" txt="shared imp" /><Seg id="lift" txt="lift" /><Seg id="fraction" txt="∩ fraction" /></div>
+              </div>
+              <div style={{ ...hint, marginBottom: 3 }}>{label[metric]}{interMetric === 'shared' && !allImp && ' · (legacy region → fell back to fraction; re-save for importance)'}</div>
+              <SpotGrid grid={grid} modules={cd.modules}
                 color={(v: number) => ampColor(hi > lo ? (v - lo) / (hi - lo) : 0, 1)}
-                cellTitle={(l, mod, v) => { const c = cd.modules.indexOf(mod); const lift = cd.intersectionLift?.[l][c]
-                  return `L${l} · ${mod}${allImp ? ` · shared imp ${v.toExponential(1)}` : ''} · ∩ ${(cd.intersection[l][c] * 100).toFixed(2)}% of weights${lift != null ? ` · ${lift.toFixed(0)}× vs chance` : ''}` }}
+                cellTitle={(l, mod) => { const c = cd.modules.indexOf(mod); const lift = cd.intersectionLift?.[l][c]; const g = grid[l][c]
+                  return `L${l} · ${mod}${metric === 'shared' ? ` · shared imp ${g.toExponential(1)}` : ''} · ∩ ${(cd.intersection[l][c] * 100).toFixed(2)}% of weights${lift != null ? ` · ${lift.toFixed(0)}× vs chance` : ''}` }}
                 onHover={setCompareHover} hovered={compareHover} />
             </>)
           })()}
