@@ -680,6 +680,19 @@ export default function App() {
 
   const focused = () => (open.some((m) => m.id === focusModel) ? focusModel : (open[0]?.id ?? DEFAULT.id))
   const targets = () => (sync ? open.map((m) => m.id) : [focused()])
+  // P9: native file picker for the SSH key path — desktop app only (dynamic import keeps the
+  // plugin out of the browser bundle's critical path).
+  async function browseSshKeyPath() {
+    if (!inTauri()) return
+    try {
+      const { open } = await import('@tauri-apps/plugin-dialog')
+      const picked = await open({
+        multiple: false, directory: false,
+        filters: [{ name: 'SSH key', extensions: ['pem', 'key'] }, { name: 'All files', extensions: ['*'] }],
+      })
+      if (typeof picked === 'string') setSshKeyPath(picked)
+    } catch { /* not in tauri / plugin unavailable */ }
+  }
   // P7: SSH remote kernel connect/disconnect. Rust owns the tunnel + kernel lifecycle; we just
   // point WS_URL at the local tunnel port and reload once it reports success.
   async function sshConnect() {
@@ -1627,7 +1640,12 @@ export default function App() {
                     <>
                       <label style={{ display: 'grid', gap: 2 }}>
                         <span style={{ ...hint, fontSize: 11 }}>key path</span>
-                        <input value={sshKeyPath} onChange={(e) => setSshKeyPath(e.target.value)} placeholder="~/.ssh/gpu.pem" spellCheck={false} disabled={isRemoteConnected()} style={inp} />
+                        <div style={{ display: 'flex', gap: 6 }}>
+                          <input value={sshKeyPath} onChange={(e) => setSshKeyPath(e.target.value)} placeholder="~/.ssh/gpu.pem" spellCheck={false} disabled={isRemoteConnected()} style={{ ...inp, flex: 1 }} />
+                          <Btn onClick={browseSshKeyPath} disabled={isRemoteConnected() || !inTauri()}
+                            title={inTauri() ? undefined : 'file picker is only available in the desktop app'}
+                            style={{ flexShrink: 0 }}>Browse…</Btn>
+                        </div>
                       </label>
                       <label style={{ display: 'grid', gap: 2 }}>
                         <span style={{ ...hint, fontSize: 11 }}>key passphrase (optional)</span>

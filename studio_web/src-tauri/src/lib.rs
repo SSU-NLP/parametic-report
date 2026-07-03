@@ -144,6 +144,23 @@ fn build_menu(app: &tauri::AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
             &PredefinedMenuItem::quit(app, None)?,
         ],
     )?;
+    // Edit menu — restores standard Cmd+C/V/X/A in the webview. Setting a custom menu replaces
+    // the OS default (which included Edit), so these predefined items must be re-added by hand;
+    // each carries the standard key equivalent + responder action that revives copy/paste.
+    let edit_menu = Submenu::with_items(
+        app,
+        "Edit",
+        true,
+        &[
+            &PredefinedMenuItem::undo(app, None)?,
+            &PredefinedMenuItem::redo(app, None)?,
+            &PredefinedMenuItem::separator(app)?,
+            &PredefinedMenuItem::cut(app, None)?,
+            &PredefinedMenuItem::copy(app, None)?,
+            &PredefinedMenuItem::paste(app, None)?,
+            &PredefinedMenuItem::select_all(app, None)?,
+        ],
+    )?;
     let model_menu = Submenu::with_items(
         app,
         "Model",
@@ -162,7 +179,7 @@ fn build_menu(app: &tauri::AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
             &MenuItem::with_id(app, "toggle-explorer", "Toggle Explorer", true, Some("Cmd+B"))?,
         ],
     )?;
-    Menu::with_items(app, &[&app_menu, &model_menu, &view_menu])
+    Menu::with_items(app, &[&app_menu, &edit_menu, &model_menu, &view_menu])
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -173,6 +190,7 @@ pub fn run() {
             ssh::ssh_connect,
             ssh::ssh_disconnect
         ])
+        .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             app.manage(SshState::default());
             if cfg!(debug_assertions) {
