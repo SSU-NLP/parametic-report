@@ -132,18 +132,23 @@ function Grid({ rows, cols, rowH, onRow, onRowEnter, onLeave, cellTitle }: { row
     </div>
   )
 }
-function SpotGrid({ grid, modules, onCell, selected, color = ampColor, cellTitle }: { grid: number[][]; modules: string[]; onCell?: (l: number, module: string) => void; selected?: Set<string>; color?: (v: number, max: number) => string; cellTitle?: (l: number, module: string, v: number) => string }) {
+function SpotGrid({ grid, modules, onCell, selected, color = ampColor, cellTitle, onHover, hovered }: { grid: number[][]; modules: string[]; onCell?: (l: number, module: string) => void; selected?: Set<string>; color?: (v: number, max: number) => string; cellTitle?: (l: number, module: string, v: number) => string; onHover?: (cell: string | null) => void; hovered?: string | null }) {
   const flat = grid.flat(); const max = Math.max(...flat)
   const sorted = [...flat].sort((a, b) => b - a)
   const thr = sorted[Math.max(0, Math.floor(sorted.length * 0.05) - 1)] ?? Infinity
   return (
-    <div style={{ display: 'grid', gridTemplateRows: `repeat(${grid.length}, 9px)`, gap: 1 }}>
+    <div style={{ display: 'grid', gridTemplateRows: `repeat(${grid.length}, 9px)`, gap: 1 }}
+      onMouseLeave={onHover ? () => onHover(null) : undefined}>
       {grid.map((row, l) => (
         <div key={l} style={{ display: 'grid', gridTemplateColumns: `repeat(${modules.length}, 1fr)`, gap: 1 }}>
           {row.map((v, c) => {
-            const sel = selected?.has(`${l}.${modules[c]}`)
-            return <div key={c} onClick={onCell ? () => onCell(l, modules[c]) : undefined} title={cellTitle ? cellTitle(l, modules[c], v) : `L${l} · ${modules[c]} · ${v.toExponential(2)}${onCell ? ' — click → knob' : ''}`}
-              style={{ background: color(v, max), cursor: onCell ? 'pointer' : 'default', outline: sel ? '1.5px solid var(--accent)' : v >= thr ? `1px solid ${isLight() ? '#1A1717' : '#FDFCFC'}` : 'none', outlineOffset: sel ? -1 : 0 }} />
+            const key = `${l}.${modules[c]}`
+            const sel = selected?.has(key)
+            const hov = hovered === key
+            return <div key={c} onClick={onCell ? () => onCell(l, modules[c]) : undefined}
+              onMouseEnter={onHover ? () => onHover(key) : undefined}
+              title={cellTitle ? cellTitle(l, modules[c], v) : `L${l} · ${modules[c]} · ${v.toExponential(2)}${onCell ? ' — click → knob' : ''}`}
+              style={{ background: color(v, max), cursor: onCell ? 'pointer' : 'default', outline: hov ? '1.5px solid var(--accent)' : sel ? '1.5px solid var(--accent)' : v >= thr ? `1px solid ${isLight() ? '#1A1717' : '#FDFCFC'}` : 'none', outlineOffset: (hov || sel) ? -1 : 0 }} />
           })}
         </div>
       ))}
@@ -341,6 +346,7 @@ export default function App() {
   }
   const [regionInfo, setRegionInfo] = useState<Record<string, { layers: number; modules: string[]; grid: number[][]; importance: number[][] | null; count: number }>>({})
   const [compareSel, setCompareSel] = useState<string[]>([])  // region names in the compare tab (order = hue)
+  const [compareHover, setCompareHover] = useState<string | null>(null)  // shared "L.module" cell — cross-highlights every compare grid
   const [compareData, setCompareData] = useState<{ names: string[]; layers: number; modules: string[]; grids: Record<string, number[][]>; kinds: Record<string, string>; intersection: number[][]; intersectionLift: number[][] | null; jaccard: Record<string, number> } | null>(null)
   // parse each dataset ONCE per change — parsing in render paths re-chewed megabytes of JSONL on
   // every token-stream re-render (GB-scale GC churn).
@@ -840,7 +846,7 @@ export default function App() {
             {cd.names.map((n, i) => (
               <div key={n}>
                 <div style={{ fontSize: 11, color: hueCss(REGION_HUES[i]), marginBottom: 3 }}>◈ {n}<span style={hint}> · {cd.kinds[n] === 'importance' ? '|g×w| importance' : 'selection fraction — legacy region, re-save to get the importance map'}</span></div>
-                <SpotGrid grid={cd.grids[n]} modules={cd.modules} color={hueRamp(REGION_HUES[i])} />
+                <SpotGrid grid={cd.grids[n]} modules={cd.modules} color={hueRamp(REGION_HUES[i])} onHover={setCompareHover} hovered={compareHover} />
               </div>
             ))}
           </div>
@@ -852,7 +858,8 @@ export default function App() {
               const flat = (cd.intersectionLift ?? cd.intersection).flat(); const lo = Math.min(...flat), hi = Math.max(...flat)
               return (v: number) => ampColor(hi > lo ? (v - lo) / (hi - lo) : 0, 1)
             })()}
-            cellTitle={cd.intersectionLift ? (l, mod, v) => `L${l} · ${mod} · ${v.toFixed(1)}× vs chance · ∩ ${(cd.intersection[l][cd.modules.indexOf(mod)] * 100).toFixed(2)}% of weights` : undefined} />
+            cellTitle={cd.intersectionLift ? (l, mod, v) => `L${l} · ${mod} · ${v.toFixed(1)}× vs chance · ∩ ${(cd.intersection[l][cd.modules.indexOf(mod)] * 100).toFixed(2)}% of weights` : undefined}
+            onHover={setCompareHover} hovered={compareHover} />
           <div style={{ marginTop: 10, fontSize: 11 }}>
             <span style={hint}>pairwise Jaccard (|A∩B| / |A∪B|):</span>
             {Object.entries(cd.jaccard).map(([k, v]) => {
