@@ -42,6 +42,7 @@ class ModelSession:
         self._region_files = {}   # name -> Path(.pt) — every saved region (masks NOT loaded at boot)
         self._region_meta = {}    # name -> {"count": int, "grid": [[..]]|None} from the .meta.json sidecar
         self._region_order = []   # load order for LRU eviction of self.regions
+        self._imp_cache = None    # {"key": <examples hash>, "acc": {param_name: CPU importance Tensor}} — cleared on train
         d = self._region_dir()
         if d and d.exists():
             for f in d.glob("*.pt"):  # scan only — masks (~0.36GB each) stay on disk until get_region
@@ -118,15 +119,46 @@ class ModelSession:
         grid = [[acc.get((l, mod), 0.0) / n for mod in modules] for l in range(L)]
         return {"layers": L, "modules": modules, "grid": grid}
 
+    def _get_importance(self, examples, progress=None):
+        """Per-param accumulated |grad×param| (CPU tensors), cached per examples set.
+
+        The importance is always relative to the *current* weights. A cache hit (same examples,
+        weights unchanged since — train_steps/reset_training invalidate) returns without any backward.
+        Miss: run one backward per example, accumulate on CPU, cache, return."""
+        key = hash(tuple(examples))
+        if self._imp_cache is not None and self._imp_cache["key"] == key:
+            if progress:
+                progress(len(examples), len(examples))  # UI: instant "done" without recomputing
+            return self._imp_cache["acc"]
+        acc = {}
+        total = len(examples)
+        for i, text in enumerate(examples):
+            ids = torch.tensor([self.tok.encode(text)], device=self.device)
+            self.model.zero_grad(set_to_none=True)
+            self.model(ids, labels=ids).loss.backward()
+            for name, p in self.model.named_parameters():
+                if _LAYER_RE.match(name) and p.grad is not None:
+                    a = (p.grad * p.data).abs().cpu()  # CPU: acc is model-param-sized, don't hoard GPU memory
+                    acc[name] = a if name not in acc else acc[name] + a
+            if progress:
+                progress(i + 1, total)
+        self.model.zero_grad(set_to_none=True)
+        self._imp_cache = {"key": key, "acc": acc}  # one set at a time — new examples replace the old cache
+        return acc
+
     def compute_spot(self, examples):
         """Coding-Spot importance: accumulate |grad×param| over examples, reduced to [layer, module]."""
-        acc, last = {}, None
-        for i, text in enumerate(examples):
-            last = self.spot_step(text, acc, i + 1)
-        if last is None:  # no examples → all-zero grid
-            L, modules = len(self.model.model.layers), self._modules()
-            last = {"layers": L, "modules": modules, "grid": [[0.0] * len(modules) for _ in range(L)]}
-        return last
+        L, modules = len(self.model.model.layers), self._modules()
+        if not examples:  # no examples → all-zero grid
+            return {"layers": L, "modules": modules, "grid": [[0.0] * len(modules) for _ in range(L)]}
+        acc = self._get_importance(examples)
+        n = len(examples)
+        cell = {}
+        for name, score in acc.items():
+            m = _LAYER_RE.match(name)
+            cell[(int(m.group(1)), m.group(2))] = cell.get((int(m.group(1)), m.group(2)), 0.0) + float(score.sum()) / n
+        grid = [[cell.get((l, mod), 0.0) for mod in modules] for l in range(L)]
+        return {"layers": L, "modules": modules, "grid": grid}
 
     # ---- knob (B1): Locate × Edit × Evaluate. A Region is {param_name: bool mask}. ----
 
@@ -143,19 +175,7 @@ class ModelSession:
         progress(i, total): called after each example's backward+accumulate (i is 1-based)."""
         if not examples:
             return ({}, []) if return_grid else {}
-        acc = {}
-        total = len(examples)
-        for i, text in enumerate(examples):
-            ids = torch.tensor([self.tok.encode(text)], device=self.device)
-            self.model.zero_grad(set_to_none=True)
-            self.model(ids, labels=ids).loss.backward()
-            for name, p in self.model.named_parameters():
-                if _LAYER_RE.match(name) and p.grad is not None:
-                    a = (p.grad * p.data).abs()
-                    acc[name] = a if name not in acc else acc[name] + a
-            if progress:
-                progress(i + 1, total)
-        self.model.zero_grad(set_to_none=True)
+        acc = self._get_importance(examples, progress=progress)  # cached: no backward on a repeat examples set
         # ponytail: per-param exact top-k via topk indices — no tie over-selection, no global flatten copy.
         # acc holds one importance tensor per layer param (peak ≈ layer-param bytes); stream from disk if models grow.
         region = {}
@@ -176,8 +196,8 @@ class ModelSession:
                 m = _LAYER_RE.match(name)
                 cell[(int(m.group(1)), m.group(2))] = float(score.sum()) / n
             grid = [[cell.get((l, mod), 0.0) for mod in modules] for l in range(L)]
-        del acc
-        self.free_memory()  # backward leftovers + acc tensors — don't let the allocator hoard them
+        # acc is the CPU-resident cache — keep it so a %-only change re-thresholds without another backward.
+        self.free_memory()  # release backward leftovers on the device (cache stays on CPU)
         return (region, grid) if return_grid else region
 
     def tensor_list(self):
@@ -406,6 +426,7 @@ class ModelSession:
                 opt.step()
                 yield {"step": step, "loss": float(loss.detach())}
         finally:
+            self._imp_cache = None  # weights moved → cached importance is stale
             for h in hooks:
                 h.remove()  # leaked hooks would silently corrupt every later spot map
             self.model.zero_grad(set_to_none=True)
@@ -420,6 +441,7 @@ class ModelSession:
         trained = getattr(self, "_trained", None)
         if trained is None:
             return
+        self._imp_cache = None  # weights restored → cached importance is stale
         self.clear()  # same invariant as train_steps
         mode, payload = trained
         params = dict(self.model.named_parameters())

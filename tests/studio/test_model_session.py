@@ -128,6 +128,82 @@ def test_generate_text_encodes_prompt():
     assert [e["step"] for e in evs] == [0, 1, 2]
 
 
+# ---- importance cache: compute once, re-threshold %-changes without another backward ----
+
+def _count_backwards(monkeypatch, s):
+    """Wrap the model's forward so each loss-producing pass (importance/ppl) bumps a counter.
+    nn.Module.__call__ dispatches to .forward, so patching forward intercepts every model(ids, ...)."""
+    calls = {"n": 0}
+    orig = s.model.forward
+
+    def counted(*a, **k):
+        if "labels" in k:  # importance/ppl passes label ids; decode does not
+            calls["n"] += 1
+        return orig(*a, **k)
+
+    monkeypatch.setattr(s.model, "forward", counted)
+    return calls
+
+
+def test_importance_cached_across_compute_and_locate(monkeypatch):
+    s = ModelSession(_tiny(), _EncTok(eos=-1), torch.device("cpu"))
+    calls = _count_backwards(monkeypatch, s)
+    ex = ["alpha", "beta"]
+    s.compute_spot(ex)
+    after_compute = calls["n"]
+    assert after_compute == len(ex)          # one backward per example
+    s.locate_spot(ex, topk=0.1)              # same examples → cache hit
+    assert calls["n"] == after_compute       # no additional backward
+
+
+def test_multiple_topk_reuse_one_importance(monkeypatch):
+    s = ModelSession(_tiny(), _EncTok(eos=-1), torch.device("cpu"))
+    calls = _count_backwards(monkeypatch, s)
+    ex = ["alpha", "beta"]
+    r10 = s.locate_spot(ex, topk=0.5)
+    r01 = s.locate_spot(ex, topk=0.25)       # tighter % on the same cached importance
+    assert calls["n"] == len(ex)             # importance computed exactly once
+    for name, m01 in r01.items():            # smaller top-k ⊂ larger top-k (per param)
+        assert (m01 & r10[name]).sum() == m01.sum()
+    assert sum(int(m.sum()) for m in r01.values()) < sum(int(m.sum()) for m in r10.values())
+
+
+def test_new_examples_recomputes(monkeypatch):
+    s = ModelSession(_tiny(), _EncTok(eos=-1), torch.device("cpu"))
+    calls = _count_backwards(monkeypatch, s)
+    s.locate_spot(["alpha", "beta"], topk=0.1)
+    assert calls["n"] == 2
+    s.locate_spot(["gamma"], topk=0.1)        # different examples → miss
+    assert calls["n"] == 3                    # +1 backward for the single new example
+
+
+def test_train_invalidates_importance_cache(monkeypatch):
+    s = ModelSession(_tiny(), _EncTok(eos=-1), torch.device("cpu"))
+    ex = ["alpha", "beta"]
+    s.locate_spot(ex, topk=0.1)
+    assert s._imp_cache is not None
+    list(s.train_steps(ex, mode="full", steps=1))   # weights change → cache cleared
+    assert s._imp_cache is None
+    calls = _count_backwards(monkeypatch, s)
+    s.locate_spot(ex, topk=0.1)                      # must recompute against new weights
+    assert calls["n"] == len(ex)
+    s.reset_training()
+    assert s._imp_cache is None                      # reset also invalidates
+
+
+def test_cache_matches_uncached_masks():
+    # equivalence: masks/grids are identical whether the importance was fresh or cached.
+    ex = ["alpha", "beta"]
+    a = ModelSession(_tiny(), _EncTok(eos=-1), torch.device("cpu"))
+    fresh, gfresh = a.locate_spot(ex, topk=0.5, return_grid=True)
+    a.locate_spot(ex, topk=0.5)                                   # prime, then re-threshold from cache
+    cached, gcached = a.locate_spot(ex, topk=0.5, return_grid=True)
+    assert set(fresh) == set(cached)
+    for name in fresh:
+        assert torch.equal(fresh[name], cached[name])
+    assert gfresh == gcached
+
+
 # ---- knob (B1): Locate × Edit × Evaluate ----
 
 def test_locate_cell_targets_one_param_fully():
