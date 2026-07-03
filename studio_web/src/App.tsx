@@ -2,6 +2,9 @@ import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
 import CodeMirror, { EditorView, keymap } from '@uiw/react-codemirror'
 import { python } from '@codemirror/lang-python'
 import { json } from '@codemirror/lang-json'
+import { javascript } from '@codemirror/lang-javascript'
+import { java } from '@codemirror/lang-java'
+import { cpp } from '@codemirror/lang-cpp'
 import { HighlightStyle, syntaxHighlighting } from '@codemirror/language'
 import { tags } from '@lezer/highlight'
 
@@ -34,27 +37,35 @@ const PRESETS: Record<string, string> = {
   javascript: 'function add(a, b) {\n    return a + b;\n}\nfor (let i = 0; i < 10; i++) {\n    console.log(i);\n}\nconst x = [3, 1, 2];\nx.sort((a, b) => a - b);\nconst data = await fs.readFile("f.txt", "utf8");\nconst result = nums.filter(n => n > 0).map(n => n * n);\ntry {\n    v = parseInt(s, 10);\n} catch (e) {\n    v = 0;\n}',
 }
 
-// CodeMirror: theme wired to the app's CSS variables (dark/light follow automatically), plus a
-// minimal 4-color syntax palette. No prebuilt theme package — kept in sync with index.css by hand.
+// CodeMirror: theme wired to the app's CSS variables. Syntax palette lives in index.css as
+// --syn-* tokens (VS Code Dark+/Light+ colors), so dark/light follow the app theme automatically.
 const cmTheme = EditorView.theme({
-  '&': { backgroundColor: 'var(--bg-2)', color: 'var(--text-0)', height: '100%', fontSize: '13px' },
+  '&': { backgroundColor: 'var(--bg-0)', color: 'var(--text-0)', height: '100%', fontSize: '13px' },
   '.cm-content': { fontFamily: 'var(--mono)', caretColor: 'var(--text-0)' },
-  '.cm-gutters': { backgroundColor: 'var(--bg-0)', color: 'var(--text-2)', border: 'none' },
-  '.cm-activeLine': { backgroundColor: 'var(--bg-1)' },
-  '.cm-activeLineGutter': { backgroundColor: 'var(--bg-1)' },
+  '.cm-gutters': { backgroundColor: 'var(--bg-0)', color: 'var(--text-2)', border: 'none', borderRight: '1px solid var(--line)' },
+  '.cm-activeLine': { backgroundColor: 'color-mix(in srgb, var(--text-0) 4%, transparent)' },
+  '.cm-activeLineGutter': { backgroundColor: 'transparent', color: 'var(--text-0)' },
   '&.cm-focused .cm-selectionBackground, .cm-selectionBackground': { backgroundColor: 'color-mix(in srgb, var(--accent) 25%, transparent)' },
   '.cm-cursor': { borderLeftColor: 'var(--text-0)' },
   '&.cm-focused': { outline: 'none' },
 })
 const cmHighlight = syntaxHighlighting(HighlightStyle.define([
-  { tag: tags.keyword, color: 'var(--accent)' },
-  { tag: [tags.string, tags.special(tags.string)], color: '#9CCC65' },
-  { tag: [tags.number, tags.bool, tags.null], color: '#CE9178' },
-  { tag: [tags.comment, tags.lineComment, tags.blockComment], color: 'var(--text-2)', fontStyle: 'italic' },
+  { tag: [tags.keyword, tags.controlKeyword, tags.moduleKeyword, tags.operatorKeyword], color: 'var(--syn-kw)' },
+  { tag: [tags.definitionKeyword, tags.bool, tags.null, tags.atom, tags.self], color: 'var(--syn-def)' },
+  { tag: [tags.string, tags.special(tags.string), tags.regexp], color: 'var(--syn-str)' },
+  { tag: tags.number, color: 'var(--syn-num)' },
+  { tag: [tags.comment, tags.lineComment, tags.blockComment], color: 'var(--syn-com)', fontStyle: 'italic' },
+  { tag: [tags.function(tags.variableName), tags.function(tags.propertyName)], color: 'var(--syn-fn)' },
+  { tag: [tags.typeName, tags.className, tags.namespace, tags.standard(tags.variableName)], color: 'var(--syn-type)' },
+  { tag: [tags.variableName, tags.propertyName, tags.attributeName, tags.definition(tags.variableName)], color: 'var(--syn-var)' },
 ]))
 function cmLangExt(name: string) {
-  if (name.endsWith('.py')) return [python()]
-  if (name.endsWith('.json') || name.endsWith('.jsonl')) return [json()]
+  const n = name.toLowerCase()
+  if (n.endsWith('.py') || n === 'python') return [python()]
+  if (n.endsWith('.js') || n.endsWith('.ts') || n === 'javascript') return [javascript()]
+  if (n.endsWith('.java') || n === 'java') return [java()]
+  if (/\.(cpp|cc|cxx|h|hpp)$/.test(n) || n === 'cpp') return [cpp()]
+  if (n.endsWith('.json') || n.endsWith('.jsonl')) return [json()]
   return []
 }
 
@@ -800,7 +811,7 @@ export default function App() {
           </div>
         )}
         {keys && <div title={examples[0]} className="mono" style={{ ...hint, fontSize: 11, marginBottom: 6, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>parsed[0] → {examples[0] ?? '—'}</div>}
-        <div style={{ width: '100%', height: keys ? 'calc(100% - 96px)' : 'calc(100% - 34px)', minHeight: 120, border: '1px solid var(--line-strong)', borderRadius: 4, overflow: 'hidden', background: 'var(--bg-2)' }}>
+        <div style={{ width: '100%', height: keys ? 'calc(100% - 96px)' : 'calc(100% - 34px)', minHeight: 120, border: '1px solid var(--line-strong)', borderRadius: 4, overflow: 'hidden', background: 'var(--bg-0)' }}>
           <CodeMirror value={dset.content} height="100%" theme="none"
             onChange={(v) => setDatasets((dd) => dd.map((x) => (x.name === name ? { ...x, content: v } : x)))}
             extensions={[

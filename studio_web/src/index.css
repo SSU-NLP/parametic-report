@@ -15,6 +15,15 @@
   --mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
   --font-ui: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Inter, sans-serif;
   --radius: 6px;
+  /* syntax palette (VS Code Dark+) — consumed by the CodeMirror HighlightStyle */
+  --syn-kw: #C586C0;
+  --syn-def: #569CD6;
+  --syn-str: #CE9178;
+  --syn-num: #B5CEA8;
+  --syn-com: #6A9955;
+  --syn-fn: #DCDCAA;
+  --syn-type: #4EC9B0;
+  --syn-var: #9CDCFE;
 }
 
 [data-theme="light"] {
@@ -29,6 +38,15 @@
   --accent: #0066D6;
   --live: #1F9D48;
   --danger: #D70015;
+  /* syntax palette (VS Code Light+) */
+  --syn-kw: #AF00DB;
+  --syn-def: #0000FF;
+  --syn-str: #A31515;
+  --syn-num: #098658;
+  --syn-com: #008000;
+  --syn-fn: #795E26;
+  --syn-type: #267F99;
+  --syn-var: #001080;
 }
 
 * { box-sizing: border-box; }
