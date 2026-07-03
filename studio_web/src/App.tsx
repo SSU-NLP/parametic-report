@@ -34,7 +34,7 @@ const WS_URL = localStorage.getItem('ps_kernel_url') || DEFAULT_WS
 const WS_TOKEN = localStorage.getItem('ps_kernel_token') || ''
 const isRemoteConnected = () => WS_URL === SSH_TUNNEL_WS
 const DEFAULT = { id: 'Qwen/Qwen2.5-1.5B-Instruct', label: 'Qwen2.5-1.5B' }
-const VIEWS = ['output', 'attention', 'activations', 'logitlens', 'spot', 'train', 'log'] as const
+const VIEWS = ['output', 'attention', 'activations', 'logitlens', 'spot', 'train', 'eval', 'log'] as const
 type View = typeof VIEWS[number]
 const DEFAULT_DATASET = 'def add(a, b):\n    return a + b\nfor i in range(10):\n    print(i)\nx = [3, 1, 2]\nx.sort()'
 const GENERAL_SET = 'The weather was pleasant and the streets were quiet.\nShe walked to the market to buy fresh vegetables.\nHistory teaches us patience and perspective.\nThe orchestra played beautifully through the evening.'
@@ -85,6 +85,9 @@ type ModelData = {
   spot: Spot | null; spotProg: { i: number; total: number } | null; perhead: { layer: number; data: number[][] } | null
   knobs: KnobRow[]; kppl: { base: number | null; inter: number | null }; ab: { base: string | null; inter: string | null }
   regions: { name: string; count: number }[]; evals: { code: number | null; general: number | null }
+  evalProg: { i: number; total: number; passed: number } | null
+  evalResult: { dataset: string; passed: number; total: number; pass_at_1: number; damaged: boolean; knobCount: number } | null
+  evalPrev: { dataset: string; passed: number; total: number; pass_at_1: number; damaged: boolean; knobCount: number } | null
   train: { losses: number[]; total: number; running: boolean; trained: boolean; before: { code: number | null; general: number | null } | null; error: string | null }
   tensors: { name: string; shape: number[]; dtype: string }[] | null
   count: number; busy: boolean; loading: boolean
@@ -92,7 +95,7 @@ type ModelData = {
   download: { pct: number; done_mb: number; total_mb: number } | null  // HF download stream (open only)
 }
 const emptyTrain = (): ModelData['train'] => ({ losses: [], total: 0, running: false, trained: false, before: null, error: null })
-const empty = (): ModelData => ({ output: '', frames: [], act: null, logit: null, spot: null, spotProg: null, perhead: null, knobs: [], kppl: { base: null, inter: null }, ab: { base: null, inter: null }, regions: [], evals: { code: null, general: null }, train: emptyTrain(), tensors: null, count: 0, busy: false, loading: false, lastRunId: null, framesFlushed: false, download: null })
+const empty = (): ModelData => ({ output: '', frames: [], act: null, logit: null, spot: null, spotProg: null, perhead: null, knobs: [], kppl: { base: null, inter: null }, ab: { base: null, inter: null }, regions: [], evals: { code: null, general: null }, evalProg: null, evalResult: null, evalPrev: null, train: emptyTrain(), tensors: null, count: 0, busy: false, loading: false, lastRunId: null, framesFlushed: false, download: null })
 
 type Tile = { id: number; model: string; tabs: string[]; active: number; h: number }  // tabs: View | `data:<name>`
 type Col = { id: number; w: number; tiles: Tile[] }
@@ -232,7 +235,7 @@ function ContextMenu({ x, y, items, onClose }: { x: number; y: number; items: Me
 }
 
 // PENDING_OPS: request ops that get a ⟳-pending badge until their matching response (or error) arrives
-const PENDING_OPS = new Set(['ppl', 'intervene', 'save_region', 'drilldown', 'region_compare', 'region_info'])
+const PENDING_OPS = new Set(['ppl', 'intervene', 'save_region', 'drilldown', 'region_compare', 'region_info', 'eval_code'])
 
 // Dataset content → training/spot examples. Understands JSON arrays / JSONL (records), with an
 // optional per-dataset field selection (e.g. context+question for benchmark files); plain text
@@ -345,6 +348,11 @@ export default function App() {
   const [spotN, setSpotN] = useState('')                 // '' = all examples
   const [spotPick, setSpotPick] = useState<'first' | 'random'>('first')
   const [evalDsName, setEvalDsName] = useState('')       // '' = eval kppl on spot data (dsExamples); else a loaded dataset name
+  // P13: pass@k (HumanEvalPack) eval view — separate dataset pick + gen params from the spot kppl "eval on"
+  const [codeEvalDsName, setCodeEvalDsName] = useState('')
+  const [codeEvalTemp, setCodeEvalTemp] = useState(0)
+  const [codeEvalMaxTokens, setCodeEvalMaxTokens] = useState(512)
+  const [codeEvalLimit, setCodeEvalLimit] = useState('')  // '' = full dataset
   const sample = (ex: string[]) => {
     const n = Number(spotN)
     if (!n || n >= ex.length) return ex
@@ -564,8 +572,19 @@ export default function App() {
       if (m.op === 'load_hf_dataset') setHfLoading(null)
       if (m.op) { setPendingKey(`${m.op}:${mid}`, false); setLocateProg((p) => { const n = { ...p }; delete n[m.op]; return n }) }
       if (m.op === 'train') patch(mid, (d) => ({ ...d, train: { ...d.train, running: false, error: m.reason } }))
+      if (m.op === 'eval_code') patch(mid, (d) => ({ ...d, evalProg: null }))
     }
     else if (m.type === 'perhead') { setPendingKey(`drilldown:${mid}`, false); patch(mid, (d) => ({ ...d, perhead: { layer: m.layer, data: m.data } })) }
+    else if (m.type === 'eval_progress') patch(mid, (d) => ({ ...d, evalProg: { i: m.i, total: m.total, passed: m.passed } }))
+    else if (m.type === 'eval_result') {
+      setPendingKey(`eval_code:${mid}`, false)
+      logEntry(mid, 'result', `eval[${m.dataset}] pass@1 = ${(m.pass_at_1 * 100).toFixed(2)}% (${m.passed}/${m.total})`)
+      patch(mid, (d) => {
+        const damaged = d.knobs.length > 0
+        const result = { dataset: m.dataset, passed: m.passed, total: m.total, pass_at_1: m.pass_at_1, damaged, knobCount: d.knobs.length }
+        return { ...d, evalProg: null, evalResult: result, evalPrev: d.evalResult }
+      })
+    }
     else if (m.type === 'done') {
       const ph = abPhase.current[mid]
       if (ph === 'base') {        // A/B: baseline run finished → stash it, re-apply knobs, run intervened
@@ -1054,6 +1073,56 @@ export default function App() {
                 </Fragment>))}
               </div>}
         </div>
+      </>)
+    }
+    if (view === 'eval') {
+      const sel = { fontSize: 11, background: 'var(--bg-2)', color: 'var(--text-1)', border: '1px solid var(--line-strong)', borderRadius: 4, padding: '2px 4px' } as const
+      const damaged = d.knobs.length > 0
+      const busy = pending.has(`eval_code:${mid}`)
+      const canRun = !busy && codeEvalDsName !== ''
+      const runEval = () => {
+        const limit = Number(codeEvalLimit)
+        sendTo(mid, {
+          type: 'eval_code', dataset: codeEvalDsName, temperature: codeEvalTemp, max_tokens: codeEvalMaxTokens,
+          ...(codeEvalLimit !== '' && limit > 0 ? { limit } : {}),
+        })
+      }
+      const fmt = (r: { dataset: string; passed: number; total: number; pass_at_1: number; damaged: boolean; knobCount: number }) => (
+        <div style={{ padding: 10, border: '1px solid var(--line-strong)', borderRadius: 6 }}>
+          <div style={{ fontSize: 22, color: 'var(--text-0)' }}>pass@1 = {(r.pass_at_1 * 100).toFixed(2)}%</div>
+          <div style={{ ...hint, fontSize: 11, marginTop: 2 }}>{r.passed}/{r.total} passed · {r.dataset}</div>
+          <div style={{ fontSize: 11, marginTop: 4, color: r.damaged ? 'var(--danger)' : 'var(--accent)' }}>{r.damaged ? `damaged model (${r.knobCount} knobs)` : 'clean model'}</div>
+        </div>
+      )
+      return (<>
+        <div style={{ color: 'var(--text-1)', marginBottom: 6 }}>pass@k eval<span style={hint}> · HumanEvalPack — measures coding ability by test-pass rate</span></div>
+        <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap', marginBottom: 6 }}>
+          <select value={codeEvalDsName} onChange={(e) => setCodeEvalDsName(e.target.value)} style={sel} title="load humanevalpack via + HF first">
+            <option value="">dataset…</option>
+            {datasets.map((x) => <option key={x.name} value={x.name}>{x.name} ({dsMeta[x.name]?.count ?? '…'})</option>)}
+          </select>
+          {datasets.length === 0 && <span style={hint}>load humanevalpack via + HF first</span>}
+          <span style={hint}>temp</span><input type="number" min={0} step={0.1} value={codeEvalTemp} onChange={(e) => setCodeEvalTemp(Math.max(0, Number(e.target.value) || 0))} title="0 = greedy (pass@1)" style={{ ...sel, width: 48 }} />
+          <span style={hint}>max_tokens</span><input type="number" min={1} value={codeEvalMaxTokens} onChange={(e) => setCodeEvalMaxTokens(Math.max(1, Math.round(Number(e.target.value)) || 1))} style={{ ...sel, width: 60 }} />
+          <span style={hint}>limit</span><input type="number" min={1} value={codeEvalLimit} onChange={(e) => { const v = e.target.value; if (v === '' || Number(v) >= 1) setCodeEvalLimit(v) }} placeholder="all" title="cap the number of problems — for a quick test run" style={{ ...sel, width: 54 }} />
+        </div>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 10 }}>
+          <Btn onClick={runEval} disabled={!canRun} color={canRun ? 'var(--accent)' : 'var(--text-2)'}>{busy ? '⟳ ' : ''}Run</Btn>
+          <span style={{ fontSize: 11, color: damaged ? 'var(--danger)' : 'var(--text-2)' }}>{damaged ? `evaluating DAMAGED model (${d.knobs.length} knobs)` : 'evaluating clean model'}</span>
+        </div>
+        {d.evalProg && (
+          <div style={{ marginBottom: 10 }}>
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}><span style={hint}>{d.evalProg.i}/{d.evalProg.total} · passed {d.evalProg.passed}</span></div>
+            <div style={{ background: 'var(--bg-2)', borderRadius: 2, height: 4, marginTop: 3 }}><div style={{ height: 4, width: `${Math.round((d.evalProg.i / d.evalProg.total) * 100)}%`, background: 'var(--accent)', borderRadius: 2 }} /></div>
+          </div>
+        )}
+        {d.evalResult && (
+          <div style={{ display: 'grid', gridTemplateColumns: d.evalPrev ? '1fr 1fr' : '1fr', gap: 10 }}>
+            <div><div style={{ ...hint, fontSize: 11, marginBottom: 3 }}>latest</div>{fmt(d.evalResult)}</div>
+            {d.evalPrev && <div><div style={{ ...hint, fontSize: 11, marginBottom: 3 }}>previous · compare</div>{fmt(d.evalPrev)}</div>}
+          </div>
+        )}
+        {!d.evalResult && !d.evalProg && <span style={hint}>pick a dataset and Run</span>}
       </>)
     }
     if (view === 'train') {

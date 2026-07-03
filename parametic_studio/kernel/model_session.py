@@ -458,6 +458,16 @@ class ModelSession:
         ids = torch.tensor([self.tok.encode(prompt)])
         yield from self.generate(ids, max_tokens, probes, temperature=temperature)
 
+    def complete_code(self, prompt, max_tokens=512, temperature=0.0, stops=None):
+        """Continue a raw code `prompt` (no chat template) and return the completion text,
+        cut at the first stop sequence. Uses the plain decode loop so the current knob/damage
+        state applies verbatim. ponytail: reuse generate(), collect text, truncate."""
+        from parametic_studio.kernel.humaneval import truncate_completion, STOP_SEQUENCES
+        stops = STOP_SEQUENCES if stops is None else stops
+        ids = torch.tensor([self.tok.encode(prompt)])
+        out = "".join(ev["text"] for ev in self.generate(ids, max_tokens, probes=(), temperature=temperature))
+        return truncate_completion(out, stops)
+
     def generate(self, input_ids, max_tokens, probes=("attention",), temperature=0.0):
         self._stop = False
         ids = input_ids.to(self.device)

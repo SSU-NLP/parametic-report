@@ -17,7 +17,7 @@ SESSIONS: dict = {}   # model_id -> ModelSession (multi-model registry)
 DEFAULT_MODEL = None  # id the kernel booted with (serve sets it; catalog reply carries it to the web)
 _locks: dict = {}     # model_id -> asyncio.Lock (serialize concurrent loads of the same model)
 TRAINING: set = set()  # model ids mid-training — other ops on them get error:busy (serializes _stop too)
-_BUSY_OPS = ("generate", "spot", "intervene", "clear", "suspend", "resume", "ppl", "drilldown", "train", "reset_train", "save_region")
+_BUSY_OPS = ("generate", "spot", "intervene", "clear", "suspend", "resume", "ppl", "drilldown", "train", "reset_train", "save_region", "eval_code")
 
 
 async def _ensure(model_id, on_progress=None):
@@ -408,6 +408,43 @@ async def _run_generation(websocket, msg):
     await websocket.send_json({"type": "done", "model": model, "reason": reason})
 
 
+async def _run_eval_code(websocket, msg):
+    """eval_code{model,dataset,temperature?=0,max_tokens?=512,limit?=null}: HumanEvalPack pass@1
+    on the current model (knob/damage state applies as-is). Streams eval_progress per problem,
+    ends with eval_result. Generation + subprocess test-run happen off the event loop."""
+    from parametic_studio.kernel.humaneval import build_program, check_correctness
+
+    model = msg.get("model")
+    session = await _target(msg)
+    name = msg["dataset"]
+    p = _dataset_path(_datasets_root(), name)
+    if not p.is_file():
+        raise ValueError(f"dataset not found: {name}")
+    rows = [json.loads(line) for line in p.read_text().splitlines() if line.strip()]
+    limit = msg.get("limit")
+    if limit is not None:
+        rows = rows[:limit]
+    temperature = msg.get("temperature", 0.0)
+    max_tokens = msg.get("max_tokens", 512)
+    total = len(rows)
+
+    def _eval_one(row):
+        completion = session.complete_code(row["prompt"], max_tokens=max_tokens, temperature=temperature)
+        passed, _detail = check_correctness(build_program(row, completion))
+        return passed
+
+    passed = 0
+    for i, row in enumerate(rows):
+        ok = await asyncio.to_thread(_eval_one, row)  # generate + subprocess test off the loop
+        if ok:
+            passed += 1
+        await websocket.send_json({"type": "eval_progress", "model": model,
+                                   "i": i + 1, "total": total, "passed": passed})
+    await websocket.send_json({"type": "eval_result", "model": model, "dataset": name,
+                               "passed": passed, "total": total,
+                               "pass_at_1": (passed / total if total else 0.0)})
+
+
 async def _run_training(websocket, msg):
     model = msg.get("model")
     session = await _target(msg)
@@ -489,6 +526,8 @@ async def ws_endpoint(websocket: WebSocket):
 async def _dispatch(websocket, msg, t):
         if t == "generate":
             await _run_generation(websocket, msg)
+        elif t == "eval_code":
+            await _run_eval_code(websocket, msg)
         elif t == "catalog":
             models = await asyncio.to_thread(_catalog_models)  # scan_cache_dir walks disk — off the loop
             await websocket.send_json({"type": "catalog", "models": models, "default": DEFAULT_MODEL})
