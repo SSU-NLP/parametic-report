@@ -850,16 +850,28 @@ export default function App() {
               </div>
             ))}
           </div>
-          <div style={{ color: 'var(--text-1)', marginBottom: 3 }}>intersection<span style={hint}> · weights selected by ALL {cd.names.length} regions · {cd.intersectionLift
-            ? <>color = <b>enrichment vs chance</b> (lift; independent top-k ⇒ 1×) · max {Math.max(...cd.intersectionLift.flat()).toFixed(0)}× · ∩ fraction ≤ {(Math.max(...cd.intersection.flat()) * 100).toFixed(1)}%</>
-            : 'cell = fraction'}</span></div>
-          <SpotGrid grid={cd.intersectionLift ?? cd.intersection} modules={cd.modules}
-            color={(() => {  // per-param top-k ⇒ expected is uniform ⇒ lift ∝ fraction; min-max stretch so the carpet shows contrast
-              const flat = (cd.intersectionLift ?? cd.intersection).flat(); const lo = Math.min(...flat), hi = Math.max(...flat)
-              return (v: number) => ampColor(hi > lo ? (v - lo) / (hi - lo) : 0, 1)
-            })()}
-            cellTitle={cd.intersectionLift ? (l, mod, v) => `L${l} · ${mod} · ${v.toFixed(1)}× vs chance · ∩ ${(cd.intersection[l][cd.modules.indexOf(mod)] * 100).toFixed(2)}% of weights` : undefined}
-            onHover={setCompareHover} hovered={compareHover} />
+          {(() => {
+            // "shared core" = where ALL spots agree the important weights live. Color by the geometric
+            // mean of the per-region importance grids (gated to cells that actually share weights). This
+            // avoids the lift artifact: biases/norms are tiny + data-independent, so their top-k always
+            // overlaps 100% → astronomical lift, burying the real signal in the big weight matrices.
+            const allImp = cd.names.every((n) => cd.kinds[n] === 'importance')
+            const shared = allImp
+              ? cd.grids[cd.names[0]].map((row, l) => row.map((_, c) =>
+                  cd.intersection[l][c] > 0 ? Math.exp(cd.names.reduce((s, n) => s + Math.log(cd.grids[n][l][c] || 1e-30), 0) / cd.names.length) : 0))
+              : (cd.intersectionLift ?? cd.intersection)
+            const flat = shared.flat(); const lo = Math.min(...flat), hi = Math.max(...flat)
+            return (<>
+              <div style={{ color: 'var(--text-1)', marginBottom: 3 }}>shared core<span style={hint}> · weights selected by ALL {cd.names.length} regions · {allImp
+                ? <>color = <b>importance all {cd.names.length} agree on</b> (geo-mean |g×w|) — not raw overlap, which biases/norms saturate</>
+                : 'color = selection fraction (legacy regions — re-save for importance)'}</span></div>
+              <SpotGrid grid={shared} modules={cd.modules}
+                color={(v: number) => ampColor(hi > lo ? (v - lo) / (hi - lo) : 0, 1)}
+                cellTitle={(l, mod, v) => { const c = cd.modules.indexOf(mod); const lift = cd.intersectionLift?.[l][c]
+                  return `L${l} · ${mod}${allImp ? ` · shared imp ${v.toExponential(1)}` : ''} · ∩ ${(cd.intersection[l][c] * 100).toFixed(2)}% of weights${lift != null ? ` · ${lift.toFixed(0)}× vs chance` : ''}` }}
+                onHover={setCompareHover} hovered={compareHover} />
+            </>)
+          })()}
           <div style={{ marginTop: 10, fontSize: 11 }}>
             <span style={hint}>pairwise Jaccard (|A∩B| / |A∪B|):</span>
             {Object.entries(cd.jaccard).map(([k, v]) => {
