@@ -499,6 +499,7 @@ export default function App() {
   const [askConfig, setAskConfig] = useState('')          // HF dataset config (e.g. humanevalpack language)
   const [askFilter, setAskFilter] = useState('')           // 'col=value' row filter (e.g. tiny-codes programming_language=Python)
   const [hfLoading, setHfLoading] = useState<string | null>(null)  // repo id currently loading, for the Data section hint
+  const [uploading, setUploading] = useState<string[]>([])  // dataset file names being uploaded to the kernel store (+ File/+ Folder)
   const [armed, setArmed] = useState<string | null>(null)
   const armedTimer = useRef<number | null>(null)
   function confirmClick(key: string, action: () => void) {
@@ -554,7 +555,7 @@ export default function App() {
       return
     }
     if (m.type === 'dataset_content') { setDatasets((dd) => dd.map((x) => (x.name === m.name ? { ...x, content: m.content } : x))); return }
-    if (m.type === 'dataset_saved') { sendTo(m.model, { type: 'datasets' }); return }
+    if (m.type === 'dataset_saved') { setUploading((u) => u.filter((x) => x !== m.name)); sendTo(m.model, { type: 'datasets' }); return }
     if (m.type === 'loading_dataset') { setHfLoading(m.repo); return }
     if (m.type === 'stats') { setKernelStats({ rss_mb: m.rss_mb }); return }
     if (m.type === 'gpus') { setGpus({ count: m.count, devices: m.devices ?? [] }); return }
@@ -601,6 +602,7 @@ export default function App() {
     else if (m.type === 'error') {
       toast(`[${m.op ?? 'kernel'}] ${m.reason}`)
       if (m.op === 'load_hf_dataset') setHfLoading(null)
+      if (m.op === 'save_dataset') setUploading([])  // error carries no name → clear the whole batch
       if (m.op) { setPendingKey(`${m.op}:${mid}`, false); setLocateProg((p) => { const n = { ...p }; delete n[m.op]; return n }) }
       if (m.op === 'train') patch(mid, (d) => ({ ...d, train: { ...d.train, running: false, error: m.reason } }))
       if (m.op === 'eval_code') patch(mid, (d) => ({ ...d, evalProg: null }))
@@ -1551,8 +1553,10 @@ export default function App() {
           const addFiles = (files: FileList | null) => {
             for (const f of Array.from(files ?? [])) {
               const name = (f as File & { webkitRelativePath?: string }).webkitRelativePath || f.name
+              setUploading((u) => u.includes(name) ? u : [...u, name])  // show 'uploading…' until dataset_saved/error clears it
               const reader = new FileReader()
               reader.onload = () => sendTo(focused(), { type: 'save_dataset', name, content: String(reader.result) })  // uploads persist to the kernel store
+              reader.onerror = () => { setUploading((u) => u.filter((x) => x !== name)); toast(`[upload] ${name} — read failed`) }
               reader.readAsText(f)
             }
           }
@@ -1646,6 +1650,7 @@ export default function App() {
               )
             })()}
             {hfLoading && <div style={{ ...hint, fontSize: 11, marginTop: 4 }}>loading {hfLoading}…</div>}
+            {uploading.length > 0 && <div style={{ ...hint, fontSize: 11, marginTop: 4 }}>⟳ uploading {uploading.length === 1 ? uploading[0] : `${uploading.length} files`}…</div>}
 
             <div style={{ display: 'flex', alignItems: 'center', margin: '10px 0 4px' }}>
               <span className="section-h">Regions</span>
