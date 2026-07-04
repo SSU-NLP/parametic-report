@@ -155,26 +155,51 @@ function Grid({ rows, cols, rowH, onRow, onRowEnter, onLeave, cellTitle }: { row
     </div>
   )
 }
-function SpotGrid({ grid, modules, onCell, selected, color = ampColor, cellTitle, onHover, hovered }: { grid: number[][]; modules: string[]; onCell?: (l: number, module: string) => void; selected?: Set<string>; color?: (v: number, max: number) => string; cellTitle?: (l: number, module: string, v: number) => string; onHover?: (cell: string | null) => void; hovered?: string | null }) {
+// short axis label for a module param name so captures are legible without hovering:
+// self_attn.q_proj.weight → q · mlp.gate_proj.weight → gate · input_layernorm.weight → ln1 · .bias → +b
+function moduleAbbrev(name: string): string {
+  const bias = name.endsWith('.bias')
+  const s = name.replace(/\.(weight|bias)$/, '')
+  const map: Record<string, string> = {
+    'self_attn.q_proj': 'q', 'self_attn.k_proj': 'k', 'self_attn.v_proj': 'v', 'self_attn.o_proj': 'o',
+    'mlp.gate_proj': 'gate', 'mlp.up_proj': 'up', 'mlp.down_proj': 'down',
+    'input_layernorm': 'ln1', 'post_attention_layernorm': 'ln2',
+  }
+  return (map[s] ?? s.split('.').filter((p) => p !== 'proj').pop() ?? s) + (bias ? '+b' : '')
+}
+function SpotGrid({ grid, modules, onCell, selected, color = ampColor, cellTitle, onHover, hovered, labels = true }: { grid: number[][]; modules: string[]; onCell?: (l: number, module: string) => void; selected?: Set<string>; color?: (v: number, max: number) => string; cellTitle?: (l: number, module: string, v: number) => string; onHover?: (cell: string | null) => void; hovered?: string | null; labels?: boolean }) {
   const flat = grid.flat(); const max = Math.max(...flat)
   const sorted = [...flat].sort((a, b) => b - a)
   const thr = sorted[Math.max(0, Math.floor(sorted.length * 0.05) - 1)] ?? Infinity
+  const L = grid.length
+  const step = Math.max(1, Math.ceil(L / 12))   // ~12 layer ticks max — every row labelled would be unreadable at 9px
+  const cols = `${labels ? '15px ' : ''}repeat(${modules.length}, 1fr)`
+  const lab = { fontSize: 8, color: 'var(--text-2)', lineHeight: '9px', overflow: 'hidden', whiteSpace: 'nowrap' } as const
   return (
-    <div style={{ display: 'grid', gridTemplateRows: `repeat(${grid.length}, 9px)`, gap: 1 }}
-      onMouseLeave={onHover ? () => onHover(null) : undefined}>
-      {grid.map((row, l) => (
-        <div key={l} style={{ display: 'grid', gridTemplateColumns: `repeat(${modules.length}, 1fr)`, gap: 1 }}>
-          {row.map((v, c) => {
-            const key = `${l}.${modules[c]}`
-            const sel = selected?.has(key)
-            const hov = hovered === key
-            return <div key={c} onClick={onCell ? () => onCell(l, modules[c]) : undefined}
-              onMouseEnter={onHover ? () => onHover(key) : undefined}
-              title={cellTitle ? cellTitle(l, modules[c], v) : `L${l} · ${modules[c]} · ${v.toExponential(2)}${onCell ? ' — click → knob' : ''}`}
-              style={{ background: color(v, max), cursor: onCell ? 'pointer' : 'default', outline: hov ? '1.5px solid var(--accent)' : sel ? '1.5px solid var(--accent)' : v >= thr ? `1px solid ${isLight() ? '#1A1717' : '#FDFCFC'}` : 'none', outlineOffset: (hov || sel) ? -1 : 0 }} />
-          })}
+    <div>
+      {labels && (
+        <div style={{ display: 'grid', gridTemplateColumns: cols, gap: 1, marginBottom: 2 }}>
+          <div />
+          {modules.map((m, c) => <div key={c} title={m} style={{ ...lab, textAlign: 'center' }}>{moduleAbbrev(m)}</div>)}
         </div>
-      ))}
+      )}
+      <div style={{ display: 'grid', gridTemplateRows: `repeat(${L}, 9px)`, gap: 1 }}
+        onMouseLeave={onHover ? () => onHover(null) : undefined}>
+        {grid.map((row, l) => (
+          <div key={l} style={{ display: 'grid', gridTemplateColumns: cols, gap: 1 }}>
+            {labels && <div style={{ ...lab, textAlign: 'right', paddingRight: 3 }}>{(l % step === 0 || l === L - 1) ? l : ''}</div>}
+            {row.map((v, c) => {
+              const key = `${l}.${modules[c]}`
+              const sel = selected?.has(key)
+              const hov = hovered === key
+              return <div key={c} onClick={onCell ? () => onCell(l, modules[c]) : undefined}
+                onMouseEnter={onHover ? () => onHover(key) : undefined}
+                title={cellTitle ? cellTitle(l, modules[c], v) : `L${l} · ${modules[c]} · ${v.toExponential(2)}${onCell ? ' — click → knob' : ''}`}
+                style={{ background: color(v, max), cursor: onCell ? 'pointer' : 'default', outline: hov ? '1.5px solid var(--accent)' : sel ? '1.5px solid var(--accent)' : v >= thr ? `1px solid ${isLight() ? '#1A1717' : '#FDFCFC'}` : 'none', outlineOffset: (hov || sel) ? -1 : 0 }} />
+            })}
+          </div>
+        ))}
+      </div>
     </div>
   )
 }
@@ -1298,6 +1323,7 @@ export default function App() {
         const { base, inter } = d.kppl
         return (<>
           <div style={hint}>{d.spot.layers} × {d.spot.modules.length} · |grad×param|<span> · rows=layers, cols=modules · bright cells = important (spot) · click a cell → knob</span></div>
+          <div style={{ ...hint, fontSize: 10 }}>cols: q k v o = attn q/k/v/o_proj · gate up down = mlp · ln1 ln2 = layernorms · +b = bias · left = layer index</div>
           <ScaleBar max={Math.max(...d.spot.grid.flat())} color={ampColor} label="|g×w|" />
           <div style={{ marginTop: 2 }}><SpotGrid grid={d.spot.grid} modules={d.spot.modules} onCell={addCell} selected={selected} /></div>
           <div style={{ marginTop: 14, borderTop: '1px solid var(--line)', paddingTop: 10 }}>
