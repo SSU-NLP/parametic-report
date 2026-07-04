@@ -392,7 +392,17 @@ export default function App() {
   // multi-line examples (code) don't survive the ex.join('\n')→toExamples split round-trip, so re-parsing
   // the editor yields a different set → importance cache miss → save recomputes. Keeping the array fixes it.
   const [spotExamples, setSpotExamples] = useState<Record<string, string[]>>({})  // per-model: each keeps the array ITS spot ran on
-  const emitSpot = (mid: string, ex: string[]) => { setSpotExamples((s) => ({ ...s, [mid]: ex })); setDs(ex.join('\n')); sendTo(mid, { type: 'spot', examples: ex }) }
+  const [dsIsPreview, setDsIsPreview] = useState(false)  // true = editor shows a truncated preview; full set lives in spotExamples
+  // materialising thousands of examples into the <textarea> value froze/blanked the webview. Cap the
+  // DISPLAY at DS_PREVIEW; compute + save still run on the full `ex` (kept in spotExamples[mid]).
+  const DS_PREVIEW = 200
+  const emitSpot = (mid: string, ex: string[]) => {
+    setSpotExamples((s) => ({ ...s, [mid]: ex }))
+    const preview = ex.length > DS_PREVIEW
+    setDsIsPreview(preview)
+    setDs(preview ? ex.slice(0, DS_PREVIEW).join('\n') + `\n\n… +${ex.length - DS_PREVIEW} more — computing on all ${ex.length}` : ex.join('\n'))
+    sendTo(mid, { type: 'spot', examples: ex })
+  }
   const [expModels, setExpModels] = useState<Set<string>>(new Set())  // models with their tensor tree expanded
   const [expPaths, setExpPaths] = useState<Set<string>>(new Set())    // expanded folder paths (model-id prefixed)
   // explorer selection: `${section}:${name}` — target of Del key + context menu ('model:'|'data:'|'region:')
@@ -1229,7 +1239,11 @@ export default function App() {
         )}
       </>)
     }
-    const runSpot = (text: string) => emitSpot(mid, sample(toExamples(text)))  // materialize the sampled set — what you see is what ran (and what save reuses)
+    // if the editor still shows the untouched preview, recompute on the FULL cached set (parsing the
+    // truncated preview would silently shrink the run); otherwise parse whatever the user typed.
+    const runSpot = (text: string) => (dsIsPreview && spotExamples[mid]?.length)
+      ? emitSpot(mid, spotExamples[mid])
+      : emitSpot(mid, sample(toExamples(text)))
     return (<>
       <div style={{ color: 'var(--text-1)', marginBottom: 6 }}>dataset → grad×param<span style={hint}> · top cells = spot</span></div>
       <div style={{ display: 'flex', gap: 6, alignItems: 'center', marginBottom: 6 }}>
@@ -1250,7 +1264,7 @@ export default function App() {
         </select>
         <span style={hint}>→ loads &amp; computes</span>
       </div>
-      <textarea value={ds} onChange={(e) => setDs(e.target.value)} rows={3} spellCheck={false} style={{ width: '100%', background: 'var(--bg-2)', border: '1px solid var(--line-strong)', borderRadius: 4, padding: '6px 8px', outline: 'none', resize: 'vertical', marginBottom: 6, fontFamily: 'var(--mono)' }} />
+      <textarea value={ds} onChange={(e) => { setDs(e.target.value); setDsIsPreview(false) }} rows={3} spellCheck={false} style={{ width: '100%', background: 'var(--bg-2)', border: '1px solid var(--line-strong)', borderRadius: 4, padding: '6px 8px', outline: 'none', resize: 'vertical', marginBottom: 6, fontFamily: 'var(--mono)' }} />
       <Btn onClick={() => runSpot(ds)} color="var(--accent)" style={{ padding: '4px 12px', marginBottom: 10 }}>Compute spot</Btn>
       {d.spotProg && <div style={{ marginBottom: 8 }}><div style={{ display: 'flex', gap: 8, alignItems: 'center' }}><span style={hint}>computing · {d.spotProg.i}/{d.spotProg.total}</span><Btn onClick={() => sendTo(mid, { type: 'stop_spot' })} color="var(--danger)" style={{ padding: '0 8px' }}>Stop</Btn></div><div style={{ background: 'var(--bg-2)', borderRadius: 2, height: 4, marginTop: 3 }}><div style={{ height: 4, width: `${Math.round((d.spotProg.i / d.spotProg.total) * 100)}%`, background: 'var(--accent)', borderRadius: 2 }} /></div></div>}
       {d.spot && (() => {
