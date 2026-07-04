@@ -517,6 +517,7 @@ export default function App() {
   const splashClosed = useRef(false)  // fire close_splash exactly once (first kernelUp or 8s timeout)
   const authFailToasted = useRef(false)  // show the auth-failed toast once, not on every reconnect retry
   const openRef = useRef(open); openRef.current = open
+  const bootedRef = useRef(false)  // first catalog vs a reconnect resync — only the first adopts the kernel default
   function scheduleReconnect() {
     if (reconnectTimer.current != null) return
     const delay = Math.min(30000, 1000 * 2 ** reconnectAttempts.current)
@@ -576,12 +577,16 @@ export default function App() {
     if (m.type === 'catalog') {
       setCatalog(m.models)
       const def = m.models.find((x: { id: string; label: string }) => x.id === m.default)
-      if (def && def.id !== DEFAULT.id) {  // kernel booted with a different model — follow it if the UI is untouched
+      // adopt the kernel's default model ONLY on the very first catalog. On a reconnect resync this must
+      // NOT run — it would wipe data (incl. the computed spot) for every open model. (bug: spot vanished
+      // after a mid-inference WS reconnect.)
+      if (!bootedRef.current && def && def.id !== DEFAULT.id) {  // kernel booted with a different model — follow it if the UI is untouched
         setOpen((o) => (o.length === 1 && o[0].id === DEFAULT.id ? [def] : o))
         setData((all) => (all[DEFAULT.id] && !all[DEFAULT.id].count ? { [def.id]: empty() } : all))
         setCols((cs) => cs.map((c) => ({ ...c, tiles: c.tiles.map((t) => (t.model === DEFAULT.id ? { ...t, model: def.id } : t)) })))
         setFocusModel((f) => (f === DEFAULT.id ? def.id : f))
       }
+      bootedRef.current = true
       sendTo(def?.id ?? DEFAULT.id, { type: 'regions' })   // disk-persisted regions appear on startup
       sendTo(def?.id ?? DEFAULT.id, { type: 'datasets' })  // …and the kernel-side dataset store
       return
