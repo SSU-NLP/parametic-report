@@ -370,12 +370,25 @@ def _locate_emitter(websocket, msg, op):
     loop = asyncio.get_running_loop()
     model = msg.get("model")
 
-    def emit(i, total):
+    def emit(i, total, grid=None):  # grid arg ignored — locate has no live heatmap
         fut = asyncio.run_coroutine_threadsafe(
             websocket.send_json({"type": "locate_progress", "model": model, "op": op, "i": i, "total": total}),
             loop,
         )
         fut.result()  # propagate send errors into the worker thread; backpressure on a slow socket
+    return emit
+
+
+def _spot_emitter(websocket, msg):
+    """progress(i, total, grid) for compute_spot: streams the live heatmap frame each example."""
+    loop = asyncio.get_running_loop()
+    model = msg.get("model")
+
+    def emit(i, total, grid=None):
+        payload = {"type": "spot_progress", "model": model, "i": i, "total": total}
+        if grid:
+            payload.update(grid)
+        asyncio.run_coroutine_threadsafe(websocket.send_json(payload), loop).result()
 
     return emit
 
@@ -622,14 +635,10 @@ async def _dispatch(websocket, msg, t):
                     return
 
             listener = asyncio.create_task(listen_stop_spot())
-            acc, grid = {}, None
-            try:
-                for i, ex in enumerate(examples):
-                    if stopped.is_set():
-                        break
-                    grid = await asyncio.to_thread(session.spot_step, ex, acc, i + 1)  # off the loop
-                    await websocket.send_json({"type": "spot_progress", "model": msg.get("model"),
-                                               "i": i + 1, "total": len(examples), **grid})
+            emit = _spot_emitter(websocket, msg)
+            try:  # compute_spot keeps the per-param importance in the session cache, so a following
+                  # save/knob reuses it (no second backward) — while still streaming the live heatmap.
+                grid = await asyncio.to_thread(session.compute_spot, examples, emit, stopped.is_set)
             finally:
                 listener.cancel()
                 try:
@@ -638,8 +647,7 @@ async def _dispatch(websocket, msg, t):
                     pass
                 await asyncio.to_thread(session.free_memory)  # spot backwards leave allocator-cached blocks
             await websocket.send_json({"type": "spotmap", "model": msg.get("model"),
-                                       "reason": "stopped" if stopped.is_set() else "done",
-                                       **(grid or session.compute_spot([]))})
+                                       "reason": "stopped" if stopped.is_set() else "done", **grid})
         elif t == "intervene":
             session = await _target(msg)
             r = msg["region"]

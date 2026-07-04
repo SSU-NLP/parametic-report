@@ -79,9 +79,9 @@ def test_open_streams_download_progress_then_opened(monkeypatch):
 
     with TestClient(api.app).websocket_connect("/ws") as ws:
         ws.send_json({"type": "open", "model": "m/new"})
-        msgs = [ws.receive_json() for _ in range(5)]  # loading + 3 progress + opened
+        msgs = [ws.receive_json() for _ in range(6)]  # loading + 3 progress + loading_weights + opened
     types = [m["type"] for m in msgs]
-    assert types == ["loading", "download_progress", "download_progress", "download_progress", "opened"]
+    assert types == ["loading", "download_progress", "download_progress", "download_progress", "loading_weights", "opened"]
     progress = [m for m in msgs if m["type"] == "download_progress"]
     assert [p["done_mb"] for p in progress] == [100.0, 200.0, 300.0]
     assert all(p["total_mb"] == 300.0 and p["model"] == "m/new" for p in progress)

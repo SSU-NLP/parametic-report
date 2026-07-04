@@ -184,7 +184,10 @@ def test_ws_spot_streams_progress_then_spotmap():
     assert all(p["total"] == 3 for p in progress)
     assert all(len(p["grid"]) == p["layers"] for p in progress)   # live grid each step
     assert final["layers"] == 2 and len(final["grid"]) == 2       # spotmap unchanged
-    assert final["grid"] == progress[-1]["grid"]                  # final == last progress
+    # final frame ≈ last streamed frame — same numbers, but the spotmap sums per-param tensors while
+    # the live frames sum per-cell scalars, so they differ only at float-accumulation precision.
+    _flat = lambda g: [v for row in g for v in row]
+    assert _flat(final["grid"]) == pytest.approx(_flat(progress[-1]["grid"]), rel=1e-4)
 
 
 def test_drilldown_after_generation():

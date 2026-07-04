@@ -140,40 +140,54 @@ class ModelSession:
         grid = [[acc.get((l, mod), 0.0) / n for mod in modules] for l in range(L)]
         return {"layers": L, "modules": modules, "grid": grid}
 
-    def _get_importance(self, examples, progress=None):
+    def _get_importance(self, examples, progress=None, should_stop=None):
         """Per-param accumulated |grad×param| (CPU tensors), cached per examples set.
 
         The importance is always relative to the *current* weights. A cache hit (same examples,
         weights unchanged since — train_steps/reset_training invalidate) returns without any backward.
-        Miss: run one backward per example, accumulate on CPU, cache, return."""
+        Miss: run one backward per example, accumulate on CPU, cache, return. should_stop() → cancel
+        (caches what was accumulated so far so a resumed/repeat call still reuses it)."""
         key = hash(tuple(examples))
         if self._imp_cache is not None and self._imp_cache["key"] == key:
             if progress:
-                progress(len(examples), len(examples))  # UI: instant "done" without recomputing
+                progress(len(examples), len(examples), None)  # UI: instant "done" without recomputing
             return self._imp_cache["acc"]
         acc = {}
         total = len(examples)
+        done = 0
+        L, modules = len(self.model.model.layers), self._modules()  # for the running spot-view grid
+        cell = {}
         for i, text in enumerate(examples):
+            if should_stop and should_stop():
+                break
             ids = torch.tensor([self.tok.encode(text)], device=self.device)
             self.model.zero_grad(set_to_none=True)
             self.model(ids, labels=ids).loss.backward()
             for name, p in self.model.named_parameters():
-                if _LAYER_RE.match(name) and p.grad is not None:
+                m = _LAYER_RE.match(name)
+                if m and p.grad is not None:
                     a = (p.grad * p.data).abs().cpu()  # CPU: acc is model-param-sized, don't hoard GPU memory
                     acc[name] = a if name not in acc else acc[name] + a
+                    if progress:  # running per-cell sum for the live heatmap (cheap: one scalar per param)
+                        k = (int(m.group(1)), m.group(2))
+                        cell[k] = cell.get(k, 0.0) + float(a.sum())
+            done = i + 1
             if progress:
-                progress(i + 1, total)
+                grid = [[cell.get((l, mod), 0.0) / done for mod in modules] for l in range(L)]
+                progress(done, total, {"layers": L, "modules": modules, "grid": grid})
         self.model.zero_grad(set_to_none=True)
-        self._imp_cache = {"key": key, "acc": acc, "n": total}  # one set at a time — new examples replace the old cache
+        if done:  # don't cache an empty (fully-cancelled) pass
+            self._imp_cache = {"key": key, "acc": acc, "n": done}  # one set at a time — new examples replace the old
         return acc
 
-    def compute_spot(self, examples):
-        """Coding-Spot importance: accumulate |grad×param| over examples, reduced to [layer, module]."""
+    def compute_spot(self, examples, progress=None, should_stop=None):
+        """Coding-Spot importance: accumulate |grad×param| over examples, reduced to [layer, module].
+        Populates the per-param importance cache so a following save/knob reuses it (no recompute)."""
         L, modules = len(self.model.model.layers), self._modules()
         if not examples:  # no examples → all-zero grid
             return {"layers": L, "modules": modules, "grid": [[0.0] * len(modules) for _ in range(L)]}
-        acc = self._get_importance(examples)
-        n = len(examples)
+        acc = self._get_importance(examples, progress=progress, should_stop=should_stop)
+        n = self._imp_cache["n"] if self._imp_cache else len(examples)
         cell = {}
         for name, score in acc.items():
             m = _LAYER_RE.match(name)
