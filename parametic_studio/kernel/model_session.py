@@ -191,15 +191,19 @@ class ModelSession:
 
     def _region_from_acc(self, acc, topk, n, return_grid):
         # ponytail: per-param exact top-k via topk indices — no tie over-selection, no global flatten copy.
+        # acc lives on CPU (model-sized), but topk over a 7B model is slow on CPU — do it per-param on the
+        # model's device (transient: one param tensor at a time), masks come back to CPU.
+        dev = self.device
         region = {}
         for name, score in acc.items():
-            flat = score.flatten()
+            flat = score.flatten().to(dev, non_blocking=True)
             count = int(topk * flat.numel())
             if count <= 0:
                 continue
             mask = torch.zeros_like(flat, dtype=torch.bool)
             mask[torch.topk(flat, count, largest=True).indices] = True
             region[name] = mask.reshape(score.shape).cpu()  # masks live on CPU; ops move them per use
+            del flat, mask  # free the device copy before the next param
         if not return_grid:
             return region
         L, modules = len(self.model.model.layers), self._modules()  # per-cell importance sums — spot heatmap numbers
