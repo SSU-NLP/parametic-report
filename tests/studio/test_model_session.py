@@ -6,6 +6,31 @@ from transformers import LlamaConfig, LlamaForCausalLM
 from parametic_studio.kernel.model_session import ModelSession, _BYTE_DECODER
 
 
+def test_locate_cached_reuses_last_spot_without_recompute():
+    # save/knob must reuse the displayed spot's importance, not re-locate from an example list
+    # that may not hash-match the compute call. locate_cached returns the same masks with no backward.
+    class _T:
+        eos_token_id = -1
+        def encode(self, s): return [1, 2, 3]
+        def decode(self, ids): return "x"
+    s = ModelSession(_tiny(), _T(), torch.device("cpu"))
+    s.compute_spot(["a", "b"])                 # populates the importance cache
+    assert s._imp_cache is not None
+    region, grid = s.locate_cached(0.05, return_grid=True)
+    assert region and grid                     # got masks + grid straight from the cache
+    s._get_importance = lambda *a, **k: (_ for _ in ()).throw(AssertionError("recomputed!"))
+    again = s.locate_cached(0.05)              # must not touch _get_importance
+    assert set(again) == set(region)
+
+
+def test_locate_cached_none_when_no_spot():
+    class _T:
+        eos_token_id = -1
+        def decode(self, ids): return "x"
+    s = ModelSession(_tiny(), _T(), torch.device("cpu"))
+    assert s.locate_cached(0.05) is None       # nothing computed yet → caller falls back to locate_spot
+
+
 def test_byte_decoder_reconstructs_gpt2_markers():
     # some code tokenizers (deepseek-coder on transformers 5.x) leak the byte-level alphabet
     # from .decode() instead of real text; _BYTE_DECODER inverts it. Ġ=space, Ċ=newline.

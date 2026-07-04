@@ -353,7 +353,8 @@ def _load_run(model_id, rid):
 def _resolve_region(session, r):
     """region spec → {param_name: bool mask}. kinds: spot | cell | named. (call off the event loop)"""
     if r["kind"] == "spot":
-        return session.locate_spot(r["examples"], r.get("topk", 0.05))
+        cached = session.locate_cached(r.get("topk", 0.05))  # reuse the displayed spot — no recompute
+        return cached if cached is not None else session.locate_spot(r["examples"], r.get("topk", 0.05))
     if r["kind"] == "cell":
         return session.locate_cell(r["layer"], r["module"])
     return session.get_region(r["name"], r.get("topk"))  # named — lazy from disk; topk re-thresholds (v3)
@@ -662,8 +663,13 @@ async def _dispatch(websocket, msg, t):
             def _save():
                 if r["kind"] == "spot":  # keep the importance heatmap + per-param values (re-thresholdable)
                     base_topk = r.get("topk", 0.05)
-                    region, grid = session.locate_spot(r["examples"], base_topk, return_grid=True, progress=emit)
-                    acc = session._get_importance(r["examples"])  # P14 cache hit (no backward)
+                    cached = session.locate_cached(base_topk, return_grid=True)  # reuse the displayed spot — never recompute
+                    if cached is not None:
+                        region, grid = cached
+                        acc = session._imp_cache["acc"]
+                    else:  # no spot computed this session → fall back to locating from the examples
+                        region, grid = session.locate_spot(r["examples"], base_topk, return_grid=True, progress=emit)
+                        acc = session._get_importance(r["examples"])
                     importance = {n: acc[n][m.to(acc[n].device)].cpu() for n, m in region.items()}  # True vals, nonzero order
                     session.save_region(msg["name"], region, grid=grid, importance=importance, base_topk=base_topk)
                 else:

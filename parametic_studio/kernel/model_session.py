@@ -164,7 +164,7 @@ class ModelSession:
             if progress:
                 progress(i + 1, total)
         self.model.zero_grad(set_to_none=True)
-        self._imp_cache = {"key": key, "acc": acc}  # one set at a time — new examples replace the old cache
+        self._imp_cache = {"key": key, "acc": acc, "n": total}  # one set at a time — new examples replace the old cache
         return acc
 
     def compute_spot(self, examples):
@@ -189,16 +189,8 @@ class ModelSession:
         p = dict(self.model.named_parameters())[name]
         return {name: torch.ones(p.shape, dtype=torch.bool)}
 
-    def locate_spot(self, examples, topk=0.05, return_grid=False, progress=None):
-        """Locate: top-k% mask *within each layer param* by accumulated |grad×param|
-        (matches scripts/create_approx_spot_masks.py — per-param, not a global threshold).
-        return_grid=True also returns the [L][M] importance cell grid (what the spot view shows).
-        progress(i, total): called after each example's backward+accumulate (i is 1-based)."""
-        if not examples:
-            return ({}, []) if return_grid else {}
-        acc = self._get_importance(examples, progress=progress)  # cached: no backward on a repeat examples set
+    def _region_from_acc(self, acc, topk, n, return_grid):
         # ponytail: per-param exact top-k via topk indices — no tie over-selection, no global flatten copy.
-        # acc holds one importance tensor per layer param (peak ≈ layer-param bytes); stream from disk if models grow.
         region = {}
         for name, score in acc.items():
             flat = score.flatten()
@@ -208,18 +200,36 @@ class ModelSession:
             mask = torch.zeros_like(flat, dtype=torch.bool)
             mask[torch.topk(flat, count, largest=True).indices] = True
             region[name] = mask.reshape(score.shape).cpu()  # masks live on CPU; ops move them per use
-        grid = None
-        if return_grid:  # per-cell importance sums — same numbers the spot view heatmap shows
-            L, modules = len(self.model.model.layers), self._modules()
-            n = len(examples)
-            cell = {}
-            for name, score in acc.items():
-                m = _LAYER_RE.match(name)
-                cell[(int(m.group(1)), m.group(2))] = float(score.sum()) / n
-            grid = [[cell.get((l, mod), 0.0) for mod in modules] for l in range(L)]
+        if not return_grid:
+            return region
+        L, modules = len(self.model.model.layers), self._modules()  # per-cell importance sums — spot heatmap numbers
+        cell = {}
+        for name, score in acc.items():
+            m = _LAYER_RE.match(name)
+            cell[(int(m.group(1)), m.group(2))] = float(score.sum()) / max(n, 1)
+        grid = [[cell.get((l, mod), 0.0) for mod in modules] for l in range(L)]
+        return region, grid
+
+    def locate_cached(self, topk=0.05, return_grid=False):
+        """Threshold the LAST computed importance (the displayed spot) — no examples, no backward.
+        Returns None if nothing is cached. This is what save/knob use so they never recompute the
+        spot just because the caller's example list didn't hash-match the compute call."""
+        if self._imp_cache is None:
+            return None
+        return self._region_from_acc(self._imp_cache["acc"], topk, self._imp_cache.get("n", 1), return_grid)
+
+    def locate_spot(self, examples, topk=0.05, return_grid=False, progress=None):
+        """Locate: top-k% mask *within each layer param* by accumulated |grad×param|
+        (matches scripts/create_approx_spot_masks.py — per-param, not a global threshold).
+        return_grid=True also returns the [L][M] importance cell grid (what the spot view shows).
+        progress(i, total): called after each example's backward+accumulate (i is 1-based)."""
+        if not examples:
+            return ({}, []) if return_grid else {}
+        acc = self._get_importance(examples, progress=progress)  # cached: no backward on a repeat examples set
+        result = self._region_from_acc(acc, topk, len(examples), return_grid)
         # acc is the CPU-resident cache — keep it so a %-only change re-thresholds without another backward.
         self.free_memory()  # release backward leftovers on the device (cache stays on CPU)
-        return (region, grid) if return_grid else region
+        return result
 
     def tensor_list(self):
         """Metadata of every parameter (HF safetensors-viewer style): name, shape, dtype."""
