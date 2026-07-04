@@ -168,7 +168,9 @@ function moduleAbbrev(name: string): string {
   return (map[s] ?? s.split('.').filter((p) => p !== 'proj').pop() ?? s) + (bias ? '+b' : '')
 }
 function SpotGrid({ grid, modules, onCell, selected, color = ampColor, cellTitle, onHover, hovered, labels = true }: { grid: number[][]; modules: string[]; onCell?: (l: number, module: string) => void; selected?: Set<string>; color?: (v: number, max: number) => string; cellTitle?: (l: number, module: string, v: number) => string; onHover?: (cell: string | null) => void; hovered?: string | null; labels?: boolean }) {
-  const flat = grid.flat(); const max = Math.max(...flat)
+  // coerce to finite numbers — a stray NaN/Infinity/null in the grid must not throw during render (white screen).
+  const flat = grid.flat().map((v) => (typeof v === 'number' && isFinite(v) ? v : 0))
+  const max = flat.reduce((a, b) => (b > a ? b : a), 0)   // reduce, not spread — spread overflows the stack on huge arrays
   const sorted = [...flat].sort((a, b) => b - a)
   const thr = sorted[Math.max(0, Math.floor(sorted.length * 0.05) - 1)] ?? Infinity
   const L = grid.length
@@ -180,7 +182,7 @@ function SpotGrid({ grid, modules, onCell, selected, color = ampColor, cellTitle
       {labels && (
         <div style={{ display: 'grid', gridTemplateColumns: cols, gap: 1, marginBottom: 2 }}>
           <div />
-          {modules.map((m, c) => <div key={c} title={m} style={{ ...lab, textAlign: 'center' }}>{moduleAbbrev(m)}</div>)}
+          {modules.map((m, c) => <div key={c} title={m} style={{ ...lab, textAlign: 'center' }}>{moduleAbbrev(String(m ?? ''))}</div>)}
         </div>
       )}
       <div style={{ display: 'grid', gridTemplateRows: `repeat(${L}, 9px)`, gap: 1 }}
@@ -188,13 +190,15 @@ function SpotGrid({ grid, modules, onCell, selected, color = ampColor, cellTitle
         {grid.map((row, l) => (
           <div key={l} style={{ display: 'grid', gridTemplateColumns: cols, gap: 1 }}>
             {labels && <div style={{ ...lab, textAlign: 'right', paddingRight: 3 }}>{(l % step === 0 || l === L - 1) ? l : ''}</div>}
-            {row.map((v, c) => {
-              const key = `${l}.${modules[c]}`
+            {row.map((rv, c) => {
+              const v = typeof rv === 'number' && isFinite(rv) ? rv : 0   // guard: bad cell value must not crash render
+              const mod = modules[c] ?? '?'
+              const key = `${l}.${mod}`
               const sel = selected?.has(key)
               const hov = hovered === key
-              return <div key={c} onClick={onCell ? () => onCell(l, modules[c]) : undefined}
+              return <div key={c} onClick={onCell ? () => onCell(l, mod) : undefined}
                 onMouseEnter={onHover ? () => onHover(key) : undefined}
-                title={cellTitle ? cellTitle(l, modules[c], v) : `L${l} · ${modules[c]} · ${v.toExponential(2)}${onCell ? ' — click → knob' : ''}`}
+                title={cellTitle ? cellTitle(l, mod, v) : `L${l} · ${mod} · ${v.toExponential(2)}${onCell ? ' — click → knob' : ''}`}
                 style={{ background: color(v, max), cursor: onCell ? 'pointer' : 'default', outline: hov ? '1.5px solid var(--accent)' : sel ? '1.5px solid var(--accent)' : v >= thr ? `1px solid ${isLight() ? '#1A1717' : '#FDFCFC'}` : 'none', outlineOffset: (hov || sel) ? -1 : 0 }} />
             })}
           </div>
@@ -417,16 +421,16 @@ export default function App() {
   // multi-line examples (code) don't survive the ex.join('\n')→toExamples split round-trip, so re-parsing
   // the editor yields a different set → importance cache miss → save recomputes. Keeping the array fixes it.
   const [spotExamples, setSpotExamples] = useState<Record<string, string[]>>({})  // per-model: each keeps the array ITS spot ran on
-  const [dsIsPreview, setDsIsPreview] = useState(false)  // true = editor shows a truncated preview; full set lives in spotExamples
-  // materialising thousands of examples into the <textarea> value froze/blanked the webview. Cap the
-  // DISPLAY at DS_PREVIEW; compute + save still run on the full `ex` (kept in spotExamples[mid]).
-  const DS_PREVIEW = 200
-  const emitSpot = (mid: string, ex: string[]) => {
-    setSpotExamples((s) => ({ ...s, [mid]: ex }))
-    const preview = ex.length > DS_PREVIEW
-    setDsIsPreview(preview)
-    setDs(preview ? ex.slice(0, DS_PREVIEW).join('\n') + `\n\n… +${ex.length - DS_PREVIEW} more — computing on all ${ex.length}` : ex.join('\n'))
-    sendTo(mid, { type: 'spot', examples: ex })
+  const emitSpot = (mid: string, ex: string[]) => { setSpotExamples((s) => ({ ...s, [mid]: ex })); sendTo(mid, { type: 'spot', examples: ex }) }
+  // spot is driven by a dataset pick (no free-text editor): pick → sample → compute. content lazy-loads,
+  // so remember the pending pick and fire once it lands (see dataset_content handler).
+  const [spotSrc, setSpotSrc] = useState('')            // dataset name the spot ran on (shown in the picker)
+  const spotPendingRef = useRef<string | null>(null)
+  const computeSpotFor = (mid: string, name: string) => {
+    const dset = datasets.find((x) => x.name === name); if (!dset) return
+    setSpotSrc(name)
+    if (dset.content == null) { spotPendingRef.current = name; sendTo(mid, { type: 'read_dataset', name }); return }
+    emitSpot(mid, sample(toExamples(dset.content, dset.fields)))
   }
   const [expModels, setExpModels] = useState<Set<string>>(new Set())  // models with their tensor tree expanded
   const [expPaths, setExpPaths] = useState<Set<string>>(new Set())    // expanded folder paths (model-id prefixed)
@@ -594,7 +598,15 @@ export default function App() {
       setHfLoading(null)
       return
     }
-    if (m.type === 'dataset_content') { setDatasets((dd) => dd.map((x) => (x.name === m.name ? { ...x, content: m.content } : x))); return }
+    if (m.type === 'dataset_content') {
+      setDatasets((dd) => dd.map((x) => (x.name === m.name ? { ...x, content: m.content } : x)))
+      if (spotPendingRef.current === m.name) {  // a spot pick was waiting on this content → compute now
+        spotPendingRef.current = null
+        const fields = datasets.find((x) => x.name === m.name)?.fields
+        emitSpot(focused(), sample(toExamples(m.content, fields)))
+      }
+      return
+    }
     if (m.type === 'dataset_saved') { setUploading((u) => u.filter((x) => x !== m.name)); sendTo(m.model, { type: 'datasets' }); return }
     if (m.type === 'loading_dataset') { setHfLoading(m.repo); return }
     if (m.type === 'stats') { setKernelStats({ rss_mb: m.rss_mb }); return }
@@ -1064,8 +1076,8 @@ export default function App() {
               <div style={{ ...hint, marginBottom: 3 }}>{label[metric]}{interMetric === 'shared' && !allImp && ' · (legacy region → fell back to fraction; re-save for importance)'}</div>
               <SpotGrid grid={grid} modules={cd.modules}
                 color={(v: number) => ampColor(hi > lo ? (v - lo) / (hi - lo) : 0, 1)}
-                cellTitle={(l, mod) => { const c = cd.modules.indexOf(mod); const lift = cd.intersectionLift?.[l][c]; const g = grid[l][c]
-                  return `L${l} · ${mod}${metric === 'shared' ? ` · shared imp ${g.toExponential(1)}` : ''} · ∩ ${(cd.intersection[l][c] * 100).toFixed(2)}% of weights${lift != null ? ` · ${lift.toFixed(0)}× vs chance` : ''}` }}
+                cellTitle={(l, mod) => { const c = cd.modules.indexOf(mod); const lift = cd.intersectionLift?.[l]?.[c]; const g = grid[l]?.[c] ?? 0
+                  return `L${l} · ${mod}${metric === 'shared' ? ` · shared imp ${g.toExponential(1)}` : ''} · ∩ ${((cd.intersection[l]?.[c] ?? 0) * 100).toFixed(2)}% of weights${lift != null ? ` · ${lift.toFixed(0)}× vs chance` : ''}` }}
                 onHover={setCompareHover} hovered={compareHover} />
             </>)
           })()}
@@ -1266,18 +1278,10 @@ export default function App() {
     }
     // if the editor still shows the untouched preview, recompute on the FULL cached set (parsing the
     // truncated preview would silently shrink the run); otherwise parse whatever the user typed.
-    const runSpot = (text: string) => (dsIsPreview && spotExamples[mid]?.length)
-      ? emitSpot(mid, spotExamples[mid])
-      : emitSpot(mid, sample(toExamples(text)))
     return (<>
-      <div style={{ color: 'var(--text-1)', marginBottom: 6 }}>dataset → grad×param<span style={hint}> · top cells = spot</span></div>
-      <div style={{ display: 'flex', gap: 6, alignItems: 'center', marginBottom: 6 }}>
-        <select value="" onChange={(e) => {
-          const dset = datasets.find((x) => x.name === e.target.value)
-          if (!dset) return
-          if (dset.content == null) { sendTo(mid, { type: 'read_dataset', name: dset.name }) }  // fetch, then pick again
-          else runSpot(toExamples(dset.content, dset.fields).join('\n'))
-        }} title="pick a dataset from the explorer and compute its spot" style={{ fontSize: 11, background: 'var(--bg-2)', color: 'var(--text-1)', border: '1px solid var(--line-strong)', borderRadius: 4, padding: '2px 4px' }}>
+      <div style={{ color: 'var(--text-1)', marginBottom: 6 }}>dataset → grad×param<span style={hint}> · pick a dataset · top cells = spot</span></div>
+      <div style={{ display: 'flex', gap: 6, alignItems: 'center', marginBottom: 10, flexWrap: 'wrap' }}>
+        <select value={spotSrc} onChange={(e) => e.target.value && computeSpotFor(mid, e.target.value)} title="pick a dataset — samples and computes its spot" style={{ fontSize: 11, background: 'var(--bg-2)', color: 'var(--text-1)', border: '1px solid var(--line-strong)', borderRadius: 4, padding: '2px 4px' }}>
           <option value="">▤ dataset…</option>
           {datasets.map((x) => <option key={x.name} value={x.name}>{x.name} ({dsMeta[x.name]?.count ?? '…'})</option>)}
         </select>
@@ -1287,10 +1291,9 @@ export default function App() {
           <option value="first">first-k</option>
           <option value="random">random</option>
         </select>
-        <span style={hint}>→ loads &amp; computes</span>
+        <Btn onClick={() => spotSrc && computeSpotFor(mid, spotSrc)} disabled={!spotSrc} color="var(--accent)" style={{ padding: '4px 12px' }}>Compute spot</Btn>
+        {spotSrc && <span style={hint}>on {spotSrc}{spotExamples[mid]?.length ? ` · ${spotExamples[mid].length} ex` : ''}</span>}
       </div>
-      <textarea value={ds} onChange={(e) => { setDs(e.target.value); setDsIsPreview(false) }} rows={3} spellCheck={false} style={{ width: '100%', background: 'var(--bg-2)', border: '1px solid var(--line-strong)', borderRadius: 4, padding: '6px 8px', outline: 'none', resize: 'vertical', marginBottom: 6, fontFamily: 'var(--mono)' }} />
-      <Btn onClick={() => runSpot(ds)} color="var(--accent)" style={{ padding: '4px 12px', marginBottom: 10 }}>Compute spot</Btn>
       {d.spotProg && <div style={{ marginBottom: 8 }}><div style={{ display: 'flex', gap: 8, alignItems: 'center' }}><span style={hint}>computing · {d.spotProg.i}/{d.spotProg.total}</span><Btn onClick={() => sendTo(mid, { type: 'stop_spot' })} color="var(--danger)" style={{ padding: '0 8px' }}>Stop</Btn></div><div style={{ background: 'var(--bg-2)', borderRadius: 2, height: 4, marginTop: 3 }}><div style={{ height: 4, width: `${Math.round((d.spotProg.i / d.spotProg.total) * 100)}%`, background: 'var(--accent)', borderRadius: 2 }} /></div></div>}
       {d.spot && (() => {
         const examples = spotExamples[mid]?.length ? spotExamples[mid] : dsExamples  // reuse the exact set THIS model's spot ran on (cache hit on save); fall back to the editor before any compute
@@ -1549,11 +1552,7 @@ export default function App() {
             if (!expModels.has(mid) && data[mid]?.tensors == null) sendTo(mid, { type: 'tensors' })  // lazy fetch per model
           }
           // dataset context actions — reuse the editor-tab code paths (sample→spot, →train data)
-          const useForSpot = (name: string) => {
-            const dset = datasets.find((x) => x.name === name); if (!dset) return
-            if (dset.content == null) { sendTo(focused(), { type: 'read_dataset', name }); return }  // fetch first; re-invoke after it lands
-            emitSpot(focused(), sample(toExamples(dset.content, dset.fields)))
-          }
+          const useForSpot = (name: string) => computeSpotFor(focused(), name)  // pick → sample → compute (fetches if needed)
           const useAsTrainData = (name: string) => {
             const dset = datasets.find((x) => x.name === name); if (!dset) return
             if (dset.content == null) { sendTo(focused(), { type: 'read_dataset', name }); return }
