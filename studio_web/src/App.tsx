@@ -372,7 +372,7 @@ export default function App() {
   const [catalog, setCatalog] = useState<{ id: string; label: string; installed?: boolean; size_mb?: number | null }[]>([])
   const [data, setData] = useState<Record<string, ModelData>>({ [DEFAULT.id]: empty() })
   const [cols, setCols] = useState<Col[]>([{ id: 1, w: 1, tiles: [{ id: 1, model: DEFAULT.id, tabs: ['output', 'attention'], active: 0, h: 1 }] }])
-  const [ds, setDs] = useState(DEFAULT_DATASET)
+  const [ds] = useState(DEFAULT_DATASET)  // seed examples; spot is dataset-driven now, so this never changes
   const [layer, setLayer] = useState(0)
   const [hoverLayer, setHoverLayer] = useState<number | null>(null)  // attention: hover=preview, click=pin
   const [trainMode, setTrainMode] = useState('spot-freeze')
