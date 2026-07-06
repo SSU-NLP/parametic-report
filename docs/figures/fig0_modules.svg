@@ -1,0 +1,85 @@
+<svg viewBox="0 0 1400 470" xmlns="http://www.w3.org/2000/svg" font-family="Helvetica, Arial, sans-serif">
+  <rect x="0" y="0" width="1400" height="470" fill="#ffffff"/>
+
+  <defs>
+    <marker id="aEnd" markerWidth="11" markerHeight="9" refX="8" refY="4" orient="auto" markerUnits="userSpaceOnUse">
+      <path d="M0,0 L8,4 L0,8 Z" fill="#3a3a3a"/>
+    </marker>
+    <marker id="aStart" markerWidth="11" markerHeight="9" refX="0" refY="4" orient="auto" markerUnits="userSpaceOnUse">
+      <path d="M8,0 L0,4 L8,8 Z" fill="#3a3a3a"/>
+    </marker>
+  </defs>
+
+  <!-- ═══ pluggable model inputs (top, dashed) ═══ -->
+  <rect x="112" y="52" width="120" height="42" rx="6" fill="#ffffff" stroke="#8aa0c0" stroke-width="1.4" stroke-dasharray="4 3"/>
+  <text x="172" y="79" font-size="18" fill="#33506f" text-anchor="middle">any LLM</text>
+  <line x1="172" y1="94" x2="172" y2="148" stroke="#3a3a3a" stroke-width="1.4" marker-end="url(#aEnd)"/>
+
+  <rect x="801" y="52" width="120" height="42" rx="6" fill="#ffffff" stroke="#8aa0c0" stroke-width="1.4" stroke-dasharray="4 3"/>
+  <text x="861" y="79" font-size="18" fill="#33506f" text-anchor="middle">eval-data</text>
+  <line x1="861" y1="94" x2="861" y2="148" stroke="#3a3a3a" stroke-width="1.4" marker-end="url(#aEnd)"/>
+
+  <!-- ═══ module pipeline (left → right) ═══ -->
+  <!-- Observe (blue) -->
+  <rect x="88" y="150" width="168" height="100" rx="8" fill="#e7f1fb" stroke="#2f6fb0" stroke-width="1.6" stroke-dasharray="5 3"/>
+  <text x="172" y="196" font-size="24" font-weight="bold" fill="#1a1a1a" text-anchor="middle">Observe</text>
+  <text x="172" y="222" font-size="14" fill="#555555" text-anchor="middle">attention · logits</text>
+
+  <!-- Locate (amber) -->
+  <rect x="286" y="150" width="150" height="100" rx="8" fill="#fdf1e2" stroke="#c07d2e" stroke-width="1.6" stroke-dasharray="5 3"/>
+  <text x="361" y="196" font-size="24" font-weight="bold" fill="#1a1a1a" text-anchor="middle">Locate</text>
+  <text x="361" y="222" font-size="14" fill="#555555" text-anchor="middle">the coding spot</text>
+
+  <!-- artifact: spot region (dotted) -->
+  <rect x="456" y="165" width="116" height="70" rx="6" fill="#ffffff" stroke="#b0b0b0" stroke-width="1.4" stroke-dasharray="2 3"/>
+  <text x="514" y="196" font-size="16" fill="#2f6fb0" text-anchor="middle">spot region</text>
+  <text x="514" y="217" font-size="14" fill="#2f6fb0" text-anchor="middle">top-k% params</text>
+
+  <!-- Intervene (amber) -->
+  <rect x="592" y="150" width="162" height="100" rx="8" fill="#fdf1e2" stroke="#c07d2e" stroke-width="1.6" stroke-dasharray="5 3"/>
+  <text x="673" y="196" font-size="24" font-weight="bold" fill="#1a1a1a" text-anchor="middle">Intervene</text>
+  <text x="673" y="222" font-size="14" fill="#555555" text-anchor="middle">edit · reversible</text>
+
+  <!-- Evaluate (yellow) -->
+  <rect x="786" y="150" width="150" height="100" rx="8" fill="#fbf4d3" stroke="#c9a72b" stroke-width="1.6" stroke-dasharray="5 3"/>
+  <text x="861" y="196" font-size="24" font-weight="bold" fill="#1a1a1a" text-anchor="middle">Evaluate</text>
+  <text x="861" y="222" font-size="14" fill="#555555" text-anchor="middle">measure effect</text>
+
+  <!-- flow arrows -->
+  <line x1="256" y1="200" x2="284" y2="200" stroke="#3a3a3a" stroke-width="1.8" marker-end="url(#aEnd)"/>
+  <line x1="436" y1="200" x2="454" y2="200" stroke="#3a3a3a" stroke-width="1.8" marker-end="url(#aEnd)"/>
+  <line x1="572" y1="200" x2="590" y2="200" stroke="#3a3a3a" stroke-width="1.6" stroke-dasharray="3 3" marker-end="url(#aEnd)"/>
+  <line x1="754" y1="200" x2="784" y2="200" stroke="#3a3a3a" stroke-width="1.8" marker-end="url(#aEnd)"/>
+
+  <!-- ═══ branch → analysis readouts ═══ -->
+  <rect x="1000" y="138" width="152" height="64" rx="8" fill="#fbf3ea" stroke="#c07d2e" stroke-width="1.4"/>
+  <text x="1076" y="176" font-size="20" fill="#1a1a1a" text-anchor="middle">PPL · damage</text>
+
+  <rect x="1000" y="250" width="152" height="64" rx="8" fill="#eef1fb" stroke="#5b6bb0" stroke-width="1.4"/>
+  <text x="1076" y="288" font-size="20" fill="#1a1a1a" text-anchor="middle">A/B compare</text>
+
+  <!-- Evaluate → branches (curved) -->
+  <path d="M936,190 C972,190 968,170 1000,170" fill="none" stroke="#3a3a3a" stroke-width="1.8" marker-end="url(#aEnd)"/>
+  <path d="M936,215 C972,215 968,282 1000,282" fill="none" stroke="#3a3a3a" stroke-width="1.8" marker-end="url(#aEnd)"/>
+
+  <!-- ═══ final report ═══ -->
+  <rect x="1200" y="150" width="170" height="110" rx="8" fill="#7aa7de" stroke="#2f6fb0" stroke-width="1.6"/>
+  <text x="1285" y="196" font-size="24" font-weight="bold" fill="#12233d" text-anchor="middle">Session</text>
+  <text x="1285" y="224" font-size="24" font-weight="bold" fill="#12233d" text-anchor="middle">Report</text>
+  <text x="1285" y="248" font-size="14" fill="#1c3350" text-anchor="middle">+ replay export</text>
+
+  <!-- branches → final (curved merge) -->
+  <path d="M1152,170 C1180,170 1176,200 1200,200" fill="none" stroke="#3a3a3a" stroke-width="1.8" marker-end="url(#aEnd)"/>
+  <path d="M1152,282 C1180,282 1176,212 1200,212" fill="none" stroke="#3a3a3a" stroke-width="1.8" marker-end="url(#aEnd)"/>
+
+  <!-- ═══ shared substrate bar (kernel) ═══ -->
+  <rect x="88" y="372" width="848" height="56" rx="8" fill="#f0f0ee" stroke="#9a9a9a" stroke-width="1.5" stroke-dasharray="5 3"/>
+  <text x="512" y="399" font-size="21" font-weight="bold" fill="#1a1a1a" text-anchor="middle">Live Model Kernel</text>
+  <text x="512" y="419" font-size="15" fill="#555555" text-anchor="middle">resident model · one WebSocket session · runs on laptop / GPU / cloud</text>
+
+  <!-- module ↕ kernel ties (dashed, colored) -->
+  <line x1="172" y1="250" x2="172" y2="372" stroke="#2f6fb0" stroke-width="1.5" stroke-dasharray="5 3" marker-start="url(#aStart)" marker-end="url(#aEnd)"/>
+  <line x1="361" y1="250" x2="361" y2="372" stroke="#c07d2e" stroke-width="1.5" stroke-dasharray="5 3" marker-start="url(#aStart)" marker-end="url(#aEnd)"/>
+  <line x1="673" y1="250" x2="673" y2="372" stroke="#c07d2e" stroke-width="1.5" stroke-dasharray="5 3" marker-start="url(#aStart)" marker-end="url(#aEnd)"/>
+  <line x1="861" y1="250" x2="861" y2="372" stroke="#c9a72b" stroke-width="1.5" stroke-dasharray="5 3" marker-start="url(#aStart)" marker-end="url(#aEnd)"/>
+</svg>

@@ -1,0 +1,152 @@
+<svg viewBox="0 0 1400 664" xmlns="http://www.w3.org/2000/svg">
+  <rect width="1400" height="664" fill="#ffffff"/>
+
+  <defs>
+    <marker id="arrN" markerWidth="12" markerHeight="10" refX="9" refY="4" orient="auto" markerUnits="userSpaceOnUse">
+      <path d="M0,0 L9,4 L0,8 Z" fill="#3a3a3a"/>
+    </marker>
+    <marker id="arrB" markerWidth="12" markerHeight="10" refX="9" refY="4" orient="auto" markerUnits="userSpaceOnUse">
+      <path d="M0,0 L9,4 L0,8 Z" fill="#1d4ed8"/>
+    </marker>
+    <marker id="arrNrev" markerWidth="12" markerHeight="10" refX="0" refY="4" orient="auto" markerUnits="userSpaceOnUse">
+      <path d="M9,0 L0,4 L9,8 Z" fill="#3a3a3a"/>
+    </marker>
+  </defs>
+
+  <!-- ============ BAND 1: FRONTEND (x 20..367) ============ -->
+  <rect x="20" y="60" width="347" height="584" rx="6" fill="none" stroke="#3a3a3a" stroke-width="1.5" stroke-dasharray="6 4"/>
+  <text x="34" y="92" font-family="Helvetica, Arial, sans-serif" font-size="26" font-weight="bold" fill="#1a1a1a">Tauri desktop shell</text>
+  <text x="34" y="116" font-family="Helvetica, Arial, sans-serif" font-size="19" font-style="italic" fill="#555555">spawns / kills kernel process</text>
+
+  <!-- React SPA (x 36..351) -->
+  <rect x="36" y="130" width="315" height="476" rx="6" fill="#f7f7f5" stroke="#3a3a3a" stroke-width="1.5"/>
+  <text x="50" y="162" font-family="Helvetica, Arial, sans-serif" font-size="26" font-weight="bold" fill="#1a1a1a">React SPA</text>
+
+  <!-- Row 1: Explorer -->
+  <rect x="50" y="180" width="287" height="98" rx="6" fill="#ececea" stroke="#3a3a3a" stroke-width="1.5"/>
+  <text x="64" y="212" font-family="Helvetica, Arial, sans-serif" font-size="22" font-weight="bold" fill="#1a1a1a">Explorer</text>
+  <text x="64" y="240" font-family="Helvetica, Arial, sans-serif" font-size="19" fill="#1a1a1a">models &#183; data &#183; regions</text>
+
+  <!-- Row 2: Canvas views -->
+  <rect x="50" y="300" width="287" height="152" rx="6" fill="#ececea" stroke="#3a3a3a" stroke-width="1.5"/>
+  <text x="64" y="330" font-family="Helvetica, Arial, sans-serif" font-size="22" font-weight="bold" fill="#1a1a1a">Canvas &#8212; views</text>
+  <text x="64" y="360" font-family="Menlo, monospace" font-size="18" fill="#1a1a1a">output &#183; attention</text>
+  <text x="64" y="388" font-family="Menlo, monospace" font-size="18" fill="#1a1a1a">activations &#183; logit lens</text>
+  <text x="64" y="416" font-family="Menlo, monospace" font-size="18" fill="#1a1a1a"><tspan fill="#b45309">spot</tspan> &#183; train &#183; log</text>
+
+  <!-- Row 3: Chat + Knob dock (amber) -->
+  <rect x="50" y="474" width="287" height="98" rx="6" fill="#fdf1e2" stroke="#b45309" stroke-width="1.5"/>
+  <text x="64" y="506" font-family="Helvetica, Arial, sans-serif" font-size="22" font-weight="bold" fill="#1a1a1a">Chat + Knob dock</text>
+  <text x="64" y="534" font-family="Helvetica, Arial, sans-serif" font-size="19" fill="#1a1a1a">prompt &#183; &#945;-knobs &#183; A/B</text>
+
+  <!-- ============ BAND 2: TRANSPORT (x 373..580) ============ -->
+  <rect x="373" y="60" width="207" height="584" rx="6" fill="#f7f7f5" stroke="#3a3a3a" stroke-width="1.5"/>
+  <text x="477" y="96" text-anchor="middle" font-family="Helvetica, Arial, sans-serif" font-size="24" font-weight="bold" fill="#1a1a1a">WebSocket</text>
+  <text x="477" y="124" text-anchor="middle" font-family="Menlo, monospace" font-size="20" fill="#1a1a1a">:8000/ws</text>
+
+  <!-- client messages (above right-arrow) -->
+  <text x="477" y="186" text-anchor="middle" font-family="Menlo, monospace" font-size="18" fill="#1a1a1a">generate &#183; spot</text>
+  <text x="477" y="212" text-anchor="middle" font-family="Menlo, monospace" font-size="18" fill="#1a1a1a">intervene &#183; train</text>
+  <text x="477" y="238" text-anchor="middle" font-family="Menlo, monospace" font-size="18" fill="#1a1a1a">ppl</text>
+
+  <!-- streamed frames (below left-arrow) -->
+  <text x="477" y="348" text-anchor="middle" font-family="Menlo, monospace" font-size="18" fill="#1d4ed8">token &#183; attention</text>
+  <text x="477" y="374" text-anchor="middle" font-family="Menlo, monospace" font-size="18" fill="#1d4ed8">logitlens</text>
+  <text x="477" y="400" text-anchor="middle" font-family="Menlo, monospace" font-size="18" fill="#1d4ed8">spot_progress</text>
+  <text x="477" y="426" text-anchor="middle" font-family="Menlo, monospace" font-size="18" fill="#1d4ed8">train_step</text>
+
+  <!-- bottom annotation -->
+  <text x="477" y="596" text-anchor="middle" font-family="Helvetica, Arial, sans-serif" font-size="17" font-style="italic" fill="#555555">single WS per model</text>
+  <text x="477" y="622" text-anchor="middle" font-family="Helvetica, Arial, sans-serif" font-size="17" font-style="italic" fill="#555555">token auth optional</text>
+
+  <!-- WS arrows: React SPA right edge (351) to kernel left edge (586), through the band -->
+  <line x1="351" y1="264" x2="586" y2="264" stroke="#3a3a3a" stroke-width="2.5" marker-end="url(#arrN)"/>
+  <line x1="586" y1="316" x2="351" y2="316" stroke="#1d4ed8" stroke-width="2.5" marker-end="url(#arrB)"/>
+
+  <!-- ============ BAND 3: KERNEL (x 586..1164) ============ -->
+  <rect x="586" y="60" width="578" height="584" rx="6" fill="#f7f7f5" stroke="#3a3a3a" stroke-width="1.5"/>
+  <text x="602" y="92" font-family="Helvetica, Arial, sans-serif" font-size="26" font-weight="bold" fill="#1a1a1a">FastAPI kernel (api.py)</text>
+
+  <!-- thin band split in two: dispatcher + session registry -->
+  <rect x="602" y="106" width="260" height="88" rx="6" fill="#ececea" stroke="#3a3a3a" stroke-width="1.5"/>
+  <text x="616" y="132" font-family="Helvetica, Arial, sans-serif" font-size="19" fill="#1a1a1a">async dispatcher</text>
+  <text x="616" y="158" font-family="Helvetica, Arial, sans-serif" font-size="19" fill="#1a1a1a">off-loop via</text>
+  <text x="616" y="184" font-family="Menlo, monospace" font-size="18" fill="#1a1a1a">asyncio.to_thread</text>
+
+  <rect x="870" y="106" width="278" height="88" rx="6" fill="#ececea" stroke="#3a3a3a" stroke-width="1.5"/>
+  <text x="886" y="140" font-family="Helvetica, Arial, sans-serif" font-size="19" fill="#1a1a1a">session registry</text>
+  <text x="886" y="168" font-family="Menlo, monospace" font-size="18" fill="#1a1a1a">{model_id &#8594; session}</text>
+
+  <!-- ModelSession (602..1148, y 204..628) -->
+  <rect x="602" y="204" width="546" height="424" rx="6" fill="#ffffff" stroke="#3a3a3a" stroke-width="1.5"/>
+  <text x="614" y="232" font-family="Helvetica, Arial, sans-serif" font-size="26" font-weight="bold" fill="#1a1a1a">ModelSession (model_session.py)</text>
+
+  <!-- Row 1: Observe (blue) + Locate (amber) -->
+  <rect x="614" y="244" width="250" height="104" rx="6" fill="#e8eefb" stroke="#1d4ed8" stroke-width="1.5"/>
+  <text x="624" y="270" font-family="Helvetica, Arial, sans-serif" font-size="22" font-weight="bold" fill="#1a1a1a">Observe</text>
+  <text x="624" y="292" font-family="Helvetica, Arial, sans-serif" font-size="18" fill="#1a1a1a">token-by-token generate</text>
+  <text x="624" y="314" font-family="Helvetica, Arial, sans-serif" font-size="18" fill="#1a1a1a">probes: attention &#183;</text>
+  <text x="624" y="336" font-family="Helvetica, Arial, sans-serif" font-size="18" fill="#1a1a1a">activation &#183; logit lens</text>
+
+  <rect x="876" y="244" width="260" height="104" rx="6" fill="#fdf1e2" stroke="#b45309" stroke-width="1.5"/>
+  <text x="888" y="270" font-family="Helvetica, Arial, sans-serif" font-size="22" font-weight="bold" fill="#1a1a1a">Locate</text>
+  <text x="888" y="292" font-family="Helvetica, Arial, sans-serif" font-size="18" fill="#1a1a1a">spot = &#931; |grad &#215; param|</text>
+  <text x="888" y="314" font-family="Helvetica, Arial, sans-serif" font-size="18" fill="#1a1a1a">per-param top-k% &#8594; masks</text>
+
+  <!-- Row 2: Intervene (amber) + Evaluate (neutral) -->
+  <rect x="614" y="358" width="250" height="104" rx="6" fill="#fdf1e2" stroke="#b45309" stroke-width="1.5"/>
+  <text x="624" y="384" font-family="Helvetica, Arial, sans-serif" font-size="22" font-weight="bold" fill="#1a1a1a">Intervene</text>
+  <text x="624" y="406" font-family="Helvetica, Arial, sans-serif" font-size="18" fill="#1a1a1a">knobs: scale &#183; zero &#183;</text>
+  <text x="624" y="428" font-family="Helvetica, Arial, sans-serif" font-size="18" fill="#1a1a1a">mean &#183; random</text>
+  <text x="624" y="450" font-family="Helvetica, Arial, sans-serif" font-size="18" fill="#1a1a1a">suspend / resume A/B</text>
+
+  <rect x="876" y="358" width="260" height="104" rx="6" fill="#ececea" stroke="#3a3a3a" stroke-width="1.5"/>
+  <text x="888" y="384" font-family="Helvetica, Arial, sans-serif" font-size="22" font-weight="bold" fill="#1a1a1a">Evaluate</text>
+  <text x="888" y="406" font-family="Helvetica, Arial, sans-serif" font-size="18" fill="#1a1a1a">ppl (code / general)</text>
+  <text x="888" y="428" font-family="Helvetica, Arial, sans-serif" font-size="18" fill="#1a1a1a">A/B output diff</text>
+
+  <!-- Row 3: Adapt (neutral, full width) -->
+  <rect x="614" y="472" width="522" height="104" rx="6" fill="#ececea" stroke="#3a3a3a" stroke-width="1.5"/>
+  <text x="624" y="498" font-family="Helvetica, Arial, sans-serif" font-size="22" font-weight="bold" fill="#1a1a1a">Adapt</text>
+  <text x="624" y="520" font-family="Helvetica, Arial, sans-serif" font-size="18" fill="#1a1a1a">train: full &#183; spot-freeze &#183;</text>
+  <text x="624" y="542" font-family="Helvetica, Arial, sans-serif" font-size="18" fill="#1a1a1a">spot-only &#183; LoRA</text>
+  <text x="624" y="564" font-family="Helvetica, Arial, sans-serif" font-size="18" fill="#1a1a1a">reversible reset</text>
+
+  <!-- resident model strip -->
+  <rect x="614" y="586" width="522" height="30" rx="6" fill="#f7f7f5" stroke="#3a3a3a" stroke-width="1.5"/>
+  <text x="875" y="607" text-anchor="middle" font-family="Helvetica, Arial, sans-serif" font-size="19" fill="#1a1a1a">resident model &#8212; bf16 &#183; MPS / CUDA</text>
+
+  <!-- ============ BAND 4: PERSISTENCE (x 1194..1376) ============ -->
+  <!-- HF Hub -->
+  <rect x="1194" y="26" width="182" height="64" rx="6" fill="#f7f7f5" stroke="#3a3a3a" stroke-width="1.5"/>
+  <text x="1285" y="52" text-anchor="middle" font-family="Helvetica, Arial, sans-serif" font-size="20" font-weight="bold" fill="#1a1a1a">HF Hub</text>
+  <text x="1285" y="76" text-anchor="middle" font-family="Helvetica, Arial, sans-serif" font-size="19" fill="#1a1a1a">(model weights)</text>
+
+  <!-- HF Hub -> kernel arrow, annotation above the kernel box and clear of all boxes -->
+  <polyline points="1194,46 1116,46 1116,60" fill="none" stroke="#3a3a3a" stroke-width="2.5" marker-end="url(#arrN)"/>
+  <text x="1108" y="40" text-anchor="end" font-family="Helvetica, Arial, sans-serif" font-size="19" font-style="italic" fill="#555555">snapshot download</text>
+
+  <!-- directory header -->
+  <text x="1285" y="118" text-anchor="middle" font-family="Menlo, monospace" font-size="17" fill="#1a1a1a">~/.parametic_studio/</text>
+
+  <!-- cylinder 1: regions -->
+  <path d="M1194,142 v64 a91,11 0 0 0 182,0 v-64" fill="#ececea" stroke="#3a3a3a" stroke-width="1.5"/>
+  <ellipse cx="1285" cy="142" rx="91" ry="11" fill="#f7f7f5" stroke="#3a3a3a" stroke-width="1.5"/>
+  <text x="1285" y="182" text-anchor="middle" font-family="Menlo, monospace" font-size="18" fill="#1a1a1a">regions/*.pt</text>
+  <text x="1285" y="246" text-anchor="middle" font-family="Helvetica, Arial, sans-serif" font-size="17" fill="#1a1a1a">masks + grid &#183; LRU &#8804; 2</text>
+
+  <!-- cylinder 2: datasets -->
+  <path d="M1194,300 v64 a91,11 0 0 0 182,0 v-64" fill="#ececea" stroke="#3a3a3a" stroke-width="1.5"/>
+  <ellipse cx="1285" cy="300" rx="91" ry="11" fill="#f7f7f5" stroke="#3a3a3a" stroke-width="1.5"/>
+  <text x="1285" y="340" text-anchor="middle" font-family="Menlo, monospace" font-size="18" fill="#1a1a1a">datasets/</text>
+
+  <!-- cylinder 3: runs -->
+  <path d="M1194,460 v64 a91,11 0 0 0 182,0 v-64" fill="#ececea" stroke="#3a3a3a" stroke-width="1.5"/>
+  <ellipse cx="1285" cy="460" rx="91" ry="11" fill="#f7f7f5" stroke="#3a3a3a" stroke-width="1.5"/>
+  <text x="1285" y="500" text-anchor="middle" font-family="Menlo, monospace" font-size="18" fill="#1a1a1a">runs/*.json.gz</text>
+
+  <!-- Kernel <-> Persistence: file I/O (label rotated inside the gap) -->
+  <line x1="1164" y1="356" x2="1194" y2="356" stroke="#3a3a3a" stroke-width="2.5" marker-start="url(#arrNrev)" marker-end="url(#arrN)"/>
+  <text transform="rotate(-90 1179 300)" x="1179" y="300" text-anchor="middle" font-family="Helvetica, Arial, sans-serif" font-size="17" font-style="italic" fill="#555555">file I/O</text>
+
+</svg>

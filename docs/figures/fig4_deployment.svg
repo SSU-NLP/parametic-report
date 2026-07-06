@@ -1,0 +1,99 @@
+<svg viewBox="0 0 1400 344" xmlns="http://www.w3.org/2000/svg" font-family="Helvetica, Arial, sans-serif">
+  <rect width="1400" height="344" fill="#ffffff"/>
+
+  <!-- panel divider rules -->
+  <line x1="466" y1="24" x2="466" y2="320" stroke="#dddddd" stroke-width="1.5"/>
+  <line x1="933" y1="24" x2="933" y2="320" stroke="#dddddd" stroke-width="1.5"/>
+
+  <!-- ==================== (a) LOCAL ==================== -->
+  <text x="24" y="42" font-size="26" font-weight="bold" fill="#1a1a1a">(a) Local</text>
+
+  <!-- laptop glyph (common size: screen 160x140, glyph center y=148) -->
+  <rect x="153" y="78" width="160" height="140" rx="6" fill="#f7f7f5" stroke="#3a3a3a" stroke-width="1.5"/>
+  <path d="M 131 230 L 157 218 L 309 218 L 335 230 Z" fill="#ececea" stroke="#3a3a3a" stroke-width="1.5" stroke-linejoin="round"/>
+
+  <!-- UI box -->
+  <rect x="173" y="90" width="120" height="40" rx="5" fill="#ffffff" stroke="#3a3a3a" stroke-width="1.5"/>
+  <text x="233" y="116" font-size="18" fill="#1a1a1a" text-anchor="middle">UI (Tauri)</text>
+
+  <!-- kernel box -->
+  <rect x="173" y="166" width="120" height="40" rx="5" fill="#ffffff" stroke="#3a3a3a" stroke-width="1.5"/>
+  <text x="233" y="192" font-size="18" fill="#1a1a1a" text-anchor="middle">kernel</text>
+
+  <!-- WS link (vertical) -->
+  <line x1="233" y1="130" x2="233" y2="166" stroke="#1d4ed8" stroke-width="1.5"/>
+  <rect x="211" y="136" width="44" height="24" rx="6" fill="#e8eefb" stroke="#1d4ed8" stroke-width="1.5"/>
+  <text x="233" y="153" font-size="16" font-weight="bold" fill="#1d4ed8" text-anchor="middle">WS</text>
+
+  <!-- labels -->
+  <text x="233" y="266" font-size="22" fill="#1a1a1a" text-anchor="middle">Apple silicon — MPS · bf16</text>
+  <text x="233" y="296" font-size="19" font-style="italic" fill="#555555" text-anchor="middle">Tauri spawns the kernel</text>
+
+  <!-- ==================== (b) SSH TUNNEL ==================== -->
+  <text x="490" y="42" font-size="26" font-weight="bold" fill="#1a1a1a">(b) SSH tunnel</text>
+
+  <!-- laptop glyph (same size as (a)) -->
+  <rect x="502" y="78" width="160" height="140" rx="6" fill="#f7f7f5" stroke="#3a3a3a" stroke-width="1.5"/>
+  <path d="M 480 230 L 506 218 L 658 218 L 684 230 Z" fill="#ececea" stroke="#3a3a3a" stroke-width="1.5" stroke-linejoin="round"/>
+  <rect x="532" y="118" width="100" height="60" rx="5" fill="#ffffff" stroke="#3a3a3a" stroke-width="1.5"/>
+  <text x="582" y="155" font-size="20" fill="#1a1a1a" text-anchor="middle">UI</text>
+
+  <!-- server glyph (center y=148) -->
+  <rect x="786" y="88" width="120" height="120" rx="6" fill="#f7f7f5" stroke="#3a3a3a" stroke-width="1.5"/>
+  <line x1="802" y1="114" x2="890" y2="114" stroke="#3a3a3a" stroke-width="1.5"/>
+  <line x1="802" y1="134" x2="890" y2="134" stroke="#3a3a3a" stroke-width="1.5"/>
+  <line x1="802" y1="154" x2="890" y2="154" stroke="#3a3a3a" stroke-width="1.5"/>
+  <circle cx="802" cy="180" r="4" fill="#3a3a3a"/>
+  <circle cx="816" cy="180" r="4" fill="none" stroke="#3a3a3a" stroke-width="1.5"/>
+
+  <!-- tunnel pipe (center y=148) -->
+  <line x1="666" y1="132" x2="782" y2="132" stroke="#3a3a3a" stroke-width="1.5" stroke-linecap="round"/>
+  <line x1="666" y1="164" x2="782" y2="164" stroke="#3a3a3a" stroke-width="1.5" stroke-linecap="round"/>
+
+  <!-- padlock on top of pipe -->
+  <path d="M 716 112 a 8 8 0 0 1 16 0" fill="none" stroke="#3a3a3a" stroke-width="1.5"/>
+  <rect x="713" y="112" width="22" height="20" rx="3" fill="#ececea" stroke="#3a3a3a" stroke-width="1.5"/>
+
+  <!-- WS badge inside pipe -->
+  <rect x="702" y="136" width="44" height="24" rx="6" fill="#e8eefb" stroke="#1d4ed8" stroke-width="1.5"/>
+  <text x="724" y="153" font-size="16" font-weight="bold" fill="#1d4ed8" text-anchor="middle">WS</text>
+
+  <!-- server labels (directly under the server glyph) -->
+  <text x="846" y="232" font-size="19" fill="#1a1a1a" text-anchor="middle">GPU host</text>
+  <text x="846" y="256" font-size="19" fill="#1a1a1a" text-anchor="middle">kernel · CUDA</text>
+
+  <!-- command + script (bottom band, below all glyphs and labels) -->
+  <text x="724" y="294" font-family="Menlo, monospace" font-size="18" fill="#1a1a1a" text-anchor="middle">ssh -N -L 8000:localhost:8000</text>
+  <text x="724" y="320" font-family="Menlo, monospace" font-size="18" font-style="italic" fill="#555555" text-anchor="middle">scripts/studio-remote.sh</text>
+
+  <!-- ==================== (c) VESSL WORKSPACE ==================== -->
+  <text x="957" y="42" font-size="26" font-weight="bold" fill="#1a1a1a">(c) VESSL workspace</text>
+
+  <!-- laptop glyph (same size as (a)) -->
+  <rect x="965" y="78" width="160" height="140" rx="6" fill="#f7f7f5" stroke="#3a3a3a" stroke-width="1.5"/>
+  <path d="M 943 230 L 969 218 L 1121 218 L 1147 230 Z" fill="#ececea" stroke="#3a3a3a" stroke-width="1.5" stroke-linejoin="round"/>
+  <rect x="995" y="118" width="100" height="60" rx="5" fill="#ffffff" stroke="#3a3a3a" stroke-width="1.5"/>
+  <text x="1045" y="155" font-size="20" fill="#1a1a1a" text-anchor="middle">UI</text>
+
+  <!-- cloud outline (encloses kernel box with clearance) -->
+  <path d="M 1218 198
+           a 38 38 0 0 1 -4 -70
+           a 44 44 0 0 1 68 -32
+           a 42 42 0 0 1 70 8
+           a 36 36 0 0 1 34 56
+           a 26 26 0 0 1 -24 38
+           Z"
+        fill="#ffffff" stroke="#3a3a3a" stroke-width="1.5" stroke-linejoin="round"/>
+  <rect x="1218" y="124" width="152" height="42" rx="5" fill="#f7f7f5" stroke="#3a3a3a" stroke-width="1.5"/>
+  <text x="1294" y="151" font-size="20" fill="#1a1a1a" text-anchor="middle">kernel — GPU</text>
+
+  <!-- link between laptop and cloud (center y=148) -->
+  <line x1="1129" y1="148" x2="1195" y2="148" stroke="#1d4ed8" stroke-width="1.5"/>
+  <text x="1166" y="124" font-family="Menlo, monospace" font-size="18" fill="#1a1a1a" text-anchor="middle">wss://</text>
+  <rect x="1144" y="136" width="44" height="24" rx="6" fill="#e8eefb" stroke="#1d4ed8" stroke-width="1.5"/>
+  <text x="1166" y="153" font-size="16" font-weight="bold" fill="#1d4ed8" text-anchor="middle">WS</text>
+  <text x="1166" y="262" font-size="19" font-style="italic" fill="#555555" text-anchor="middle">token auth</text>
+
+  <!-- experimental annotation bottom-right -->
+  <text x="1390" y="320" font-size="19" font-style="italic" fill="#555555" text-anchor="end">experimental</text>
+</svg>

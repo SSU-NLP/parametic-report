@@ -1,0 +1,117 @@
+<svg viewBox="0 0 1400 300" xmlns="http://www.w3.org/2000/svg" font-family="Helvetica, Arial, sans-serif">
+  <rect width="1400" height="300" fill="#ffffff"/>
+
+  <defs>
+    <marker id="arrowN" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#3a3a3a"/>
+    </marker>
+  </defs>
+
+  <!-- ============ Cards: y=95, height=190, width=250, x = 24/299/574/849/1124 (24+5*250+4*25=1374, right edge 1374 &lt; 1400) ============ -->
+
+  <!-- Card 1: Observe (blue), center x=149 -->
+  <g>
+    <rect x="24" y="95" width="250" height="190" rx="6" fill="#e8eefb" stroke="#1d4ed8" stroke-width="1.5"/>
+    <text x="149" y="130" text-anchor="middle" font-size="26" font-weight="bold" fill="#1a1a1a">Observe</text>
+    <text x="149" y="160" text-anchor="middle" font-size="22" fill="#1a1a1a">generate with probes</text>
+    <text x="149" y="186" text-anchor="middle" font-size="22" fill="#1a1a1a">attention · logit lens</text>
+    <!-- glyph: 3x5 attention heatmap -->
+    <g>
+      <rect x="80" y="222" width="26" height="16" fill="#e8eefb" stroke="#1d4ed8" stroke-width="0.75"/>
+      <rect x="108" y="222" width="26" height="16" fill="#9db6ef" stroke="#1d4ed8" stroke-width="0.75"/>
+      <rect x="136" y="222" width="26" height="16" fill="#c7d5f5" stroke="#1d4ed8" stroke-width="0.75"/>
+      <rect x="164" y="222" width="26" height="16" fill="#1d4ed8" stroke="#1d4ed8" stroke-width="0.75"/>
+      <rect x="192" y="222" width="26" height="16" fill="#7f9fea" stroke="#1d4ed8" stroke-width="0.75"/>
+      <rect x="80" y="240" width="26" height="16" fill="#c7d5f5" stroke="#1d4ed8" stroke-width="0.75"/>
+      <rect x="108" y="240" width="26" height="16" fill="#1d4ed8" stroke="#1d4ed8" stroke-width="0.75"/>
+      <rect x="136" y="240" width="26" height="16" fill="#9db6ef" stroke="#1d4ed8" stroke-width="0.75"/>
+      <rect x="164" y="240" width="26" height="16" fill="#e8eefb" stroke="#1d4ed8" stroke-width="0.75"/>
+      <rect x="192" y="240" width="26" height="16" fill="#c7d5f5" stroke="#1d4ed8" stroke-width="0.75"/>
+      <rect x="80" y="258" width="26" height="16" fill="#9db6ef" stroke="#1d4ed8" stroke-width="0.75"/>
+      <rect x="108" y="258" width="26" height="16" fill="#c7d5f5" stroke="#1d4ed8" stroke-width="0.75"/>
+      <rect x="136" y="258" width="26" height="16" fill="#7f9fea" stroke="#1d4ed8" stroke-width="0.75"/>
+      <rect x="164" y="258" width="26" height="16" fill="#9db6ef" stroke="#1d4ed8" stroke-width="0.75"/>
+      <rect x="192" y="258" width="26" height="16" fill="#e8eefb" stroke="#1d4ed8" stroke-width="0.75"/>
+    </g>
+  </g>
+
+  <!-- Card 2: Locate (amber), center x=424 -->
+  <g>
+    <rect x="299" y="95" width="250" height="190" rx="6" fill="#fdf1e2" stroke="#b45309" stroke-width="1.5"/>
+    <text x="424" y="130" text-anchor="middle" font-size="26" font-weight="bold" fill="#1a1a1a">Locate</text>
+    <text x="424" y="160" text-anchor="middle" font-size="19" fill="#1a1a1a">spot: <tspan font-family="Menlo, monospace" font-size="17">Σ |grad × param|</tspan></text>
+    <text x="424" y="186" text-anchor="middle" font-size="22" fill="#1a1a1a">top-k% importance</text>
+    <!-- glyph: 3x5 amber heatmap, top-k hottest cells bold border -->
+    <g>
+      <rect x="355" y="222" width="26" height="16" fill="#fdf1e2" stroke="#b45309" stroke-width="0.75"/>
+      <rect x="383" y="222" width="26" height="16" fill="#f0c187" stroke="#b45309" stroke-width="0.75"/>
+      <rect x="411" y="222" width="26" height="16" fill="#f7ddbb" stroke="#b45309" stroke-width="0.75"/>
+      <rect x="439" y="222" width="26" height="16" fill="#b45309" stroke="#b45309" stroke-width="2.25"/>
+      <rect x="467" y="222" width="26" height="16" fill="#e6a45a" stroke="#b45309" stroke-width="0.75"/>
+      <rect x="355" y="240" width="26" height="16" fill="#f7ddbb" stroke="#b45309" stroke-width="0.75"/>
+      <rect x="383" y="240" width="26" height="16" fill="#b45309" stroke="#b45309" stroke-width="2.25"/>
+      <rect x="411" y="240" width="26" height="16" fill="#f0c187" stroke="#b45309" stroke-width="0.75"/>
+      <rect x="439" y="240" width="26" height="16" fill="#fdf1e2" stroke="#b45309" stroke-width="0.75"/>
+      <rect x="467" y="240" width="26" height="16" fill="#f7ddbb" stroke="#b45309" stroke-width="0.75"/>
+      <rect x="355" y="258" width="26" height="16" fill="#f0c187" stroke="#b45309" stroke-width="0.75"/>
+      <rect x="383" y="258" width="26" height="16" fill="#f7ddbb" stroke="#b45309" stroke-width="0.75"/>
+      <rect x="411" y="258" width="26" height="16" fill="#c5670c" stroke="#b45309" stroke-width="2.25"/>
+      <rect x="439" y="258" width="26" height="16" fill="#e6a45a" stroke="#b45309" stroke-width="0.75"/>
+      <rect x="467" y="258" width="26" height="16" fill="#fdf1e2" stroke="#b45309" stroke-width="0.75"/>
+    </g>
+  </g>
+
+  <!-- Card 3: Intervene (amber), center x=699 -->
+  <g>
+    <rect x="574" y="95" width="250" height="190" rx="6" fill="#fdf1e2" stroke="#b45309" stroke-width="1.5"/>
+    <text x="699" y="130" text-anchor="middle" font-size="26" font-weight="bold" fill="#1a1a1a">Intervene</text>
+    <text x="699" y="160" text-anchor="middle" font-size="19" fill="#1a1a1a">knobs: scale · zero · mean</text>
+    <text x="699" y="186" text-anchor="middle" font-size="22" fill="#1a1a1a">reversible · A/B swap</text>
+    <!-- glyph: knob dial -->
+    <g>
+      <circle cx="683" cy="246" r="20" fill="#ffffff" stroke="#b45309" stroke-width="1.5"/>
+      <line x1="683" y1="246" x2="697.1" y2="231.9" stroke="#b45309" stroke-width="2.25" stroke-linecap="round"/>
+      <text x="726" y="253" font-size="22" font-style="italic" fill="#1a1a1a">α</text>
+    </g>
+  </g>
+
+  <!-- Card 4: Evaluate (neutral), center x=974 -->
+  <g>
+    <rect x="849" y="95" width="250" height="190" rx="6" fill="#f7f7f5" stroke="#3a3a3a" stroke-width="1.5"/>
+    <text x="974" y="130" text-anchor="middle" font-size="26" font-weight="bold" fill="#1a1a1a">Evaluate</text>
+    <text x="974" y="160" text-anchor="middle" font-size="22" fill="#1a1a1a"><tspan font-family="Menlo, monospace" font-size="20">ppl</tspan> (code / general)</text>
+    <text x="974" y="186" text-anchor="middle" font-size="22" fill="#1a1a1a">base vs. intervened</text>
+    <!-- glyph: two bars -->
+    <g>
+      <rect x="932" y="230" width="26" height="30" fill="#ececea" stroke="#3a3a3a" stroke-width="1"/>
+      <rect x="990" y="220" width="26" height="40" fill="#3a3a3a" stroke="#3a3a3a" stroke-width="1"/>
+      <text x="945" y="276" text-anchor="middle" font-size="14" fill="#1a1a1a">base</text>
+      <text x="1003" y="276" text-anchor="middle" font-size="14" fill="#1a1a1a">int.</text>
+    </g>
+  </g>
+
+  <!-- Card 5: Log (neutral), center x=1249 -->
+  <g>
+    <rect x="1124" y="95" width="250" height="190" rx="6" fill="#f7f7f5" stroke="#3a3a3a" stroke-width="1.5"/>
+    <text x="1249" y="130" text-anchor="middle" font-size="26" font-weight="bold" fill="#1a1a1a">Log</text>
+    <text x="1249" y="160" text-anchor="middle" font-size="22" fill="#1a1a1a">every action recorded</text>
+    <text x="1249" y="186" text-anchor="middle" font-size="22" fill="#1a1a1a">export <tspan font-family="Menlo, monospace" font-size="20">replay.py</tspan></text>
+    <!-- glyph: 3 code line strokes decreasing width -->
+    <g stroke="#3a3a3a" stroke-width="3" stroke-linecap="round">
+      <line x1="1196" y1="228" x2="1302" y2="228"/>
+      <line x1="1196" y1="246" x2="1274" y2="246"/>
+      <line x1="1196" y1="264" x2="1246" y2="264"/>
+    </g>
+  </g>
+
+  <!-- ============ forward arrows in the 25px gaps, centered at y=190 ============ -->
+  <line x1="276" y1="190" x2="298" y2="190" stroke="#3a3a3a" stroke-width="1.5" marker-end="url(#arrowN)"/>
+  <line x1="551" y1="190" x2="573" y2="190" stroke="#3a3a3a" stroke-width="1.5" marker-end="url(#arrowN)"/>
+  <line x1="826" y1="190" x2="848" y2="190" stroke="#3a3a3a" stroke-width="1.5" marker-end="url(#arrowN)"/>
+  <line x1="1101" y1="190" x2="1123" y2="190" stroke="#3a3a3a" stroke-width="1.5" marker-end="url(#arrowN)"/>
+
+  <!-- ============ closing loop: top of Log (1249,95) -> arc apex y=30 -> top of Observe (149,95) ============ -->
+  <path d="M 1249 95 C 1249 48, 1249 30, 900 30 C 500 30, 149 48, 149 95"
+        fill="none" stroke="#3a3a3a" stroke-width="1.5" marker-end="url(#arrowN)"/>
+  <text x="699" y="24" text-anchor="middle" font-size="19" font-style="italic" fill="#555555">iterate</text>
+</svg>

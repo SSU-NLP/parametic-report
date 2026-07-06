@@ -1,0 +1,231 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Coding Spot — visualization directions</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+<style>
+  :root{
+    --bg:#f6f8fb; --card:#ffffff; --ink:#141b26; --muted:#6b7682; --faint:#97a1ad;
+    --line:#e7ebf1; --blue:#2f6bdf; --blue-ink:#1b3f87; --red:#e5484d; --ctrl:#c8d0db;
+    --mono:"JetBrains Mono",ui-monospace,SFMono-Regular,Menlo,monospace;
+    --sans:"Inter",-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--sans);-webkit-font-smoothing:antialiased;line-height:1.55}
+  .wrap{max-width:1040px;margin:0 auto;padding:64px 28px 96px}
+  .eyebrow{font-family:var(--mono);font-size:12px;letter-spacing:.14em;text-transform:uppercase;color:var(--blue);margin:0 0 14px}
+  h1{font-size:38px;font-weight:600;letter-spacing:-.02em;margin:0 0 12px;line-height:1.08}
+  .lede{font-size:16px;color:var(--muted);max-width:62ch;margin:0 0 10px}
+  .note{font-size:13px;color:var(--faint);max-width:70ch;margin:0}
+  .examples{display:grid;gap:22px;margin-top:48px}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:28px 30px 30px}
+  .card-head{display:flex;align-items:baseline;gap:12px;margin-bottom:4px}
+  .tag{font-family:var(--mono);font-size:12px;color:var(--faint)}
+  h2{font-size:21px;font-weight:600;letter-spacing:-.01em;margin:0}
+  .cap{font-size:14px;color:var(--muted);margin:6px 0 22px;max-width:64ch}
+  .legend{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--muted);font-family:var(--mono)}
+  .swatch{display:inline-block;width:64px;height:9px;border-radius:5px;background:linear-gradient(90deg,#eaf1fc,#2f6bdf,#15356f)}
+  /* heatmap */
+  .hm{display:grid;grid-template-columns:30px 1fr;gap:9px}
+  .hm-cols{display:grid;grid-template-columns:repeat(4,1fr) 14px repeat(3,1fr);gap:3px;margin-bottom:5px}
+  .hm-col{font-family:var(--mono);font-size:11px;color:var(--muted);text-align:center}
+  .hm-row{display:grid;grid-template-columns:repeat(4,1fr) 14px repeat(3,1fr);gap:3px}
+  .hm-cell{height:13px;border-radius:3px}
+  .hm-gap{}
+  .hm-lab{font-family:var(--mono);font-size:10px;color:var(--faint);display:flex;align-items:center;justify-content:flex-end;padding-right:6px}
+  .axis-mod{display:flex;justify-content:space-between;font-family:var(--mono);font-size:11px;color:var(--faint);margin-top:9px;padding-left:39px}
+  /* shared svg */
+  svg{display:block;width:100%;height:auto;overflow:visible}
+  .gl{stroke:var(--line);stroke-width:1}
+  .ax{font-family:var(--mono);font-size:10.5px;fill:var(--faint)}
+  .axl{font-family:var(--mono);font-size:11px;fill:var(--muted)}
+  /* concentration */
+  .stack{display:flex;height:30px;border-radius:7px;overflow:hidden;margin-bottom:18px}
+  .seg{height:100%}
+  .rank{display:grid;gap:8px}
+  .rrow{display:grid;grid-template-columns:172px 1fr 52px;gap:12px;align-items:center;font-size:13px}
+  .rname{font-family:var(--mono);font-size:12px;color:var(--ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .rbar{height:9px;border-radius:5px;background:#eef2f7;overflow:hidden}
+  .rbar>i{display:block;height:100%;border-radius:5px}
+  .rval{font-family:var(--mono);font-size:12px;color:var(--muted);text-align:right}
+  /* scatter controls */
+  .sc-top{display:flex;align-items:center;gap:16px;flex-wrap:wrap;margin-bottom:14px}
+  .sc-leg{display:flex;align-items:center;gap:14px;font-size:12px;color:var(--muted)}
+  .dot{display:inline-block;width:9px;height:9px;border-radius:50%;vertical-align:-1px;margin-right:5px}
+  .slider{display:flex;align-items:center;gap:12px;margin-left:auto;font-family:var(--mono);font-size:12px;color:var(--muted)}
+  input[type=range]{width:180px;accent-color:var(--blue)}
+  .sc-read{font-family:var(--mono);font-size:13px;color:var(--ink)}
+  .sc-read b{color:var(--blue)}
+  /* causal */
+  .cz{display:grid;gap:11px}
+  .crow{display:grid;grid-template-columns:168px 1fr 116px;gap:14px;align-items:center;font-size:13px}
+  .cname{color:var(--muted)}
+  .cbar{height:16px;border-radius:6px;background:#eef2f7;overflow:hidden}
+  .cbar>i{display:block;height:100%;border-radius:6px;background:var(--ctrl)}
+  .cval{font-family:var(--mono);font-size:12.5px;text-align:right;color:var(--ink)}
+  .crow.spot .cname{color:var(--red);font-weight:600}
+  .crow.spot .cbar>i{background:var(--red)}
+  .crow.spot .cval{color:var(--red);font-weight:600}
+  .tip{position:fixed;pointer-events:none;background:#141b26;color:#fff;font-family:var(--mono);font-size:11px;padding:5px 8px;border-radius:6px;opacity:0;transition:opacity .1s;transform:translate(-50%,-130%);white-space:nowrap;z-index:9}
+  @media (prefers-reduced-motion:reduce){*{transition:none!important}}
+  @media (max-width:640px){h1{font-size:30px}.wrap{padding:40px 18px 64px}.rrow,.crow{grid-template-columns:120px 1fr 48px}.slider{margin-left:0;width:100%}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <p class="eyebrow">Coding Spot · visualization directions</p>
+  <h1>Five ways to show the spot<br/>without a single PNG.</h1>
+  <p class="lede">Every chart below is drawn live from this run's real aggregates —
+    <span style="font-family:var(--mono);font-size:14px">spot_parameter_summary.csv</span>,
+    <span style="font-family:var(--mono);font-size:14px">spot_module_summary.csv</span>, and
+    <span style="font-family:var(--mono);font-size:14px">ppl_damage.json</span> — for
+    Llama 3.2 3B · java · top-0.0163. Pick the language for the report.</p>
+  <p class="note">252 tensors across 28 layers × 9 module types. The static matplotlib atlases stay available as raw artifacts; these are the in-browser replacements.</p>
+
+  <div class="examples">
+
+    <section class="card">
+      <div class="card-head"><span class="tag">A</span><h2>The model's anatomy</h2>
+        <span class="legend" style="margin-left:auto">low<span class="swatch"></span>high</span></div>
+      <p class="cap">Importance of each layer × module. Reads like the closest "where the spot lives" view — the three MLP columns are unmistakably the spine, and it is brightest at the top of the stack.</p>
+      <div class="hm" id="hm"></div>
+      <div class="axis-mod"><span>attention →</span><span>← MLP</span></div>
+    </section>
+
+    <section class="card">
+      <div class="card-head"><span class="tag">B</span><h2>Where it sits in depth</h2></div>
+      <p class="cap">Total importance per layer, input (L0) to output (L27). The spot front-loads into the earliest layers, thins through the middle, then rebounds in the final layer.</p>
+      <svg id="profile" viewBox="0 0 960 260"></svg>
+    </section>
+
+    <section class="card">
+      <div class="card-head"><span class="tag">C</span><h2>What carries it</h2></div>
+      <p class="cap">Share of importance by module type. Roughly three-quarters of the spot lives in the MLP feed-forward weights; attention contributes mostly through o_proj.</p>
+      <div class="stack" id="stack"></div>
+      <div class="rank" id="rank"></div>
+    </section>
+
+    <section class="card">
+      <div class="card-head"><span class="tag">D</span><h2>The spot as a field</h2></div>
+      <p class="cap">Each tensor placed at its depth (x) and importance (y), sized by how many parameters it contributes. Drag the threshold to light up the heaviest tensors — the same gesture the per-parameter hero will use once that dump exists.</p>
+      <div class="sc-top">
+        <div class="sc-leg"><span><span class="dot" style="background:var(--blue)"></span>MLP</span>
+          <span><span class="dot" style="background:var(--ctrl)"></span>attention</span></div>
+        <div class="slider">top<input id="krange" type="range" min="2" max="60" value="25" step="1"/><span id="kout">25%</span></div>
+      </div>
+      <svg id="scatter" viewBox="0 0 960 300"></svg>
+      <p class="sc-read" id="scread"></p>
+    </section>
+
+    <section class="card">
+      <div class="card-head"><span class="tag">E</span><h2>What removing it does</h2></div>
+      <p class="cap">Zero the spot, then re-measure code perplexity against equal-size control regions. Bars are log-scaled — only the spot moves, by four orders of magnitude.</p>
+      <div class="cz" id="causal"></div>
+    </section>
+
+  </div>
+</div>
+<div class="tip" id="tip"></div>
+<script>
+const MODS=["q","k","v","o","gate","up","down"];
+const SEL={q:153826,k:51275,v:51275,o:153826,gate:410202,up:410202,down:410202};
+const MAT=[[0.375,0.228,0.79,1.616,3.555,3.81,4.359],[0.489,0.298,0.762,1.685,3.186,3.479,3.848],[0.805,0.514,0.673,1.291,3.28,3.578,3.803],[0.808,0.461,0.814,1.602,3.105,3.687,3.83],[0.718,0.401,0.705,1.458,2.939,3.843,3.973],[0.692,0.381,0.633,1.397,2.904,3.718,3.787],[0.734,0.405,0.649,1.501,2.709,3.623,3.709],[0.845,0.421,0.678,1.689,2.534,3.331,3.494],[0.759,0.379,0.623,1.765,2.332,3.177,3.365],[0.762,0.382,0.64,1.794,2.28,3.157,3.335],[0.815,0.371,0.615,1.687,2.339,3.089,3.225],[0.776,0.399,0.741,1.838,2.23,2.963,3.129],[0.844,0.389,0.686,1.734,2.132,2.945,3.123],[0.863,0.396,0.614,1.748,2.146,3.047,3.193],[0.818,0.405,0.679,1.643,2.104,3.03,3.363],[0.699,0.382,0.656,1.36,2.023,2.857,3.211],[0.511,0.264,0.435,0.88,2.02,2.676,2.953],[0.506,0.26,0.386,0.845,2.009,2.613,2.855],[0.619,0.294,0.46,0.901,2.042,2.565,2.776],[0.56,0.288,0.482,0.951,2.039,2.513,2.724],[0.411,0.22,0.332,0.659,1.905,2.238,2.402],[0.461,0.252,0.439,0.862,1.791,2.083,2.207],[0.428,0.244,0.429,0.749,1.719,2.001,2.12],[0.471,0.266,0.456,0.826,1.687,1.955,2.134],[0.419,0.222,0.394,0.798,1.648,1.952,2.164],[0.425,0.233,0.429,0.678,1.693,1.946,2.355],[0.535,0.284,0.564,1.006,1.751,1.928,2.457],[0.522,0.259,0.631,1.096,2.331,2.246,4.241]];
+const PROFILE=[14.88,13.87,14.07,14.43,14.16,13.63,13.44,13.11,12.51,12.45,12.24,12.18,11.95,12.11,12.15,11.29,9.82,9.56,9.74,9.64,8.24,8.17,7.76,7.87,7.67,7.84,8.62,11.47];
+const SHARES=[["mlp.down_proj",28.0],["mlp.up_proj",25.4],["mlp.gate_proj",20.5],["self_attn.o_proj",11.5],["self_attn.q_proj",5.6],["self_attn.v_proj",5.2],["self_attn.k_proj",3.0],["post_attention_layernorm",0.6],["input_layernorm",0.3]];
+const PPL=[["Original (intact)",3.311,"ctrl"],["Spot removed",221483,"spot"],["Bottom region (control)",3.372,"ctrl"],["Random region (control)",3.368,"ctrl"]];
+const MATMAX=4.359;
+const NL="http://www.w3.org/2000/svg";
+const tip=document.getElementById("tip");
+function showTip(e,t){tip.textContent=t;tip.style.left=e.clientX+"px";tip.style.top=e.clientY+"px";tip.style.opacity=1;}
+function hideTip(){tip.style.opacity=0;}
+function lerp(a,b,t){return a+(b-a)*t;}
+function heat(v){const t=Math.pow(v/MATMAX,.72);let r,g,b;
+  if(t<.5){const u=t/.5;r=lerp(234,47,u);g=lerp(241,107,u);b=lerp(252,223,u);}
+  else{const u=(t-.5)/.5;r=lerp(47,21,u);g=lerp(107,53,u);b=lerp(223,111,u);}
+  return `rgb(${r|0},${g|0},${b|0})`;}
+function el(tag,attrs){const n=document.createElementNS(NL,tag);for(const k in attrs)n.setAttribute(k,attrs[k]);return n;}
+
+// A — heatmap
+(function(){const root=document.getElementById("hm");
+  root.appendChild(document.createElement("div"));
+  const cols=document.createElement("div");cols.className="hm-cols";
+  ["q","k","v","o","","gate","up","down"].forEach(m=>{const c=document.createElement("div");c.className=m?"hm-col":"hm-gap";c.textContent=m;cols.appendChild(c);});
+  root.appendChild(cols);
+  MAT.forEach((rw,i)=>{
+    const lab=document.createElement("div");lab.className="hm-lab";lab.textContent=(i%4===0||i===27)?("L"+i):"";root.appendChild(lab);
+    const r=document.createElement("div");r.className="hm-row";
+    [0,1,2,3,-1,4,5,6].forEach(j=>{
+      if(j<0){r.appendChild(Object.assign(document.createElement("div"),{className:"hm-gap"}));return;}
+      const c=document.createElement("div");c.className="hm-cell";c.style.background=heat(rw[j]);
+      c.addEventListener("mousemove",e=>showTip(e,`L${i} · ${MODS[j]} · ${rw[j].toFixed(2)}`));c.addEventListener("mouseleave",hideTip);
+      r.appendChild(c);
+    });
+    root.appendChild(r);
+  });
+})();
+
+// B — depth profile (area + line)
+(function(){const W=960,H=260,pl=44,pr=16,pt=16,pb=34,iw=W-pl-pr,ih=H-pt-pb;
+  const svg=document.getElementById("profile");const mx=Math.max(...PROFILE);
+  for(let g=0;g<=3;g++){const y=pt+ih*g/3;svg.appendChild(el("line",{x1:pl,y1:y,x2:W-pr,y2:y,class:"gl"}));
+    const v=(mx*(1-g/3)).toFixed(0);const t=el("text",{x:pl-8,y:y+3,class:"ax","text-anchor":"end"});t.textContent=v;svg.appendChild(t);}
+  const xf=i=>pl+iw*i/27, yf=v=>pt+ih*(1-v/mx);
+  let d=`M${xf(0)},${yf(PROFILE[0])}`;PROFILE.forEach((v,i)=>{if(i)d+=`L${xf(i)},${yf(v)}`;});
+  const area=d+`L${xf(27)},${pt+ih}L${xf(0)},${pt+ih}Z`;
+  svg.appendChild(el("path",{d:area,fill:"#2f6bdf",opacity:".09"}));
+  svg.appendChild(el("path",{d:d,fill:"none",stroke:"#2f6bdf","stroke-width":"2.5","stroke-linejoin":"round"}));
+  PROFILE.forEach((v,i)=>{const c=el("circle",{cx:xf(i),cy:yf(v),r:i===0||i===27?4:2.6,fill:"#2f6bdf"});
+    c.addEventListener("mousemove",e=>showTip(e,`L${i} · ${v.toFixed(1)}`));c.addEventListener("mouseleave",hideTip);svg.appendChild(c);});
+  [0,7,14,21,27].forEach(i=>{const t=el("text",{x:xf(i),y:H-12,class:"ax","text-anchor":"middle"});t.textContent="L"+i;svg.appendChild(t);});
+  const e0=el("text",{x:pl,y:H-12,class:"axl","text-anchor":"start"});
+})();
+
+// C — concentration
+(function(){const stack=document.getElementById("stack"),rank=document.getElementById("rank");
+  const palette=i=>i<3?["#15356f","#2f6bdf","#5b8be8"][i]:i<7?["#9bb6ea","#b9ccf0","#cdd9f2","#dde6f6"][i-3]:"#e7edf6";
+  SHARES.forEach((s,i)=>{const seg=document.createElement("div");seg.className="seg";seg.style.width=s[1]+"%";seg.style.background=palette(i);
+    seg.addEventListener("mousemove",e=>showTip(e,`${s[0]} · ${s[1]}%`));seg.addEventListener("mouseleave",hideTip);stack.appendChild(seg);});
+  const rmax=SHARES[0][1];
+  SHARES.slice(0,7).forEach((s,i)=>{const row=document.createElement("div");row.className="rrow";
+    row.innerHTML=`<span class="rname">${s[0]}</span><span class="rbar"><i style="width:${(s[1]/rmax*100).toFixed(0)}%;background:${palette(i)}"></i></span><span class="rval">${s[1].toFixed(1)}%</span>`;
+    rank.appendChild(row);});
+})();
+
+// D — scatter with K threshold
+(function(){const W=960,H=300,pl=44,pr=18,pt=14,pb=34,iw=W-pl-pr,ih=H-pt-pb;
+  const svg=document.getElementById("scatter");const ymax=4.5;
+  const pts=[];MAT.forEach((rw,L)=>rw.forEach((v,j)=>pts.push({L,m:MODS[j],v,sel:SEL[MODS[j]],mlp:j>=4})));
+  const selmax=410202,rf=s=>3+6*Math.sqrt(s/selmax);
+  const xf=L=>pl+iw*L/27, yf=v=>pt+ih*(1-v/ymax);
+  for(let g=0;g<=3;g++){const y=pt+ih*g/3;svg.appendChild(el("line",{x1:pl,y1:y,x2:W-pr,y2:y,class:"gl"}));
+    const t=el("text",{x:pl-8,y:y+3,class:"ax","text-anchor":"end"});t.textContent=(ymax*(1-g/3)).toFixed(1);svg.appendChild(t);}
+  [0,7,14,21,27].forEach(L=>{const t=el("text",{x:xf(L),y:H-12,class:"ax","text-anchor":"middle"});t.textContent="L"+L;svg.appendChild(t);});
+  const sorted=[...pts].sort((a,b)=>b.v-a.v);
+  const nodes=pts.map(p=>{const c=el("circle",{cx:xf(p.L),cy:yf(p.v),r:rf(p.sel),"fill-opacity":".85"});
+    c.addEventListener("mousemove",e=>showTip(e,`L${p.L} · ${p.m} · imp ${p.v.toFixed(2)} · ${p.sel.toLocaleString()} params`));c.addEventListener("mouseleave",hideTip);
+    svg.appendChild(c);return c;});
+  const range=document.getElementById("krange"),kout=document.getElementById("kout"),read=document.getElementById("scread");
+  function apply(){const k=+range.value;kout.textContent=k+"%";const n=Math.max(1,Math.round(pts.length*k/100));
+    const thr=sorted[n-1].v;let on=0;
+    pts.forEach((p,i)=>{const sel=p.v>=thr;if(sel)on++;
+      nodes[i].setAttribute("fill",sel?(p.mlp?"#2f6bdf":"#8a97a6"):"#dde3ea");
+      nodes[i].setAttribute("fill-opacity",sel?".9":".5");});
+    read.innerHTML=`<b>${on}</b> of ${pts.length} tensors above the top-${k}% importance cut · threshold imp ≥ ${thr.toFixed(2)}`;}
+  range.addEventListener("input",apply);apply();
+})();
+
+// E — causal (log bars)
+(function(){const root=document.getElementById("causal");const maxLog=Math.log10(Math.max(...PPL.map(p=>p[1])));
+  PPL.forEach(p=>{const w=(Math.log10(Math.max(p[1],1))/maxLog*100).toFixed(1);
+    const row=document.createElement("div");row.className="crow"+(p[2]==="spot"?" spot":"");
+    const val=p[1]>=1000?Math.round(p[1]).toLocaleString():p[1].toFixed(2);
+    row.innerHTML=`<span class="cname">${p[0]}</span><span class="cbar"><i style="width:${w}%"></i></span><span class="cval">PPL ${val}</span>`;
+    root.appendChild(row);});
+})();
+</script>
+</body>
+</html>
