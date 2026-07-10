@@ -43,7 +43,7 @@ const SPOT_TOPK_OPTIONS = [0.005, 0.01, 0.05] as const
 // fraction → percent label. 3 significant figures so tiny paper-scale values survive (0.000025 → "0.0025",
 // not "0" as a fixed-2-decimal round would give), while whole values stay clean (0.05 → "5", 0.01 → "1").
 const pctLabel = (k: number) => String(+((k * 100).toPrecision(3)))
-const VIEWS = ['output', 'attention', 'importance', 'activations', 'activations-spot', 'usage', 'logitlens', 'spot', 'tensors', 'control', 'code', 'train', 'eval', 'log'] as const
+const VIEWS = ['output', 'attention', 'importance', 'activations', 'activations-spot', 'usage', 'logitlens', 'spot', 'tensors', 'control', 'train', 'eval', 'log'] as const
 type View = typeof VIEWS[number]
 const VIEW_LABEL: Record<string, string> = {
   output: 'Output',
@@ -56,7 +56,6 @@ const VIEW_LABEL: Record<string, string> = {
   spot: 'Spot',
   tensors: 'Tensors',
   control: 'Region control',
-  code: 'Code',
   train: 'Train',
   eval: 'Eval',
   log: 'Log',
@@ -535,7 +534,7 @@ function ContextMenu({ x, y, items, onClose }: { x: number; y: number; items: Me
 }
 
 // PENDING_OPS: request ops that get a ⟳-pending badge until their matching response (or error) arrives
-const PENDING_OPS = new Set(['ppl', 'intervene', 'save_region', 'import_region', 'drilldown', 'region_compare', 'region_info', 'eval_code', 'causal_contrast', 'region_usage', 'region_usage_batch', 'tensor_values', 'causal_sweep', 'run_code', 'gen_code', 'code_contrast', 'training_delta'])
+const PENDING_OPS = new Set(['ppl', 'intervene', 'save_region', 'import_region', 'drilldown', 'region_compare', 'region_info', 'eval_code', 'causal_contrast', 'region_usage', 'region_usage_batch', 'tensor_values', 'causal_sweep', 'training_delta'])
 
 // Dataset content → training/spot examples. Understands JSON arrays / JSONL (records), with an
 // optional per-dataset field selection (e.g. context+question for benchmark files); plain text
@@ -706,15 +705,6 @@ export default function App() {
   const [trainEvalGpus, setTrainEvalGpus] = useState<Record<string, number[]>>({})
   const [ctrlEvalGpus, setCtrlEvalGpus] = useState<Record<string, number[]>>({})  // extra GPUs to split the benchmark across
   const ctrlTopkRef = useRef(0.01)                                         // latest slider top-k (avoids stale closure on drag-release re-apply)
-  // Code tab (VSCode-style): Explorer of in-memory files + full editor, model code-gen, clean-vs-deleted contrast
-  type RunOut = { exit: number | null; stdout: string; stderr: string; timed_out: boolean; duration_ms: number }
-  type CodeFile = { name: string; src: string }
-  const DEFAULT_CODE_PROMPT = 'def sort_evens(nums):\n    """Return the even numbers from `nums`, sorted ascending."""\n'
-  const [codeFiles, setCodeFiles] = useState<Record<string, CodeFile[]>>({})
-  const [codeActive, setCodeActive] = useState<Record<string, string>>({})
-  const codeActiveRef = useRef<Record<string, string>>({})  // active filename for message handlers (avoids stale closure)
-  const [codeResult, setCodeResult] = useState<Record<string, RunOut>>({})
-  const [codeContrast, setCodeContrast] = useState<Record<string, { clean?: { completion: string; run: RunOut }; deleted?: { completion: string; run: RunOut } }>>({})
   const [compareSel, setCompareSel] = useState<string[]>([])  // selected region names (a toggle set; hue is fixed per region, see regHue)
   const [compareHover, setCompareHover] = useState<string | null>(null)  // shared "L.module" cell — cross-highlights every compare grid
   const [importanceCompareRegion, setImportanceCompareRegion] = useState('')
@@ -979,16 +969,6 @@ export default function App() {
     else if (m.type === 'contrast_result') { setPendingKey(`causal_contrast:${mid}`, false); patch(mid, (d) => ({ ...d, contrastProg: null, contrast: { topk: m.topk, clean: m.clean, spot: m.spot, random: m.random, bottom: m.bottom } })) }
     else if (m.type === 'sweep_progress') patch(mid, (d) => ({ ...d, sweepProg: m.cond === 'clean' ? 'clean' : `${(m.topk * 100).toFixed(4)}% · ${m.cond}`, sweep: m.cond === 'clean' ? { ...(d.sweep ?? { topks: [], rows: [] }), clean: { code_ppl: m.code_ppl, general_ppl: m.general_ppl } } : { ...(d.sweep ?? { topks: [], rows: [] }), rows: [...(d.sweep?.rows ?? []), { topk: m.topk, cond: m.cond, code_ppl: m.code_ppl, general_ppl: m.general_ppl }] } }))
     else if (m.type === 'sweep_result') { setPendingKey(`causal_sweep:${mid}`, false); patch(mid, (d) => ({ ...d, sweepProg: null, sweep: { topks: m.topks, clean: m.clean, rows: m.rows } })) }
-    else if (m.type === 'code_result') { setPendingKey(`run_code:${mid}`, false); setCodeResult((c) => ({ ...c, [mid]: { exit: m.exit, stdout: m.stdout, stderr: m.stderr, timed_out: m.timed_out, duration_ms: m.duration_ms } })) }
-    else if (m.type === 'code_gen') {
-      setPendingKey(`gen_code:${mid}`, false)
-      const full = (m.prompt ?? '') + (m.completion ?? '')
-      const act = codeActiveRef.current[mid] ?? 'main.py'
-      setCodeFiles((cf) => { const files = cf[mid] ?? [{ name: 'main.py', src: '' }]; const has = files.some((f) => f.name === act)
-        return { ...cf, [mid]: has ? files.map((f) => f.name === act ? { ...f, src: full } : f) : [...files, { name: act, src: full }] } })
-    }
-    else if (m.type === 'code_contrast_progress') setCodeContrast((c) => ({ ...c, [mid]: { ...c[mid], [m.stage]: { completion: m.completion, run: m.run } } }))
-    else if (m.type === 'code_contrast') { setPendingKey(`code_contrast:${mid}`, false); setCodeContrast((c) => ({ ...c, [mid]: { clean: m.clean, deleted: m.deleted } })) }
     else if (m.type === 'usage_row') patch(mid, (d) => ({ ...d, usage: { ...d.usage, rows: [...d.usage.rows.filter((r) => r.prompt !== m.prompt), { prompt: m.prompt, overall: m.overall }] } }))
     else if (m.type === 'usage_batch_done') { setPendingKey(`region_usage_batch:${mid}`, false); patch(mid, (d) => ({ ...d, usage: { ...d.usage, running: false } })) }
     else if (m.type === 'region_usage') { setPendingKey(`region_usage:${mid}`, false); patch(mid, (d) => ({ ...d, usage: { ...d.usage, detail: { prompt: m.prompt, overall: m.overall, per_layer: m.per_layer, tokens: m.tokens } } })) }
@@ -2109,117 +2089,6 @@ export default function App() {
                 </>}
             </>}
         </VizCard>
-      )
-    }
-    if (view === 'code') {
-      const files = codeFiles[mid] ?? [{ name: 'main.py', src: DEFAULT_CODE_PROMPT }]
-      const active = codeActive[mid] ?? files[0]?.name ?? 'main.py'
-      codeActiveRef.current[mid] = active
-      const file = files.find((f) => f.name === active) ?? files[0]
-      const src = file?.src ?? ''
-      const res = codeResult[mid]
-      const cc = codeContrast[mid]
-      const genBusy = pending.has(`gen_code:${mid}`)
-      const runBusy = pending.has(`run_code:${mid}`)
-      const ccBusy = pending.has(`code_contrast:${mid}`)
-      const busy = genBusy || runBusy || ccBusy
-      const csel = ctrlSel[mid] ?? ''  // reuse Region control's region for the clean-vs-deleted contrast
-      const cbase = (data[mid]?.regions ?? []).find((r) => r.name === csel)?.base_topk
-      const ctopk = ctrlTopk[mid] ?? (cbase != null ? Math.min(0.01, cbase) : 0.01)
-      const setSrc = (v: string) => setCodeFiles((cf) => ({ ...cf, [mid]: (cf[mid] ?? files).map((f) => f.name === active ? { ...f, src: v } : f) }))
-      const selectFile = (n: string) => setCodeActive((a) => ({ ...a, [mid]: n }))
-      const addFile = () => { let i = files.length + 1, n = `file${i}.py`; while (files.some((f) => f.name === n)) { i++; n = `file${i}.py` } setCodeFiles((cf) => ({ ...cf, [mid]: [...(cf[mid] ?? files), { name: n, src: '' }] })); selectFile(n) }
-      const delFile = (n: string) => { const next = (codeFiles[mid] ?? files).filter((f) => f.name !== n); if (!next.length) return; setCodeFiles((cf) => ({ ...cf, [mid]: next })); if (active === n) selectFile(next[0].name) }
-      const generate = () => { setPendingKey(`gen_code:${mid}`, true); sendTo(mid, { type: 'gen_code', prompt: src, max_tokens: 256, temperature: 0 }) }  // editor content IS the prompt
-      const run = () => { if (!src.trim()) { toast('[code] file is empty'); return } setPendingKey(`run_code:${mid}`, true); sendTo(mid, { type: 'run_code', source: src, timeout: 10 }) }
-      const compare = () => {
-        if (!csel) { toast('[code] pick a region in Region control first'); return }
-        setCodeContrast((c) => ({ ...c, [mid]: {} })); setPendingKey(`code_contrast:${mid}`, true)
-        sendTo(mid, { type: 'code_contrast', prompt: src, region: { kind: 'named', name: csel, topk: ctopk }, op: ctrlOp, alpha: ctrlAlpha, max_tokens: 256, timeout: 10 })
-      }
-      const runBadge = (r: RunOut | undefined) => r == null ? null : (
-        r.timed_out ? <span style={{ color: 'var(--danger)' }}>&#9201; timed out</span>
-          : r.exit === 0 ? <span style={{ color: 'var(--accent)' }}>&#10003; exit 0 &#183; {r.duration_ms}ms</span>
-            : <span style={{ color: 'var(--danger)' }}>&#10007; exit {r.exit} &#183; {r.duration_ms}ms</span>)
-      const outBox = (r: RunOut | undefined, max = 160) => r == null ? <span style={hint}>&#8212;</span> : (
-        <div className="mono" style={{ fontSize: 11, whiteSpace: 'pre-wrap', maxHeight: max, overflow: 'auto' }}>
-          {r.stdout && <div style={{ color: 'var(--text-1)' }}>{r.stdout}</div>}
-          {r.stderr && <div style={{ color: 'var(--danger)' }}>{r.stderr}</div>}
-          {!r.stdout && !r.stderr && <span style={hint}>(no output)</span>}
-        </div>)
-      return (
-        <div style={{ margin: '-12px -14px', height: 'calc(100vh - 118px)', minHeight: 620, display: 'flex', flexDirection: 'column', background: 'var(--bg-0)', overflow: 'hidden' }}>
-          <div style={{ height: 38, flexShrink: 0, display: 'flex', alignItems: 'center', gap: 8, padding: '0 12px', borderBottom: '1px solid var(--line)', background: 'var(--bg-1)' }}>
-            <span style={{ width: 8, height: 8, borderRadius: 3, background: 'var(--accent)' }} />
-            <span style={{ color: 'var(--text-0)', fontWeight: 700, fontSize: 13 }}>Code</span>
-            <span className="mono" style={{ color: 'var(--text-2)', fontSize: 11 }}>{active}</span>
-            <span style={{ marginLeft: 'auto', display: 'flex', gap: 6, alignItems: 'center' }}>
-              <Btn onClick={generate} disabled={busy} color="var(--accent)" style={{ padding: '3px 10px' }} title="current model completes/replaces the open editable file">{genBusy ? '⟳' : 'Generate with model'}</Btn>
-              <Btn onClick={run} disabled={busy} style={{ padding: '3px 10px' }} title="run the open file (⌘/Ctrl+Enter)">{runBusy ? '⟳' : 'Run'}</Btn>
-              <Btn onClick={compare} disabled={busy || !csel} style={{ padding: '3px 10px' }} title="the model writes the open file clean, then with the region deleted — both run">{ccBusy ? '⟳ comparing' : 'Clean vs deleted'}</Btn>
-            </span>
-          </div>
-
-          <div style={{ flex: 1, minHeight: 0, display: 'flex' }}>
-            <div style={{ width: 220, flexShrink: 0, borderRight: '1px solid var(--line)', background: 'var(--bg-1)', display: 'flex', flexDirection: 'column' }}>
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', height: 34, padding: '0 10px', borderBottom: '1px solid var(--line)' }}>
-                <span style={{ ...hint, fontSize: 10, letterSpacing: '0.08em' }}>EXPLORER</span>
-                <button onClick={addFile} title="new file" style={{ ...iconBtn, color: 'var(--text-1)', fontSize: 15 }}>+</button>
-              </div>
-              <div style={{ flex: 1, overflow: 'auto', padding: '6px 5px' }}>
-                {files.map((f) => (
-                  <div key={f.name} onClick={() => selectFile(f.name)} className="mono"
-                    style={{ display: 'flex', alignItems: 'center', gap: 7, fontSize: 12, height: 28, padding: '0 8px', borderRadius: 6, cursor: 'pointer', background: f.name === active ? 'rgba(45,127,249,0.18)' : 'transparent', color: f.name === active ? 'var(--text-0)' : 'var(--text-1)' }}>
-                    <Icon name="tensor" size={12} />
-                    <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{f.name}</span>
-                    {files.length > 1 && <span onClick={(e) => { e.stopPropagation(); delFile(f.name) }} title="delete" style={{ ...hint, cursor: 'pointer', fontSize: 14 }}>&#215;</span>}
-                  </div>
-                ))}
-              </div>
-              <div style={{ padding: 10, borderTop: '1px solid var(--line)', fontSize: 11, color: 'var(--text-2)', lineHeight: 1.45 }}>
-                Generated model code is inserted into the active file and remains editable before run/compare.
-              </div>
-            </div>
-
-            <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', background: 'var(--bg-0)' }}>
-              <div style={{ height: 34, display: 'flex', alignItems: 'center', gap: 8, padding: '0 12px', borderBottom: '1px solid var(--line)', background: 'var(--bg-1)' }}>
-                <span className="mono" style={{ color: 'var(--text-1)', fontSize: 12 }}>{active}</span>
-                <span style={{ ...hint, fontSize: 11 }}>editable Python file</span>
-                <span style={{ marginLeft: 'auto', fontSize: 11 }}>{res && runBadge(res)}</span>
-              </div>
-              <div style={{ flex: 1, minHeight: 0 }}>
-                <CodeMirror value={src} height="100%" theme="none" onChange={setSrc}
-                  extensions={[cmTheme, cmHighlight, python(), keymap.of([{ key: 'Mod-Enter', run: () => { run(); return true } }])]} />
-              </div>
-            </div>
-          </div>
-
-          <div style={{ height: cc && (cc.clean || cc.deleted) ? 260 : 180, flexShrink: 0, borderTop: '1px solid var(--line)', background: 'var(--bg-1)', display: 'flex', flexDirection: 'column' }}>
-            <div style={{ height: 32, display: 'flex', alignItems: 'center', gap: 10, padding: '0 12px', borderBottom: '1px solid var(--line)' }}>
-              <span style={{ color: 'var(--text-1)', fontSize: 12, fontWeight: 700 }}>{cc && (cc.clean || cc.deleted) ? 'COMPARISON' : 'TERMINAL'}</span>
-              <span style={{ ...hint, fontSize: 11 }}>region: {csel ? <span className="mono" style={{ color: 'var(--text-1)' }}>{csel} · {ctrlOp} @ top {pctLabel(ctopk)}%</span> : 'pick one in Region control'}</span>
-            </div>
-            <div style={{ flex: 1, minHeight: 0, overflow: 'auto', padding: 10 }}>
-              {cc && (cc.clean || cc.deleted) ? (
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, height: '100%' }}>
-                  {(['clean', 'deleted'] as const).map((k) => { const st = cc[k]; return (
-                    <div key={k} style={{ border: '1px solid var(--line)', borderRadius: 8, padding: 8, minHeight: 0, overflow: 'auto' }}>
-                      <div style={{ fontSize: 12, fontWeight: 600, color: k === 'deleted' ? 'var(--danger)' : 'var(--text-1)', marginBottom: 4 }}>{k} <span style={{ fontWeight: 400 }}>{st && runBadge(st.run)}</span></div>
-                      {st ? <>
-                        <div className="mono" style={{ fontSize: 10, whiteSpace: 'pre-wrap', maxHeight: 92, overflow: 'auto', background: 'var(--bg-2)', borderRadius: 6, padding: 6, marginBottom: 4 }}>{src + st.completion}</div>
-                        {outBox(st.run, 110)}
-                      </> : <span style={hint}>{ccBusy ? '…' : '&#8212;'}</span>}
-                    </div>) })}
-                </div>
-              ) : (
-                <div>
-                  <div style={{ ...hint, fontSize: 11, marginBottom: 4 }}>OUTPUT {res && runBadge(res)}</div>
-                  {outBox(res, 128)}
-                </div>
-              )}
-            </div>
-          </div>
-        </div>
       )
     }
     if (view === 'log') {

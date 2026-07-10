@@ -32,3 +32,9 @@ platform_scratch/
 studio_web/src-tauri/target/
 studio_web/src-tauri/gen/schemas/
 studio_web/dist/
+
+# tool installs / build artifacts (not needed to build)
+.agents/
+.claude/skills/
+skills-lock.json
+dist_windows/
