@@ -1,54 +1,53 @@
-# python damage_model.py --weights_folder /data_x/junkim100/code-spot/region_selection/code-spot/llama-3.1-8b/top0.005 --original_model meta-llama/Meta-Llama-3.1-8B-Instruct --output_dir /data_x/junkim100/code-spot/damage/damaged_llama-3.1-8b/code/top0.005
-# python damage_model.py --weights_folder /data_x/junkim100/code-spot/region_selection/code-spot/llama-3.1-8b/top0.01 --original_model meta-llama/Meta-Llama-3.1-8B-Instruct --output_dir /data_x/junkim100/code-spot/damage/damaged_llama-3.1-8b/code/top0.01
-# python damage_model.py --weights_folder /data_x/junkim100/code-spot/region_selection/code-spot/llama-3.1-8b/top0.03 --original_model meta-llama/Meta-Llama-3.1-8B-Instruct --output_dir /data_x/junkim100/code-spot/damage/damaged_llama-3.1-8b/code/top0.03
-# python damage_model.py --weights_folder /data_x/junkim100/code-spot/region_selection/code-spot/llama-3.1-8b/top0.05 --original_model meta-llama/Meta-Llama-3.1-8B-Instruct --output_dir /data_x/junkim100/code-spot/damage/damaged_llama-3.1-8b/code/top0.05
+#!/bin/bash
+set -euo pipefail
 
-# python damage_model.py --weights_folder /data_x/junkim100/code-spot/region_selection/code-spot/codellama-7b/top0.005 --original_model meta-llama/CodeLlama-7b-Instruct-hf --output_dir /data_x/junkim100/code-spot/damage/damaged_codellama-7b/code/top0.005
-# python damage_model.py --weights_folder /data_x/junkim100/code-spot/region_selection/code-spot/codellama-7b/top0.01 --original_model meta-llama/CodeLlama-7b-Instruct-hf --output_dir /data_x/junkim100/code-spot/damage/damaged_codellama-7b/code/top0.01
-# python damage_model.py --weights_folder /data_x/junkim100/code-spot/region_selection/code-spot/codellama-7b/top0.03 --original_model meta-llama/CodeLlama-7b-Instruct-hf --output_dir /data_x/junkim100/code-spot/damage/damaged_codellama-7b/code/top0.03
-# python damage_model.py --weights_folder /data_x/junkim100/code-spot/region_selection/code-spot/codellama-7b/top0.05 --original_model meta-llama/CodeLlama-7b-Instruct-hf --output_dir /data_x/junkim100/code-spot/damage/damaged_codellama-7b/code/top0.05`
+SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
+REPO_ROOT="$( cd "$SCRIPT_DIR/.." &> /dev/null && pwd )"
+CONFIG_PATH="${CONFIG_PATH:-$REPO_ROOT/config.json}"
+CONFIG_GET="$REPO_ROOT/scripts/config_get.py"
+if [[ -x "$REPO_ROOT/.venv/bin/python" ]]; then
+    PYTHON_BIN="$REPO_ROOT/.venv/bin/python"
+else
+    PYTHON_BIN="python"
+fi
 
-# python damage_model.py --weights_folder /data_x/junkim100/code-spot/region_selection/code-spot/llama-3.2-3b/top0.005 --original_model meta-llama/Llama-3.2-3B-Instruct --output_dir /data_x/junkim100/code-spot/damage/damaged_llama-3.2-3b/code/top0.005
-# python damage_model.py --weights_folder /data_x/junkim100/code-spot/region_selection/code-spot/llama-3.2-3b/top0.01 --original_model meta-llama/Llama-3.2-3B-Instruct --output_dir /data_x/junkim100/code-spot/damage/damaged_llama-3.2-3b/code/top0.01
-# python damage_model.py --weights_folder /data_x/junkim100/code-spot/region_selection/code-spot/llama-3.2-3b/top0.03 --original_model meta-llama/Llama-3.2-3B-Instruct --output_dir /data_x/junkim100/code-spot/damage/damaged_llama-3.2-3b/code/top0.03
-# python damage_model.py --weights_folder /data_x/junkim100/code-spot/region_selection/code-spot/llama-3.2-3b/top0.05 --original_model meta-llama/Llama-3.2-3B-Instruct --output_dir /data_x/junkim100/code-spot/damage/damaged_llama-3.2-3b/code/top0.05
+config_get() { "$PYTHON_BIN" "$CONFIG_GET" "$CONFIG_PATH" "$1"; }
+config_join() { "$PYTHON_BIN" "$CONFIG_GET" "$CONFIG_PATH" "$1" --join "$2"; }
+render_template() {
+    local template="$1"
+    local language="$2"
+    template="${template//\{model\}/$MODEL_NAME}"
+    template="${template//\{language\}/$language}"
+    template="${template//\{k\}/$k}"
+    if [[ "$template" != /* ]]; then
+        template="$REPO_ROOT/$template"
+    fi
+    printf '%s
+' "$template"
+}
 
-# python damage_model.py --weights_folder /data_x/junkim100/code-spot/region_selection/code-spot/codellama-13b/top0.005 --original_model meta-llama/CodeLlama-13b-Instruct-hf --output_dir /data_x/junkim100/code-spot/damage/damaged_codellama-13b/tcode/op0.005
-# python damage_model.py --weights_folder /data_x/junkim100/code-spot/region_selection/code-spot/codellama-13b/top0.01 --original_model meta-llama/CodeLlama-13b-Instruct-hf --output_dir /data_x/junkim100/code-spot/damage/damaged_codellama-13b/code/top0.01
-# python damage_model.py --weights_folder /data_x/junkim100/code-spot/region_selection/code-spot/codellama-13b/top0.03 --original_model meta-llama/CodeLlama-13b-Instruct-hf --output_dir /data_x/junkim100/code-spot/damage/damaged_codellama-13b/code/top0.03
-# python damage_model.py --weights_folder /data_x/junkim100/code-spot/region_selection/code-spot/codellama-13b/top0.05 --original_model meta-llama/CodeLlama-13b-Instruct-hf --output_dir /data_x/junkim100/code-spot/damage/damaged_codellama-13b/code/top0.05
+MODEL_NAME="$(config_get region_selection.model_name)"
+MODEL_PATH="$(config_get region_selection.original_model_path)"
+WEIGHTS_TEMPLATE="$(config_get damage.weights_path_template)"
+OUTPUT_TEMPLATE="$(config_get damage.output_path_template)"
+INCLUDE_LANGUAGE="$(config_get damage.include_language)"
+LANGUAGE_ARG="$(config_join data.languages " ")"
+K_VALUES_ARG="$(config_join region_selection.k_values " ")"
 
+read -r -a LANGUAGES <<< "$LANGUAGE_ARG"
+read -r -a K_VALUES <<< "$K_VALUES_ARG"
 
-
-
-
-
-
-
-
-
-
-# languages=("bash" "c#" "c++" "go" "java" "javascript" "julia" "ruby" "rust" "typescript")
-languages=("go")
-
-for lang in "${languages[@]}"; do
-    python damage_model.py --weights_folder /data_x/junkim100/code-spot/region_selection/lang-region/llama-3.1-8b/${lang}/top0.005 --original_model meta-llama/Meta-Llama-3.1-8B-Instruct --output_dir /data_x/junkim100/code-spot/damage/damaged_llama-3.1-8b/${lang}/top0.005
-    python damage_model.py --weights_folder /data_x/junkim100/code-spot/region_selection/lang-region/llama-3.1-8b/${lang}/top0.01 --original_model meta-llama/Meta-Llama-3.1-8B-Instruct --output_dir /data_x/junkim100/code-spot/damage/damaged_llama-3.1-8b/${lang}/top0.01
-    python damage_model.py --weights_folder /data_x/junkim100/code-spot/region_selection/lang-region/llama-3.1-8b/${lang}/top0.03 --original_model meta-llama/Meta-Llama-3.1-8B-Instruct --output_dir /data_x/junkim100/code-spot/damage/damaged_llama-3.1-8b/${lang}/top0.03
-    python damage_model.py --weights_folder /data_x/junkim100/code-spot/region_selection/lang-region/llama-3.1-8b/${lang}/top0.05 --original_model meta-llama/Meta-Llama-3.1-8B-Instruct --output_dir /data_x/junkim100/code-spot/damage/damaged_llama-3.1-8b/${lang}/top0.05
-
-    python damage_model.py --weights_folder /data_x/junkim100/code-spot/region_selection/lang-region/codellama-7b/${lang}/top0.005 --original_model meta-llama/CodeLlama-7b-Instruct-hf --output_dir /data_x/junkim100/code-spot/damage/damaged_codellama-7b/${lang}/top0.005
-    python damage_model.py --weights_folder /data_x/junkim100/code-spot/region_selection/lang-region/codellama-7b/${lang}/top0.01 --original_model meta-llama/CodeLlama-7b-Instruct-hf --output_dir /data_x/junkim100/code-spot/damage/damaged_codellama-7b/${lang}/top0.01
-    python damage_model.py --weights_folder /data_x/junkim100/code-spot/region_selection/lang-region/codellama-7b/${lang}/top0.03 --original_model meta-llama/CodeLlama-7b-Instruct-hf --output_dir /data_x/junkim100/code-spot/damage/damaged_codellama-7b/${lang}/top0.03
-    python damage_model.py --weights_folder /data_x/junkim100/code-spot/region_selection/lang-region/codellama-7b/${lang}/top0.05 --original_model meta-llama/CodeLlama-7b-Instruct-hf --output_dir /data_x/junkim100/code-spot/damage/damaged_codellama-7b/${lang}/top0.05
-
-    python damage_model.py --weights_folder /data_x/junkim100/code-spot/region_selection/lang-region/llama-3.2-3b/${lang}/top0.005 --original_model meta-llama/Llama-3.2-3B-Instruct --output_dir /data_x/junkim100/code-spot/damage/damaged_llama-3.2-3b/${lang}/top0.005
-    python damage_model.py --weights_folder /data_x/junkim100/code-spot/region_selection/lang-region/llama-3.2-3b/${lang}/top0.01 --original_model meta-llama/Llama-3.2-3B-Instruct --output_dir /data_x/junkim100/code-spot/damage/damaged_llama-3.2-3b/${lang}/top0.01
-    python damage_model.py --weights_folder /data_x/junkim100/code-spot/region_selection/lang-region/llama-3.2-3b/${lang}/top0.03 --original_model meta-llama/Llama-3.2-3B-Instruct --output_dir /data_x/junkim100/code-spot/damage/damaged_llama-3.2-3b/${lang}/top0.03
-    python damage_model.py --weights_folder /data_x/junkim100/code-spot/region_selection/lang-region/llama-3.2-3b/${lang}/top0.05 --original_model meta-llama/Llama-3.2-3B-Instruct --output_dir /data_x/junkim100/code-spot/damage/damaged_llama-3.2-3b/${lang}/top0.05
-
-    # python damage_model.py --weights_folder /data_x/junkim100/code-spot/region_selection/lang-region/codellama-13b/${lang}/top0.005 --original_model meta-llama/CodeLlama-13b-Instruct-hf --output_dir /data_x/junkim100/code-spot/damage/damaged_codellama-13b/${lang}/top0.005
-    # python damage_model.py --weights_folder /data_x/junkim100/code-spot/region_selection/lang-region/codellama-13b/${lang}/top0.01 --original_model meta-llama/CodeLlama-13b-Instruct-hf --output_dir /data_x/junkim100/code-spot/damage/damaged_codellama-13b/${lang}/top0.01
-    # python damage_model.py --weights_folder /data_x/junkim100/code-spot/region_selection/lang-region/codellama-13b/${lang}/top0.03 --original_model meta-llama/CodeLlama-13b-Instruct-hf --output_dir /data_x/junkim100/code-spot/damage/damaged_codellama-13b/${lang}/top0.03
-    # python damage_model.py --weights_folder /data_x/junkim100/code-spot/region_selection/lang-region/codellama-13b/${lang}/top0.05 --original_model meta-llama/CodeLlama-13b-Instruct-hf --output_dir /data_x/junkim100/code-spot/damage/damaged_codellama-13b/${lang}/top0.05
+for k in "${K_VALUES[@]}"; do
+    if [[ "$INCLUDE_LANGUAGE" == "true" ]]; then
+        for lang in "${LANGUAGES[@]}"; do
+            WEIGHTS_FOLDER="$(render_template "$WEIGHTS_TEMPLATE" "$lang")"
+            OUTPUT_DIR="$(render_template "$OUTPUT_TEMPLATE" "$lang")"
+            "$PYTHON_BIN" "$SCRIPT_DIR/damage_model.py"                 --weights_folder "$WEIGHTS_FOLDER"                 --original_model "$MODEL_PATH"                 --output_dir "$OUTPUT_DIR"
+        done
+    else
+        lang=""
+        WEIGHTS_FOLDER="$(render_template "$WEIGHTS_TEMPLATE" "$lang")"
+        OUTPUT_DIR="$(render_template "$OUTPUT_TEMPLATE" "$lang")"
+        "$PYTHON_BIN" "$SCRIPT_DIR/damage_model.py"             --weights_folder "$WEIGHTS_FOLDER"             --original_model "$MODEL_PATH"             --output_dir "$OUTPUT_DIR"
+    fi
 done

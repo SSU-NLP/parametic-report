@@ -3,7 +3,7 @@ import json
 import shutil
 
 """
-Since the vocabulary size of llama is 32000, np.uint16 is used for storage. A number occupies 4 bytes and ranges from 0~2^32-1.
+Llama 3.x token IDs exceed uint16, so np.uint32 is used for token storage.
     The length of each sample is not fixed
     The index needs to record the starting position and length of each sentence
     The starting position of the sentence is stored in np.uint64, 8B,
@@ -21,6 +21,10 @@ warmup: https://stackoverflow.com/questions/11832254/understanding-performance-o
 
 import numpy as np
 import os
+from dotenv import load_dotenv
+
+load_dotenv()
+hf_token = os.getenv("HF_TOKEN")
 from transformers import AutoTokenizer
 from typing import List
 import argparse
@@ -133,7 +137,7 @@ class Tokenizer:
     def __init__(self, model_path: str):
         # reload tokenizer
         # assert os.path.isfile(model_path), model_path
-        self.sp_model = AutoTokenizer.from_pretrained(model_path)
+        self.sp_model = AutoTokenizer.from_pretrained(model_path, token=hf_token)
 
         # BOS / EOS token IDs
          # """ Modified to qwen's bos and eos """
@@ -199,7 +203,7 @@ class DistributedTokenizer:
         """Load tokenizer"""
         DistributedTokenizer.tokenizer = Tokenizer(self.args.tokenizer_path)
 
-        if self.args.language.lower() in ['bash', 'c', 'c#', 'c++', 'go', 'java', 'javascript', 'julia', 'neo4j database and cypher', 'python', 'relation database and sql', 'ruby', 'rust', 'typescript']:
+        if self.args.language.lower() in ['bash', 'c', 'c#', 'c++', 'go', 'java', 'javascript', 'julia', 'neo4j database and cypher', 'python', 'relation database and sql', 'ruby', 'rust', 'typescript', 'text']:
             if self.args.do_split_functions:
                 if self.args.language.lower() == "bash": DistributedTokenizer.splitter = BashSplitter()
                 elif self.args.language.lower() == "c": DistributedTokenizer.splitter = CSplitter()
@@ -215,10 +219,11 @@ class DistributedTokenizer:
                 elif self.args.language.lower() == "ruby": DistributedTokenizer.splitter = RubySplitter()
                 elif self.args.language.lower() == "rust": DistributedTokenizer.splitter = RustSplitter()
                 elif self.args.language.lower() == "typescript": DistributedTokenizer.splitter = TypeScriptSplitter()
+                elif self.args.language.lower() == "text": DistributedTokenizer.splitter = IdentitySplitter()
             else:
                 DistributedTokenizer.splitter = IdentitySplitter()
         else:
-            assert False, "The currently supported languages are 'bash', 'c#', 'c++', 'go', 'java', 'javascript', 'julia', 'python', 'ruby', 'rust', and 'typescript'. Please make sure you enter them correctly."
+            assert False, "The currently supported languages are 'bash', 'c#', 'c++', 'go', 'java', 'javascript', 'julia', 'python', 'ruby', 'rust', 'typescript', and 'text'. Please make sure you enter them correctly."
 
     def _re_split(self, src: str, tokenized: List, start_part=False, end_part=False):
         """
@@ -331,7 +336,7 @@ class MyDataset(Dataset):
         """Referenced to Megatron-Deepspeed"""
         _warmup_mmap_file(self.bin_file_path)
         """Loading large files using memory mapping"""
-        self.bin_buffer = np.memmap(self.bin_file_path, dtype=np.uint16, mode='r')
+        self.bin_buffer = np.memmap(self.bin_file_path, dtype=np.uint32, mode='r')
 
     def _load_dis(self):
         """Only valid when there is a mixture of data from multiple categories"""
@@ -379,7 +384,7 @@ def get_args():
     parser = argparse.ArgumentParser()
     parser.add_argument("--mode", default="write", type=str, help="There are three modes: merge, write and read.")
     parser.add_argument("--seq_length", default=512, type=int, help="maximum length")
-    parser.add_argument("--language", default="python", type=str, help="'bash', 'c#', 'c++', 'go', 'java', 'javascript', 'julia', 'python', 'ruby', 'rust', and 'typescript'")
+    parser.add_argument("--language", default="python", type=str, help="'bash', 'c#', 'c++', 'go', 'java', 'javascript', 'julia', 'python', 'ruby', 'rust', 'typescript', and 'text'")
     parser.add_argument("--do_split_sentences", action="store_true", default=False, help="Whether to divide the document into sentences")
     parser.add_argument("--do_split_functions", action="store_true", default=False, help="Whether to split the code into functions")
     parser.add_argument("--do_keep_newlines", action="store_true", default=False, help="Whether to retain newlines when dividing")
@@ -429,7 +434,7 @@ def write(args):
     """Start writing"""
     """starting position:np.uint64: 8B"""
     """length:np.uint16: 2B"""
-    """token:np.uint16: 2B"""
+    """token:np.uint32: 4B"""
     f_bin_out = open(f"{args.save_path}{args.save_prefix}.bin", "wb")
     encoded_samples = list(encoded_samples)
     pbar = tqdm(total=len(encoded_samples))
@@ -473,7 +478,7 @@ def write(args):
                 statistic[1] += 1
             else:
                 statistic[2] += 1
-            f_bin_out.write(np.array(target, dtype=np.uint16).tobytes(order='C'))
+            f_bin_out.write(np.array(target, dtype=np.uint32).tobytes(order='C'))
             length.append(len(target))
             start.append(start_pos)
             start_pos += len(target)
@@ -504,7 +509,7 @@ def write_scratch(args):
     """Start writing"""
     """starting position:np.uint64: 8B"""
     """length:np.uint16: 2B"""
-    """token:np.uint16: 4B"""
+    """token:np.uint32: 4B"""
     f_bin_out = open(f"{args.save_path}{args.save_prefix}.bin", "wb")
     encoded_samples = list(encoded_samples)
     pbar = tqdm(total=len(encoded_samples))
@@ -519,7 +524,7 @@ def write_scratch(args):
         if len(target) == 0:
             continue
         num_samples += 1
-        f_bin_out.write(np.array(target, dtype=np.uint16).tobytes(order='C'))
+        f_bin_out.write(np.array(target, dtype=np.uint32).tobytes(order='C'))
         pbar.update(1)
         length.append(len(target))
         start.append(start_pos)

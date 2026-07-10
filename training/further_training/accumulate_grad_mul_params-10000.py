@@ -15,7 +15,7 @@ import setproctitle
 
 setproctitle.setproctitle("junkim100 accumulate_grad_mul_params")
 
-os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "max_split_size_mb:128"
+os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "max_split_size_mb:128")
 from transformers import (
     AutoModelForCausalLM,
     SchedulerType,
@@ -169,7 +169,7 @@ class MyDataset(Dataset):
 
     def _load_bin(self):
         """以内存映射的方式进行加载大文件"""
-        self.bin_buffer = np.memmap(self.bin_file_path, dtype=np.uint16, mode="r")
+        self.bin_buffer = np.memmap(self.bin_file_path, dtype=np.uint32, mode="r")
 
     def _load_dis(self):
         """仅当有多种类别的数据混合有效"""
@@ -334,6 +334,29 @@ def parse_args():
         help="Number of steps for the warmup in the lr scheduler.",
     )
     parser.add_argument(
+        "--save_samples",
+        nargs="+",
+        type=int,
+        default=[10000],
+        help="Sample counts at which to save grad-mul-param tensors.",
+    )
+    parser.add_argument(
+        "--skip_eval",
+        action="store_true",
+        help="Skip perplexity evaluation while generating grad-mul-param checkpoints.",
+    )
+    parser.add_argument(
+        "--skip_final_model_save",
+        action="store_true",
+        help="Skip saving the final fine-tuned model after grad-mul-param extraction.",
+    )
+    parser.add_argument(
+        "--max_saved_params",
+        type=int,
+        default=0,
+        help="Debug limit for the number of grad-mul-param tensors to save; 0 saves all.",
+    )
+    parser.add_argument(
         "--output_dir", type=str, default=None, help="Where to store the model."
     )
     parser.add_argument(
@@ -386,6 +409,14 @@ def parse_args():
     parser = deepspeed.add_config_arguments(parser)
     args = parser.parse_args()
 
+    # DeepSpeed ZeRO exposes full gradients reliably at accumulation boundaries.
+    # Run one save sample per process; wrappers can repeat this script for sweeps.
+    if len(args.save_samples) != 1:
+        raise ValueError(
+            "--save_samples currently supports one sample count per DeepSpeed run. "
+            "Run the script repeatedly for calibration sweeps."
+        )
+
     # Validate settings
     if args.gradient_checkpointing and args.lora_dim > 0:
         assert (
@@ -393,6 +424,26 @@ def parse_args():
         ), "--gradient_checkpointing and --only_optimize_lora cannot be enabled at the same time."
 
     return args
+
+
+def get_accumulated_full_grad(param):
+    grad = None
+    try:
+        grad = safe_get_full_grad(param)
+    except ValueError:
+        grad = None
+    if grad is None:
+        grad = getattr(param, "grad_accum", None)
+    if grad is None:
+        grad = param.grad
+    if grad is None:
+        return None
+    grad = grad.detach().to(torch.float32)
+    if grad.numel() == param.numel() and grad.shape != param.shape:
+        grad = grad.reshape_as(param)
+    if torch.distributed.is_available() and torch.distributed.is_initialized() and grad.is_cuda:
+        torch.distributed.all_reduce(grad, op=torch.distributed.ReduceOp.SUM)
+    return grad
 
 
 def main():
@@ -542,9 +593,11 @@ def main():
 
     training_step_losses = []
     batch_size = args.total_cards * args.per_device_train_batch_size
-    save_samples = [10000]
+    save_samples = args.save_samples
     save_steps = [math.ceil(samples / batch_size) for samples in save_samples]
     save_dict = dict(zip(save_steps, save_samples))
+    final_save_step = max(save_steps)
+    finished_requested_saves = False
     print_rank_0("save msg:", args.global_rank)
     print_rank_0(save_dict, args.global_rank)
 
@@ -553,12 +606,15 @@ def main():
         torch.cuda.empty_cache()
 
     print_rank_0("***** Running training *****", args.global_rank)
-    print_rank_0(
-        f"***** Evaluating perplexity, Epoch {0}/{args.num_train_epochs} *****",
-        args.global_rank,
-    )
-    perplexity = evaluation(model, eval_dataloader)
-    print_rank_0(f"ppl: {perplexity}", args.global_rank)
+    if args.skip_eval:
+        print_rank_0("Skipping initial perplexity evaluation", args.global_rank)
+    else:
+        print_rank_0(
+            f"***** Evaluating perplexity, Epoch {0}/{args.num_train_epochs} *****",
+            args.global_rank,
+        )
+        perplexity = evaluation(model, eval_dataloader)
+        print_rank_0(f"ppl: {perplexity}", args.global_rank)
 
     if hasattr(torch.cuda, "empty_cache"):
         torch.cuda.empty_cache()
@@ -583,62 +639,97 @@ def main():
                 print_rank_0(
                     f"Epoch {epoch+1}/{args.num_train_epochs}, Step {step+1}/{len(train_dataloader)}, Loss {loss.item()}"
                 )
+            # DeepSpeed exposes accumulated gradients at an accumulation boundary.
+            # Step non-save micro-batches so its internal accumulation counter advances,
+            # but save before stepping at configured sample counts.
+            if (step + 1) not in save_steps:
+                model.step()
+                continue
+
             if (step + 1) in save_steps:
-
-                print_rank_0(
-                    f"***** Evaluating perplexity, Epoch {epoch+1}/{args.num_train_epochs} *****",
-                    args.global_rank,
+                save_dir = os.path.join(
+                    args.output_dir,
+                    "grad-mul-param_checkpoint_{}".format(save_dict[step + 1]),
                 )
-                perplexity = evaluation(model, eval_dataloader)
-                print_rank_0(
-                    f"ppl {save_dict[step + 1]}: {perplexity}", args.global_rank
-                )
+                os.makedirs(save_dir, exist_ok=True)
 
+                saved_param_count = 0
+                missing_grad_count = 0
                 for n, lp in model.named_parameters():
-                    # # 1. gradient lookup
-                    # For zero1 and zero2, gradient lookup must be called after `backward` and before `step`
-                    # For zero3, gradient lookup must be called after `backward`
-                    hp_grad = safe_get_full_grad(lp)
-                    print_rank_0(n, args.global_rank)
-                    print_rank_0(hp_grad, args.global_rank)
+                    # DeepSpeed exposes gradients only immediately after backward and before any eval/step.
+                    hp_grad = get_accumulated_full_grad(lp)
+                    if hp_grad is None:
+                        missing_grad_count += 1
+                        continue
+                    hp_param = safe_get_full_fp32_param(lp)
+                    if hp_param is None:
+                        hp_param = lp.detach()
+                    if hp_param.shape != hp_grad.shape:
+                        raise RuntimeError(
+                            f"Shape mismatch for {n}: grad {hp_grad.shape}, param {hp_param.shape}"
+                        )
 
-                    # # 2. fp32 and optim states can probably be called anywhere in the training loop, but will be updated after `step`
-                    # hp = safe_get_full_fp32_param(lp)
-                    # exp_avg = safe_get_full_optimizer_state(lp, "exp_avg")
-                    # exp_avg_sq = safe_get_full_optimizer_state(lp, "exp_avg_sq")
-
-                    save_dir = os.path.join(
-                        args.output_dir,
-                        "grad-mul-param_checkpoint_{}".format(save_dict[step + 1]),
-                    )
-                    os.makedirs(save_dir, exist_ok=True)
+                    print_rank_0(f"saving grad-mul-param: {n}", args.global_rank)
                     save_path = os.path.join(
                         save_dir, "{}.pt".format(n.replace("module.", ""))
                     )
+                    grad_mul_param_tensor = torch.mul(hp_grad, hp_param)
+                    torch.save(grad_mul_param_tensor.cpu().bfloat16(), save_path)
+                    saved_param_count += 1
+                    if args.max_saved_params > 0 and saved_param_count >= args.max_saved_params:
+                        break
 
-                    # Save the tensor to a file using torch.save()
-                    grad_mul_param_tensor = torch.mul(hp_grad, lp)
-                    torch.save(grad_mul_param_tensor.bfloat16(), save_path)
+                print_rank_0(
+                    f"saved {saved_param_count} grad-mul-param tensors; missing gradients for {missing_grad_count} tensors",
+                    args.global_rank,
+                )
+                if saved_param_count == 0:
+                    raise RuntimeError("No grad-mul-param tensors were saved; gradients were unavailable")
 
                 if hasattr(torch.cuda, "empty_cache"):
                     torch.cuda.empty_cache()
 
-                break
+                if args.skip_eval:
+                    print_rank_0(
+                        f"Skipping perplexity evaluation at sample {save_dict[step + 1]}",
+                        args.global_rank,
+                    )
+                else:
+                    print_rank_0(
+                        f"***** Evaluating perplexity, Epoch {epoch+1}/{args.num_train_epochs} *****",
+                        args.global_rank,
+                    )
+                    perplexity = evaluation(model, eval_dataloader)
+                    print_rank_0(
+                        f"ppl {save_dict[step + 1]}: {perplexity}", args.global_rank
+                    )
+
+                if (step + 1) >= final_save_step:
+                    finished_requested_saves = True
+                    break
+
+                model.step()
+
+        if finished_requested_saves:
+            break
 
     # Evaluate perplexity on the validation set.
 
     if hasattr(torch.cuda, "empty_cache"):
         torch.cuda.empty_cache()
 
-    print_rank_0(
-        f"***** Evaluating perplexity, Epoch {epoch+1}/{args.num_train_epochs} *****",
-        args.global_rank,
-    )
-    perplexity = evaluation(model, eval_dataloader)
-    print_rank_0(f"ppl: {perplexity}", args.global_rank)
+    if args.skip_eval:
+        print_rank_0("Skipping final perplexity evaluation", args.global_rank)
+    else:
+        print_rank_0(
+            f"***** Evaluating perplexity, Epoch {epoch+1}/{args.num_train_epochs} *****",
+            args.global_rank,
+        )
+        perplexity = evaluation(model, eval_dataloader)
+        print_rank_0(f"ppl: {perplexity}", args.global_rank)
     # model.tput_timer.update_epoch_count()
 
-    if args.output_dir is not None:
+    if args.output_dir is not None and not args.skip_final_model_save:
         print_rank_0("saving the final model ...", args.global_rank)
         model = convert_lora_to_linear_layer(model)
 
@@ -650,6 +741,8 @@ def main():
             save_zero_three_model(
                 model, args.global_rank, args.output_dir, zero_stage=args.zero_stage
             )
+    elif args.skip_final_model_save:
+        print_rank_0("Skipping final model save", args.global_rank)
 
 
 if __name__ == "__main__":

@@ -1,0 +1,135 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1500" height="880" viewBox="0 0 1500 880" role="img" aria-labelledby="title desc">
+  <title id="title">System architecture of the interactive parameter-region analysis studio</title>
+  <desc id="desc">A layered architecture diagram showing the Web Studio UI, WebSocket backend API, ModelSession kernel, GPU runtime, storage, and analysis workflow.</desc>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#3a475a"/>
+    </marker>
+    <marker id="arrow-accent" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#b66a00"/>
+    </marker>
+    <style>
+      .bg { fill: #ffffff; }
+      .panel { fill: #f7f8fa; stroke: #cfd6df; stroke-width: 1.4; rx: 18; }
+      .panel-title { font: 700 22px Inter, Arial, sans-serif; fill: #1f2937; }
+      .box { fill: #ffffff; stroke: #b7c1cf; stroke-width: 1.4; rx: 12; }
+      .box-blue { fill: #eef6ff; stroke: #7aa7d9; }
+      .box-amber { fill: #fff6e8; stroke: #d49a45; }
+      .box-red { fill: #fff0f0; stroke: #d17a7a; }
+      .box-green { fill: #eef9f0; stroke: #74ad7c; }
+      .text { font: 600 17px Inter, Arial, sans-serif; fill: #172033; }
+      .small { font: 500 13px Inter, Arial, sans-serif; fill: #4b5563; }
+      .mono { font: 600 13px "SFMono-Regular", Consolas, monospace; fill: #374151; }
+      .edge { fill: none; stroke: #3a475a; stroke-width: 2; marker-end: url(#arrow); }
+      .edge-soft { fill: none; stroke: #7b8797; stroke-width: 1.7; marker-end: url(#arrow); }
+      .edge-accent { fill: none; stroke: #b66a00; stroke-width: 2.4; marker-end: url(#arrow-accent); }
+      .caption { font: 500 15px Inter, Arial, sans-serif; fill: #4b5563; }
+    </style>
+  </defs>
+
+  <rect class="bg" x="0" y="0" width="1500" height="880"/>
+
+  <text x="60" y="58" style="font: 800 30px Inter, Arial, sans-serif; fill:#111827;">Interactive Parameter-Region Analysis Studio</text>
+  <text x="60" y="86" class="caption">System architecture for identifying, visualizing, intervening on, and evaluating task-specific LLM parameter regions.</text>
+
+  <!-- User -->
+  <rect class="box box-green" x="60" y="145" width="180" height="96" rx="14"/>
+  <text class="text" x="150" y="184" text-anchor="middle">User</text>
+  <text class="small" x="150" y="211" text-anchor="middle">Researcher / Analyst</text>
+
+  <!-- UI panel -->
+  <rect class="panel" x="300" y="120" width="300" height="560"/>
+  <text class="panel-title" x="330" y="158">Web Studio UI</text>
+  <rect class="box box-blue" x="330" y="188" width="240" height="62"/>
+  <text class="text" x="450" y="213" text-anchor="middle">Prompt / Dataset</text>
+  <text class="small" x="450" y="235" text-anchor="middle">input examples</text>
+  <rect class="box box-blue" x="330" y="272" width="240" height="62"/>
+  <text class="text" x="450" y="297" text-anchor="middle">Parameter Importance</text>
+  <text class="small" x="450" y="319" text-anchor="middle">0-100 score map</text>
+  <rect class="box box-blue" x="330" y="356" width="240" height="62"/>
+  <text class="text" x="450" y="381" text-anchor="middle">Saved Region View</text>
+  <text class="small" x="450" y="403" text-anchor="middle">1%, 5%, 10% masks</text>
+  <rect class="box box-blue" x="330" y="440" width="240" height="62"/>
+  <text class="text" x="450" y="465" text-anchor="middle">Region Control</text>
+  <text class="small" x="450" y="487" text-anchor="middle">zero / scale / random</text>
+  <rect class="box box-blue" x="330" y="524" width="240" height="62"/>
+  <text class="text" x="450" y="549" text-anchor="middle">Benchmark View</text>
+  <text class="small" x="450" y="571" text-anchor="middle">PPL / HumanEvalPack</text>
+
+  <!-- API panel -->
+  <rect class="panel" x="660" y="120" width="250" height="190"/>
+  <text class="panel-title" x="690" y="158">Backend API</text>
+  <rect class="box" x="695" y="190" width="180" height="76"/>
+  <text class="text" x="785" y="218" text-anchor="middle">WebSocket</text>
+  <text class="small" x="785" y="241" text-anchor="middle">JSON message router</text>
+
+  <!-- Kernel panel -->
+  <rect class="panel" x="660" y="350" width="430" height="360"/>
+  <text class="panel-title" x="690" y="388">ModelSession Kernel</text>
+  <rect class="box" x="690" y="418" width="170" height="58"/>
+  <text class="text" x="775" y="443" text-anchor="middle">LLM Inference</text>
+  <text class="small" x="775" y="463" text-anchor="middle">generation</text>
+  <rect class="box box-amber" x="890" y="418" width="170" height="58"/>
+  <text class="text" x="975" y="443" text-anchor="middle">Importance</text>
+  <text class="mono" x="975" y="464" text-anchor="middle">|grad x weight|</text>
+  <rect class="box box-amber" x="690" y="500" width="170" height="58"/>
+  <text class="text" x="775" y="525" text-anchor="middle">Top-k Region</text>
+  <text class="small" x="775" y="545" text-anchor="middle">per tensor mask</text>
+  <rect class="box" x="890" y="500" width="170" height="58"/>
+  <text class="text" x="975" y="525" text-anchor="middle">Probes</text>
+  <text class="small" x="975" y="545" text-anchor="middle">attention / activation</text>
+  <rect class="box box-red" x="690" y="582" width="170" height="58"/>
+  <text class="text" x="775" y="607" text-anchor="middle">Intervention</text>
+  <text class="small" x="775" y="627" text-anchor="middle">zero / scale / random</text>
+  <rect class="box box-green" x="890" y="582" width="170" height="58"/>
+  <text class="text" x="975" y="607" text-anchor="middle">Evaluation</text>
+  <text class="small" x="975" y="627" text-anchor="middle">PPL / pass@1</text>
+
+  <!-- Runtime panel -->
+  <rect class="panel" x="1160" y="120" width="280" height="590"/>
+  <text class="panel-title" x="1190" y="158">Runtime and Storage</text>
+  <rect class="box box-green" x="1190" y="190" width="220" height="68"/>
+  <text class="text" x="1300" y="217" text-anchor="middle">CUDA GPUs</text>
+  <text class="small" x="1300" y="240" text-anchor="middle">inference / backward / eval</text>
+  <rect class="box box-amber" x="1190" y="292" width="220" height="68"/>
+  <text class="text" x="1300" y="319" text-anchor="middle">Importance Cache</text>
+  <text class="small" x="1300" y="342" text-anchor="middle">per example set</text>
+  <rect class="box box-amber" x="1190" y="394" width="220" height="74"/>
+  <text class="text" x="1300" y="421" text-anchor="middle">Region Store</text>
+  <text class="small" x="1300" y="444" text-anchor="middle">mask .pt + meta.json</text>
+  <rect class="box" x="1190" y="502" width="220" height="68"/>
+  <text class="text" x="1300" y="529" text-anchor="middle">Datasets</text>
+  <text class="small" x="1300" y="552" text-anchor="middle">task examples</text>
+  <rect class="box box-green" x="1190" y="604" width="220" height="68"/>
+  <text class="text" x="1300" y="631" text-anchor="middle">Benchmarks</text>
+  <text class="small" x="1300" y="654" text-anchor="middle">HumanEvalPack</text>
+
+  <!-- Edges -->
+  <path class="edge" d="M 240 193 C 268 193, 272 193, 300 193"/>
+  <path class="edge" d="M 600 228 C 626 228, 635 228, 660 228"/>
+  <path class="edge" d="M 785 266 C 785 306, 785 326, 785 350"/>
+
+  <path class="edge-soft" d="M 860 447 C 872 447, 878 447, 890 447"/>
+  <path class="edge-accent" d="M 975 476 C 975 485, 840 485, 805 500"/>
+  <path class="edge-soft" d="M 860 529 C 874 529, 878 529, 890 529"/>
+  <path class="edge-accent" d="M 775 558 C 775 568, 775 572, 775 582"/>
+  <path class="edge-accent" d="M 860 611 C 872 611, 878 611, 890 611"/>
+
+  <path class="edge-soft" d="M 1090 447 C 1122 447, 1138 224, 1190 224"/>
+  <path class="edge-soft" d="M 1060 447 C 1110 447, 1136 326, 1190 326"/>
+  <path class="edge-accent" d="M 860 529 C 1020 529, 1032 431, 1190 431"/>
+  <path class="edge-soft" d="M 1190 536 C 1138 536, 1122 447, 1060 447"/>
+  <path class="edge-soft" d="M 1060 611 C 1118 611, 1136 638, 1190 638"/>
+
+  <path class="edge-soft" d="M 695 228 C 642 228, 630 219, 570 219"/>
+  <path class="edge-soft" d="M 695 228 C 642 228, 630 303, 570 303"/>
+  <path class="edge-soft" d="M 695 228 C 642 228, 630 387, 570 387"/>
+  <path class="edge-soft" d="M 695 228 C 642 228, 630 471, 570 471"/>
+  <path class="edge-soft" d="M 695 228 C 642 228, 630 555, 570 555"/>
+
+  <!-- Pipeline annotation -->
+  <rect class="panel" x="60" y="735" width="1380" height="92" rx="18"/>
+  <text class="panel-title" x="90" y="770">Analysis workflow</text>
+  <text class="caption" x="90" y="800">Examples or prompt-response pairs -> forward loss -> backward gradients -> parameter importance -> per-tensor top-k region -> intervention -> benchmark delta.</text>
+  <text class="mono" x="1050" y="800">S_j = sum_i | dL(x_i)/dtheta_j * theta_j |</text>
+</svg>

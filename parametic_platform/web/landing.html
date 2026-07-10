@@ -1,0 +1,140 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Parametic Report — independent analysis of LLM internals</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Spectral:wght@400;500;600;700&display=swap" />
+    <link rel="stylesheet" href="/app/styles.css" />
+    <link rel="stylesheet" href="/app/landing.css" />
+  </head>
+  <body>
+    <div class="landing">
+      <nav class="l-nav">
+        <a class="l-brand" href="/"><span class="dot"></span> Parametic Report</a>
+        <div class="l-navgroup">
+          <a href="/app/">Analyses</a>
+          <a href="#">Paper</a>
+        </div>
+        <span class="l-nav-spacer"></span>
+        <a class="l-cta ghost" href="#">Log in</a>
+        <a class="l-cta" href="/app/">Open app →</a>
+      </nav>
+
+      <header class="l-hero">
+        <div>
+          <h1>Independent analysis of LLM internals</h1>
+          <p class="sub">Parametic Report locates the spot — the tiny set of parameters that runs a
+            model's coding ability — and causally verifies it. One click: discover it, visualize it,
+            measure what removing it does.</p>
+          <div class="l-hero-actions">
+            <a class="l-cta" href="/app/">Explore analyses →</a>
+            <a class="l-cta ghost" href="#">Read the paper</a>
+          </div>
+        </div>
+        <div class="l-news">
+          <a href="/app/">
+            <span class="arr" aria-hidden="true">↗</span>
+            <div class="eyebrow">LATEST</div>
+            <div class="l-news-title">Llama-3.2-3B · java spot</div>
+            <p>Zeroing the top-1.6% spot collapses code PPL ×66,901 — controls stay flat.</p>
+          </a>
+          <a href="#method">
+            <span class="arr" aria-hidden="true">↗</span>
+            <div class="eyebrow">METHOD</div>
+            <div class="l-news-title">grad × parameter calibration</div>
+            <p>Sample-calibrated importance, two seeds, per-tensor masks — fast and reproducible.</p>
+          </a>
+        </div>
+      </header>
+
+      <div class="l-label" id="highlights">Highlights</div>
+      <section class="l-cards3">
+        <div class="l-card">
+          <div class="l-card-head"><span class="l-sq red"></span><h3>Causal collapse</h3></div>
+          <p class="cap">Code perplexity after zeroing each equal-size region · log scale</p>
+          <div class="bars">
+            <div class="bar-row"><span class="bn">Original</span><span class="bt"><span style="width:9%"></span></span><span class="bv">3.31</span></div>
+            <div class="bar-row hot"><span class="bn">Spot</span><span class="bt"><span style="width:100%"></span></span><span class="bv">2.2e5</span></div>
+            <div class="bar-row flat"><span class="bn">Bottom</span><span class="bt"><span style="width:9%"></span></span><span class="bv">3.37</span></div>
+            <div class="bar-row flat"><span class="bn">Random</span><span class="bt"><span style="width:9%"></span></span><span class="bv">3.37</span></div>
+          </div>
+        </div>
+
+        <div class="l-card">
+          <div class="l-card-head"><span class="l-sq blue"></span><h3>Where it lives</h3></div>
+          <p class="cap">Share of importance by weight-module type</p>
+          <div class="bars">
+            <div class="bar-row"><span class="bn">mlp.down</span><span class="bt"><span style="width:100%"></span></span><span class="bv">28.0%</span></div>
+            <div class="bar-row"><span class="bn">mlp.up</span><span class="bt"><span style="width:91%"></span></span><span class="bv">25.4%</span></div>
+            <div class="bar-row"><span class="bn">mlp.gate</span><span class="bt"><span style="width:73%"></span></span><span class="bv">20.5%</span></div>
+            <div class="bar-row"><span class="bn">attn.o</span><span class="bt"><span style="width:41%"></span></span><span class="bv">11.5%</span></div>
+            <div class="bar-row"><span class="bn">attn.q</span><span class="bt"><span style="width:20%"></span></span><span class="bv">5.6%</span></div>
+          </div>
+        </div>
+
+        <div class="l-card">
+          <div class="l-card-head"><span class="l-sq purple"></span><h3>Footprint</h3></div>
+          <p class="cap">Top-1.6% per tensor — densest in early MLP layers</p>
+          <div class="hm-mini">
+            <div class="cols"><span>q</span><span>k</span><span>v</span><span>o</span><span></span><span>gate</span><span>up</span><span>down</span></div>
+            <div class="hm-mini-grid" id="hm"></div>
+          </div>
+          <div class="foot-stat">
+            <div><div class="v">1.6%</div><div class="k">of params</div></div>
+            <div><div class="v">252</div><div class="k">tensors</div></div>
+          </div>
+        </div>
+      </section>
+
+      <section class="l-bottom" id="method">
+        <a class="l-action" href="/app/">
+          <span class="arr blue" aria-hidden="true">↗</span>
+          <h3>Run your own analysis</h3>
+          <p>Pick a model, area, and k. Get the spot, the figures, and the causal payoff.</p>
+        </a>
+        <a class="l-action" href="/app/">
+          <span class="arr green" aria-hidden="true">↗</span>
+          <h3>Browse analyses</h3>
+          <p>Every succeeded and failed run, with its full reproducibility spec.</p>
+        </a>
+        <div class="l-changelog">
+          <h3>Recent</h3>
+          <div class="l-feed">
+            <div class="l-feed-item"><span class="meta">Llama-3.2-3B · java · top-0.0163</span><span class="title"><span class="pill ok">succeeded</span> ×66,901 collapse</span></div>
+            <div class="l-feed-item"><span class="meta">Llama-3.2-3B · java · top-0.0151</span><span class="title"><span class="pill ok">succeeded</span> ×61,598 collapse</span></div>
+            <div class="l-feed-item"><span class="meta">Llama-3.2-3B · java · approx-smoke</span><span class="title"><span class="pill bad">failed</span> accumulate_grad_mul_param</span></div>
+          </div>
+        </div>
+      </section>
+
+      <footer class="l-foot">
+        <span>Parametic Report</span>
+        <span><a href="#">Paper</a> · <a href="#">Repository</a> · <a href="/app/">App</a></span>
+      </footer>
+    </div>
+
+    <script>
+      // Footprint mini heatmap: early-MLP cells dark, the rest faded.
+      (function () {
+        var host = document.getElementById("hm");
+        if (!host) return;
+        for (var r = 0; r < 9; r++) {
+          var line = document.createElement("div");
+          line.className = "hm-mini-row";
+          for (var c = 0; c < 8; c++) {
+            if (c === 4) { var g = document.createElement("div"); line.appendChild(g); continue; }
+            var cell = document.createElement("div");
+            cell.className = "hm-mini-cell";
+            var isMLP = c > 4, early = r < 5;
+            cell.style.background = (isMLP && early) ? "#185fa5" : (isMLP ? "#9bc0ec" : "#e6f1fb");
+            line.appendChild(cell);
+          }
+          host.appendChild(line);
+        }
+      })();
+    </script>
+  </body>
+</html>

@@ -3,6 +3,7 @@
 
 # DeepSpeed Team
 import os
+from dotenv import load_dotenv
 import torch
 import random
 import numpy as np
@@ -10,6 +11,9 @@ from transformers import set_seed, AutoTokenizer
 import json
 import deepspeed
 from deepspeed.runtime.zero.partition_parameters import ZeroParamStatus
+
+load_dotenv()
+hf_token = os.getenv("HF_TOKEN")
 
 
 def print_rank_0(msg, rank=0):
@@ -45,6 +49,7 @@ class MovingAverage:
 
 
 def load_hf_tokenizer(model_name_or_path, fast_tokenizer=True, token=None):
+    token = token or hf_token
     if os.path.exists(model_name_or_path):
         # Locally tokenizer loading has some issue, so we need to force download
         model_json = os.path.join(model_name_or_path, "config.json")

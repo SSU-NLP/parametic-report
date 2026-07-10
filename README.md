@@ -1,107 +1,181 @@
-# Unveiling Coding Regions in Large Language Models
+# Parametic Report
 
-This repository contains a set of scripts and utilities designed to unveil linguistic regions in large language models. Below are step-by-step instructions for running the code successfully. Follow along to preprocess data, train models, select regions, and finally, assess the model's adaptability to damage.
+Parametic Report is a research pipeline and local platform for finding coding-related regions in LLM parameters. The core experiment accumulates `gradient * parameter` tensors on code data, converts high-importance positions into parameter masks, damages selected weights, and compares the behavioral effect against matched controls.
 
-## Project Structure
+The repository currently focuses on Java Coding Spot experiments for Llama 3.2 3B Instruct and Qwen3-8B.
 
-- **unveiling_code/**: Main project directory containing code organized by function.
-  - **damage/**: Contains scripts related to model assessment.
-  - **data_preprocess/**: Contains scripts for dataset preparation and tokenization.
-  - **region_selection/**: Contains scripts for extracting linguistic regions.
-  - **training/**: Contains scripts and utilities for model training and evaluation.
+## Repository Layout
 
-## Prerequisites
+- `data_preprocess/`: dataset download, language splitting, and tokenizer-based preprocessing.
+- `training/further_training/`: DeepSpeed scripts that accumulate `gradient * parameter` tensors.
+- `training/utils/`: shared model, data, DeepSpeed, LoRA, and utility code.
+- `region_selection/`: scripts that convert accumulated tensors into top-k boolean masks.
+- `damage/`: scripts that zero masked model weights and save damaged Hugging Face models.
+- `scripts/`: calibration, mask generation, PPL evaluation, plotting, and reporting helpers.
+- `parametic_platform/`: FastAPI API, Postgres job queue integration, Docker worker, runner, and static web UI.
+- `docs/`: platform notes and runbooks.
+- `reports/`: generated experiment reports and figures. This directory is ignored for new generated outputs.
 
-Ensure that you have Python and necessary libraries installed. You may require packages such as `transformers`, `datasets`, `torch`, etc. These can be installed via pip if not already available.
+## Current Status
 
-## Steps to Run the Code
+As of 2026-06-02, the main completed research result is the Java Coding Spot experiment:
 
-Follow these steps in the specified order to achieve the complete result:
+- Base Llama model: `meta-llama/Llama-3.2-3B-Instruct`
+- Base Qwen model: `Qwen/Qwen3-8B`
+- Dataset: `nampdn-ai/tiny-codes`, Java split as `tiny-codes-java-full`
+- Llama full Java checkpoint: `training/further_training_java_full/Llama-3.2-3B-Instruct/java/grad-mul-param_checkpoint_10000`
+- Llama Java masks: `region_selection_java_full/code-region/llama-3.2-3b/top0.005`, `top0.01`, `top0.03`, `top0.05`
+- Llama damaged models: `damage/damaged_models/llama-3.2-3b/java-full/`
+- Main Llama report: `reports/java_full_spot_report.md`
+- Qwen3-8B sample calibration report: `reports/qwen3_8b_sample_calibration/sample_calibration_report.md`
+- Qwen3-8B approximate damage report: `reports/qwen3_8b_approx_s1024_damage_comparison/damage_report.md`
 
-### Step 1: Data Preprocessing
+Key finding: Java code-region damage at top-1% collapses Java PPL and limited Java code synthesis benchmarks, while matched random and bottom controls remain close to the original model. For Qwen3-8B, the sample=1024 approximate Java top-1% mask also causes a large Java PPL collapse while controls remain near baseline.
 
-1. **Navigate to the data preprocessing directory:**
+See `handoff.md` for the previous Java full experiment handoff and `docs/platform_mvp.md` for the platform MVP runbook.
 
-   ```bash
-   cd Unveiling-Coding-Regions-in-LLMs/data_preprocess
-   ```
+## Platform MVP
 
-2. **Download Dataset for Processing:**
+The platform MVP is a **single-tenant managed service operated by us**. Customers use the web UI at `/app/` to request the 1024-sample approximate Spot analysis and inspect report, metrics, and figures. The API, Postgres database, host worker, Docker runner, GPU access, Hugging Face credentials, and raw artifacts are operational components managed by us.
 
-   Use the following command to download desired datasets:
+Deployment shape:
 
-   ```bash
-   python create_code_dataset.py
-   ```
+- FastAPI API without Docker socket access.
+- Postgres-backed request and job tables.
+- Host worker running under `systemd` with host Docker access.
+- GPU runner containers launched as sibling containers, not Docker-in-Docker.
+- Local artifact and scratch volumes.
+- Basic auth for customer-facing routes; `/health` remains unauthenticated.
 
-3. **Preprocess Dataset:**
+Supported MVP catalog:
 
-   Run the preprocess script to tokenize and prepare the dataset for training. For different languages, modify the script parameters accordingly:
+- Models: `llama-3.2-3b`, `qwen3-8b`
+- Areas: `java-code`
+- Customer mode: `approx-1024`
+- Internal validation mode: `approx-smoke`
 
-   **Example for GO:**
+Customer-visible artifacts are limited to `report.md`, `metrics/*.json`, and `figures/**/*`. Raw masks, logs, job specs, scratch checkpoints, and manifests stay internal.
 
-   ```bash
-   bash run_preprocess.sh tiny-codes go tokenizers/llama-3.2
-   ```
+Full 10k checkpoint discovery is research-only and is not part of the managed MVP. `approx-smoke` is retained only for internal lifecycle checks.
 
-   **Example for Java:**
+See `docs/platform_mvp.md` for the managed-service runbook.
 
-   ```bash
-   bash run_preprocess.sh tiny-codes java tokenizers/llama-3.2
-   ```
+## Manual Pipeline
 
-### Step 2: Training
+Run commands from the directory noted in each command.
 
-1. **Navigate to the training directory:**
+Download and split the configured code dataset:
 
-   ```bash
-   cd Unveiling-Coding-Regions-in-LLMs/training/further_training
-   ```
+```bash
+python data_preprocess/create_code_dataset.py
+```
 
-2. **Run the Training Script:**
+Tokenize one language:
 
-   Utilize the preprocessed dataset to calculate importance scores with the following command:
+```bash
+cd data_preprocess
+bash run_preprocess.sh tiny-codes-java-full java tokenizers/llama-3.2
+```
 
-   ```bash
-   bash code_train_core-10000.sh "tiny-codes" "llama-3.2" "meta-llama/Llama-3.2-3B-Instruct" "go"
-   ```
+Accumulate Java `gradient * parameter` tensors for Llama:
 
-   ```bash
-   bash code_train_core-10000.sh "tiny-codes" "llama-3.2" "meta-llama/Llama-3.2-3B-Instruct" "java"
-   ```
+```bash
+cd training/further_training
+bash code_train_core-10000.sh tiny-codes-java-full llama-3.2 meta-llama/Llama-3.2-3B-Instruct java
+```
 
-### Step 3: Region Selection
+Run sample calibration accumulation:
 
-1. **Navigate to the region selection directory:**
+```bash
+bash training/further_training/run_java_sample_calibration.sh tiny-codes-java-full llama-3.2 meta-llama/Llama-3.2-3B-Instruct java
+```
 
-   ```bash
-   cd Unveiling-Coding-Regions-in-LLMs/region_selection
-   ```
+Create approximate spot masks from calibration checkpoints:
 
-2. **Extract Core Linguistic Regions:**
+```bash
+python scripts/create_approx_spot_masks.py \
+  --checkpoints <seed-1234-checkpoint> <seed-5678-checkpoint> \
+  --code-output <code-mask-dir> \
+  --control-output-root <control-mask-root> \
+  --k 0.01 \
+  --random-seeds 1 2 3 \
+  --device auto
+```
 
-   Execute these scripts to identify regions:
+Evaluate in-memory masked PPL:
 
-   ```bash
-   python extract_accumulated_core_linguistic_region.py
-   ```
+```bash
+python scripts/evaluate_masked_ppl.py \
+  --data-prefix <preprocessed-test-prefix> \
+  --base-model <hf-model-id> \
+  --mask code_top0.01=<mask-dir> \
+  --output reports/ppl_damage.json \
+  --max-samples 128 \
+  --max-seq-len 1024 \
+  --batch-size 1
+```
 
-   ```bash
-   python extract_spot.py
-   ```
+Save a fully damaged Hugging Face model:
 
-### Step 4: Model Assessment
+```bash
+cd damage
+python damage_model.py \
+  --weights_folder <mask-dir> \
+  --original_model <hf-model> \
+  --output_dir <out-dir>
+```
 
-1. **Navigate to the damage directory:**
+## Configuration
 
-   ```bash
-   cd Unveiling-Coding-Regions-in-LLMs/damage
-   ```
+Runtime defaults live in:
 
-2. **Run the Damage Assessment Script:**
+- `config.json` for Llama 3.2 3B Java experiments.
+- `config.qwen3-8b.json` for Qwen3-8B Java experiments.
 
-   Use the following command to evaluate model robustness:
+Avoid hard-coded absolute paths in new scripts. Prefer explicit CLI arguments or values from the config files.
 
-   ```bash
-   python damage_model.py
-   ```
+## Generated Artifacts
+
+Do not commit downloaded datasets, checkpoints, masks, damaged models, or platform scratch data. These paths are ignored:
+
+- `data_preprocess/dataset/`
+- `training/further_training_java_full/`
+- `training/sample_calibration_*/`
+- `region_selection_java_full/`
+- `damage/damaged_models/`
+- `platform_artifacts/`
+- `platform_scratch/`
+- `*.pt`, `*.bin`, `*.idx`, `*.dis`
+
+Keep Hugging Face credentials in `.env` or the environment:
+
+```bash
+export HF_TOKEN=<token>
+```
+
+## Verification
+
+No dedicated automated test suite is configured. For code changes, run the smallest relevant check:
+
+```bash
+python -m py_compile <changed-file.py>
+```
+
+For tensor-producing changes, verify expected outputs exist and can be loaded:
+
+```bash
+python - <<'PY2'
+import torch
+path = "<artifact.pt>"
+tensor = torch.load(path, map_location="cpu")
+print(path, tuple(tensor.shape), tensor.dtype)
+PY2
+```
+
+For platform changes, smoke-test:
+
+```bash
+python -m py_compile parametic_platform/*.py
+curl http://localhost:8000/health
+curl http://localhost:8000/models
+```

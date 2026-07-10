@@ -1,0 +1,4 @@
+# Test/dev dependencies for the parametic platform (host API/worker).
+# Install alongside requirements-platform.txt.
+pytest>=8.0
+httpx>=0.27

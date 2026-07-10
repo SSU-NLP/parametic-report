@@ -4,9 +4,13 @@ import csv
 from tqdm import tqdm
 import random
 import os
+from dotenv import load_dotenv
 import fire
 import numpy as np
 import setproctitle
+
+load_dotenv()
+hf_token = os.getenv("HF_TOKEN")
 
 setproctitle.setproctitle("junkim100 extract_spot")
 
@@ -130,10 +134,12 @@ def extract(
     instruct_path: str = "./Llama-3.2-1B-Instruct",
     sample_list: list = [10000],
     k: float = 0.01,
-    input_dir: str = "/data_x/junkim100/projects/interpretability/Code-Spot/training/further_training/Llama-3.2-1B-Instruct",
+    input_dir: str = os.path.abspath(
+        os.path.join(os.path.dirname(__file__), "..", "training", "further_training", "Llama-3.2-1B-Instruct")
+    ),
     code_or_lang: str = "code",
 ):
-    original_model = AutoModelForCausalLM.from_pretrained(original_model_path)
+    original_model = AutoModelForCausalLM.from_pretrained(original_model_path, token=hf_token)
 
     top_k_params_dict = {}
     bottom_k_params_dict = {}

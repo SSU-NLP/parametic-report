@@ -1,0 +1,49 @@
+// The spot story for a succeeded run, served as tab panels: where the spot
+// lives, what it is, and what removing it does. Pure presentation over the
+// derivations in spotdata.js — all drawn in-browser (no static figures).
+import { html } from "./common.js";
+import { fmtCompact } from "../format.js";
+import { deriveCausal } from "../spotdata.js";
+import { ModuleConcentration } from "./viz.js";
+
+// "Where it lives" now anchors the hero (heatmap + depth); the tabs carry the
+// rest of the story.
+export const STORY_TABS = [
+  { id: "what", label: "What it is" },
+  { id: "damage", label: "What removing it does" },
+];
+
+const DESC = {
+  what: "Share of importance by module type. Roughly three-quarters of the spot lives in the MLP feed-forward weights; attention contributes mostly through o_proj.",
+  damage: "Zero the spot vs. an equal-size random/bottom region, then measure code perplexity. Only the spot breaks coding — the causal payoff.",
+};
+
+function CausalChart({ ppl }) {
+  const rows = deriveCausal(ppl);
+  if (!rows.length) return html`<p class="muted-note">No damage metrics available.</p>`;
+  return html`
+    <div class="damage-chart">
+      ${rows.map((r) => html`
+        <div class="dmg-row ${r.isSpot ? "spot" : ""}">
+          <span class="dmg-name">${r.name}</span>
+          <span class="dmg-bar"><span style=${`width:${r.width.toFixed(1)}%`}></span></span>
+          <span class="dmg-val">PPL ${fmtCompact(r.ppl)}</span>
+        </div>`)}
+    </div>
+    <p class="dmg-note">Equal-size random/bottom regions barely move perplexity —
+      only the discovered spot is causally responsible for coding.</p>`;
+}
+
+// One story act rendered as a tab panel (header line + its in-browser viz).
+export function StoryPanel({ id, spot }) {
+  const csv = spot && spot.csv;
+  const ppl = spot && spot.ppl;
+  const body = id === "what"
+    ? html`<${ModuleConcentration} csv=${csv} />`
+    : html`<${CausalChart} ppl=${ppl} />`;
+  return html`
+    <div class="panel">
+      <p class="panel-desc">${DESC[id]}</p>
+      ${body}
+    </div>`;
+}

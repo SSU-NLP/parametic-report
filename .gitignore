@@ -1,0 +1,40 @@
+# venv
+.venv
+
+# env
+.env
+# python
+__pycache__/
+*.py[cod]
+# generated data and model artifacts
+data_preprocess/dataset/
+region_selection/code-region/
+region_selection/code-spot/
+region_selection/lang-region/
+damage/damaged_models/
+*.pt
+*.bin
+*.idx
+*.dis
+*.tmp
+training/further_training/*/
+reports/
+training/further_training_java_full/
+region_selection_java_full/
+training/sample_calibration_*/
+platform_artifacts/
+platform_scratch/
+
+# Claude Code personal project permissions (do not commit)
+.claude/settings.local.json
+
+# tauri
+studio_web/src-tauri/target/
+studio_web/src-tauri/gen/schemas/
+studio_web/dist/
+
+# tool installs / build artifacts (not needed to build)
+.agents/
+.claude/skills/
+skills-lock.json
+dist_windows/

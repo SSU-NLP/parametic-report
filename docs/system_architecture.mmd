@@ -1,0 +1,56 @@
+flowchart LR
+  U[User / Researcher]
+
+  subgraph UI[Web Studio UI]
+    P[Prompt and Dataset Input]
+    PI[Parameter Importance View]
+    SR[Saved Region View]
+    RC[Region Control View]
+    BV[Benchmark View]
+  end
+
+  subgraph API[Backend API]
+    WS[WebSocket JSON Router]
+  end
+
+  subgraph K[ModelSession Kernel]
+    INF[LLM Inference]
+    IMP[Gradient x Weight Importance]
+    TOPK[Per-Tensor Top-k Region Extraction]
+    PROBE[Attention / Activation Probes]
+    INT[Region Intervention: zero / scale / random]
+    EVAL[Evaluation: PPL / HumanEvalPack]
+  end
+
+  subgraph R[Runtime and Storage]
+    GPU[CUDA GPU Runtime]
+    CACHE[Importance Cache]
+    STORE[Region Store: mask .pt + meta.json]
+    DATA[Datasets and Benchmarks]
+  end
+
+  U --> UI
+  UI <--> WS
+  WS --> K
+
+  P --> WS
+  PI --> WS
+  SR --> WS
+  RC --> WS
+  BV --> WS
+
+  INF --> GPU
+  IMP --> GPU
+  PROBE --> GPU
+  INT --> GPU
+  EVAL --> GPU
+
+  IMP --> CACHE
+  IMP --> TOPK
+  TOPK --> STORE
+  STORE --> SR
+  STORE --> INT
+  DATA --> IMP
+  DATA --> EVAL
+  INT --> EVAL
+  EVAL --> BV

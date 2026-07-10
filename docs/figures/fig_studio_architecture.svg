@@ -1,0 +1,108 @@
+<svg viewBox="0 0 1240 690" xmlns="http://www.w3.org/2000/svg">
+<rect x="0" y="0" width="1240" height="690" rx="0" fill="#ffffff" stroke="none" stroke-width="0"/>
+<defs>
+  <marker id="aN" markerWidth="12" markerHeight="10" refX="8.5" refY="4" orient="auto" markerUnits="userSpaceOnUse"><path d="M0,0 L9,4 L0,8 Z" fill="#3a3a3a"/></marker>
+  <marker id="aNs" markerWidth="12" markerHeight="10" refX="0.5" refY="4" orient="auto" markerUnits="userSpaceOnUse"><path d="M9,0 L0,4 L9,8 Z" fill="#3a3a3a"/></marker>
+  <marker id="aB" markerWidth="12" markerHeight="10" refX="8.5" refY="4" orient="auto" markerUnits="userSpaceOnUse"><path d="M0,0 L9,4 L0,8 Z" fill="#1d4ed8"/></marker>
+  <marker id="aA" markerWidth="12" markerHeight="10" refX="8.5" refY="4" orient="auto" markerUnits="userSpaceOnUse"><path d="M0,0 L9,4 L0,8 Z" fill="#b45309"/></marker>
+</defs>
+<text x="24" y="40" font-family="Helvetica, Arial, sans-serif" font-size="25" font-weight="bold" fill="#1a1a1a" text-anchor="start">Parametic Studio &#8212; interactive discovery &amp; causal validation of the Coding Spot</text>
+<rect x="24" y="62" width="340" height="610" rx="7" fill="none" stroke="#3a3a3a" stroke-width="1.5" stroke-dasharray="6 4"/>
+<text x="38" y="92" font-family="Helvetica, Arial, sans-serif" font-size="20" font-weight="bold" fill="#1a1a1a" text-anchor="start">Desktop app &#183; Tauri (Rust shell)</text>
+<text x="38" y="114" font-family="Helvetica, Arial, sans-serif" font-size="15" font-weight="normal" fill="#556070" text-anchor="start" font-style="italic">spawns / kills the kernel process</text>
+<text x="38" y="133" font-family="Helvetica, Arial, sans-serif" font-size="15" font-weight="normal" fill="#556070" text-anchor="start" font-style="italic">SSH tunnel &#8594; remote GPU box</text>
+<rect x="36" y="146" width="316" height="516" rx="7" fill="#f7f7f5" stroke="#3a3a3a" stroke-width="1.5"/>
+<text x="50" y="176" font-family="Helvetica, Arial, sans-serif" font-size="19" font-weight="bold" fill="#1a1a1a" text-anchor="start">Interactive workspace (React)</text>
+<rect x="50" y="190" width="288" height="60" rx="7" fill="#ececea" stroke="#3a3a3a" stroke-width="1.5"/>
+<text x="62" y="215" font-family="Helvetica, Arial, sans-serif" font-size="17" font-weight="bold" fill="#1a1a1a" text-anchor="start">Explorer</text>
+<text x="62" y="237" font-family="Helvetica, Arial, sans-serif" font-size="15" font-weight="normal" fill="#1a1a1a" text-anchor="start">models &#183; datasets &#183; regions</text>
+<rect x="50" y="262" width="288" height="132" rx="7" fill="#ececea" stroke="#3a3a3a" stroke-width="1.5"/>
+<text x="62" y="287" font-family="Helvetica, Arial, sans-serif" font-size="17" font-weight="bold" fill="#1a1a1a" text-anchor="start">Canvas &#8212; views</text>
+<text x="62" y="311" font-family="Menlo, monospace" font-size="15" font-weight="normal" fill="#1a1a1a" text-anchor="start">output &#183; attention &#183; logit lens</text>
+<text x="62" y="333" font-family="Menlo, monospace" font-size="15" fill="#1a1a1a"><tspan fill="#b45309">importance</tspan> &#183; activations &#183; usage</text>
+<text x="62" y="355" font-family="Menlo, monospace" font-size="15" fill="#1a1a1a"><tspan fill="#b45309">spot</tspan> &#183; <tspan fill="#b45309">tensors</tspan> &#183; <tspan fill="#b45309">region control</tspan></text>
+<text x="62" y="377" font-family="Menlo, monospace" font-size="15" font-weight="normal" fill="#1a1a1a" text-anchor="start">train &#183; eval &#183; log</text>
+<rect x="50" y="406" width="288" height="244" rx="7" fill="#fdf1e2" stroke="#b45309" stroke-width="1.5"/>
+<text x="62" y="431" font-family="Helvetica, Arial, sans-serif" font-size="17" font-weight="bold" fill="#1a1a1a" text-anchor="start">Prompt + knob dock</text>
+<text x="62" y="453" font-family="Helvetica, Arial, sans-serif" font-size="15" font-weight="normal" fill="#1a1a1a" text-anchor="start">&#945;-knobs: zero / scale / mean / rand</text>
+<text x="62" y="475" font-family="Helvetica, Arial, sans-serif" font-size="15" font-weight="normal" fill="#1a1a1a" text-anchor="start">top-k% slider &#183; A/B suspend&#8596;resume</text>
+<text x="62" y="497" font-family="Helvetica, Arial, sans-serif" font-size="15" font-weight="normal" fill="#1a1a1a" text-anchor="start">clean vs deleted compare</text>
+<rect x="376" y="62" width="104" height="610" rx="7" fill="#f7f7f5" stroke="#3a3a3a" stroke-width="1.5"/>
+<text x="428.0" y="92" font-family="Helvetica, Arial, sans-serif" font-size="19" font-weight="bold" fill="#1a1a1a" text-anchor="middle">WebSocket</text>
+<text x="428.0" y="113" font-family="Menlo, monospace" font-size="16" font-weight="normal" fill="#1a1a1a" text-anchor="middle">:8000/ws</text>
+<text x="428.0" y="131" font-family="Helvetica, Arial, sans-serif" font-size="14" font-weight="normal" fill="#556070" text-anchor="middle" font-style="italic">(or over SSH)</text>
+<line x1="386" y1="158" x2="470" y2="158" stroke="#3a3a3a" stroke-width="2.5" marker-end="url(#aN)"/>
+<text x="428.0" y="149" font-family="Helvetica, Arial, sans-serif" font-size="14" font-weight="normal" fill="#556070" text-anchor="middle" font-style="italic">requests</text>
+<text x="428.0" y="179" font-family="Menlo, monospace" font-size="13" font-weight="normal" fill="#1a1a1a" text-anchor="middle">generate &#183; spot</text>
+<text x="428.0" y="198" font-family="Menlo, monospace" font-size="13" font-weight="normal" fill="#1a1a1a" text-anchor="middle">intervene &#183; ppl</text>
+<text x="428.0" y="217" font-family="Menlo, monospace" font-size="13" font-weight="normal" fill="#1a1a1a" text-anchor="middle">eval &#183; sweep</text>
+<text x="428.0" y="236" font-family="Menlo, monospace" font-size="13" font-weight="normal" fill="#1a1a1a" text-anchor="middle">tensor_values</text>
+<line x1="470" y1="298" x2="386" y2="298" stroke="#1d4ed8" stroke-width="2.5" marker-end="url(#aB)"/>
+<text x="428.0" y="289" font-family="Helvetica, Arial, sans-serif" font-size="14" font-weight="normal" fill="#1d4ed8" text-anchor="middle" font-style="italic">streamed</text>
+<text x="428.0" y="319" font-family="Menlo, monospace" font-size="13" font-weight="normal" fill="#1d4ed8" text-anchor="middle">token &#183; attn</text>
+<text x="428.0" y="338" font-family="Menlo, monospace" font-size="13" font-weight="normal" fill="#1d4ed8" text-anchor="middle">spot_progress</text>
+<text x="428.0" y="357" font-family="Menlo, monospace" font-size="13" font-weight="normal" fill="#1d4ed8" text-anchor="middle">eval_progress</text>
+<text x="428.0" y="376" font-family="Menlo, monospace" font-size="13" font-weight="normal" fill="#1d4ed8" text-anchor="middle">contrast/sweep</text>
+<text x="428.0" y="644" font-family="Helvetica, Arial, sans-serif" font-size="13" font-weight="normal" fill="#556070" text-anchor="middle" font-style="italic">one WS / model</text>
+<text x="428.0" y="661" font-family="Helvetica, Arial, sans-serif" font-size="13" font-weight="normal" fill="#556070" text-anchor="middle" font-style="italic">non-blocking</text>
+<rect x="492" y="62" width="472" height="610" rx="7" fill="none" stroke="#3a3a3a" stroke-width="1.5" stroke-dasharray="6 4"/>
+<text x="506" y="92" font-family="Helvetica, Arial, sans-serif" font-size="19" font-weight="bold" fill="#1a1a1a" text-anchor="start">Analysis kernel &#183; Python (FastAPI / asyncio)</text>
+<text x="506" y="113" font-family="Helvetica, Arial, sans-serif" font-size="15" font-weight="normal" fill="#556070" text-anchor="start" font-style="italic">ModelSession &#8212; resident LLM (Hugging Face Transformers)</text>
+<rect x="504" y="126" width="218.0" height="116" rx="7" fill="#fdf1e2" stroke="#b45309" stroke-width="1.5"/>
+<circle cx="528" cy="144" r="11" fill="#b45309"/>
+<text x="528" y="149" font-family="Helvetica, Arial, sans-serif" font-size="15" font-weight="bold" fill="#ffffff" text-anchor="middle">1</text>
+<text x="546" y="150" font-family="Helvetica, Arial, sans-serif" font-size="18" font-weight="bold" fill="#1a1a1a" text-anchor="start">Locate</text>
+<text x="516" y="176" font-family="Helvetica, Arial, sans-serif" font-size="16" font-weight="normal" fill="#1a1a1a" text-anchor="start">&#931; | grad &#215; weight |</text>
+<text x="516" y="199" font-family="Helvetica, Arial, sans-serif" font-size="15" font-weight="normal" fill="#1a1a1a" text-anchor="start">per-param top-k% &#8594; mask</text>
+<text x="516" y="221" font-family="Helvetica, Arial, sans-serif" font-size="15" font-weight="normal" fill="#b45309" text-anchor="start" font-style="italic">= the Coding Spot</text>
+<rect x="734.0" y="126" width="218.0" height="116" rx="7" fill="#e8eefb" stroke="#1d4ed8" stroke-width="1.5"/>
+<text x="746.0" y="152" font-family="Helvetica, Arial, sans-serif" font-size="18" font-weight="bold" fill="#1a1a1a" text-anchor="start">Observe</text>
+<text x="746.0" y="176" font-family="Helvetica, Arial, sans-serif" font-size="15" font-weight="normal" fill="#1a1a1a" text-anchor="start">token-by-token generate</text>
+<text x="746.0" y="199" font-family="Helvetica, Arial, sans-serif" font-size="15" font-weight="normal" fill="#1a1a1a" text-anchor="start">attention / activation /</text>
+<text x="746.0" y="221" font-family="Helvetica, Arial, sans-serif" font-size="15" font-weight="normal" fill="#1a1a1a" text-anchor="start">logit-lens / spot / tensors</text>
+<rect x="504" y="266" width="218.0" height="116" rx="7" fill="#fdf1e2" stroke="#b45309" stroke-width="1.5"/>
+<circle cx="528" cy="284" r="11" fill="#b45309"/>
+<text x="528" y="289" font-family="Helvetica, Arial, sans-serif" font-size="15" font-weight="bold" fill="#ffffff" text-anchor="middle">2</text>
+<text x="546" y="290" font-family="Helvetica, Arial, sans-serif" font-size="18" font-weight="bold" fill="#1a1a1a" text-anchor="start">Edit (reversible)</text>
+<text x="516" y="316" font-family="Helvetica, Arial, sans-serif" font-size="15" font-weight="normal" fill="#1a1a1a" text-anchor="start">knobs: zero / scale /</text>
+<text x="516" y="338" font-family="Helvetica, Arial, sans-serif" font-size="15" font-weight="normal" fill="#1a1a1a" text-anchor="start">mean / random</text>
+<text x="516" y="362" font-family="Helvetica, Arial, sans-serif" font-size="15" fill="#1a1a1a">controls: <tspan fill="#b45309" font-weight="bold">random &#183; bottom</tspan></text>
+<rect x="734.0" y="266" width="218.0" height="116" rx="7" fill="#e7f6ec" stroke="#15803d" stroke-width="1.5"/>
+<circle cx="758.0" cy="284" r="11" fill="#15803d"/>
+<text x="758.0" y="289" font-family="Helvetica, Arial, sans-serif" font-size="15" font-weight="bold" fill="#ffffff" text-anchor="middle">3</text>
+<text x="776.0" y="290" font-family="Helvetica, Arial, sans-serif" font-size="18" font-weight="bold" fill="#1a1a1a" text-anchor="start">Evaluate</text>
+<text x="746.0" y="316" font-family="Helvetica, Arial, sans-serif" font-size="15" font-weight="normal" fill="#1a1a1a" text-anchor="start">PPL: code vs general</text>
+<text x="746.0" y="338" font-family="Helvetica, Arial, sans-serif" font-size="15" font-weight="normal" fill="#1a1a1a" text-anchor="start">HumanEval pass@1</text>
+<text x="746.0" y="362" font-family="Helvetica, Arial, sans-serif" font-size="15" font-weight="normal" fill="#15803d" text-anchor="start" font-style="italic">sandboxed unit-test exec</text>
+<line x1="613.0" y1="244" x2="613.0" y2="264" stroke="#b45309" stroke-width="2" marker-end="url(#aA)"/>
+<line x1="724.0" y1="324.0" x2="732.0" y2="324.0" stroke="#b45309" stroke-width="2" marker-end="url(#aA)"/>
+<rect x="504" y="396" width="448" height="84" rx="7" fill="#fbfbf9" stroke="#3a3a3a" stroke-width="1.5"/>
+<text x="516" y="422" font-family="Helvetica, Arial, sans-serif" font-size="18" font-weight="bold" fill="#1a1a1a" text-anchor="start">Causal experiment (paper Table 1)</text>
+<text x="516" y="446" font-family="Helvetica, Arial, sans-serif" font-size="15" font-weight="normal" fill="#1a1a1a" text-anchor="start">damage spot vs matched random / bottom across a top-k% sweep</text>
+<text x="516" y="468" font-family="Helvetica, Arial, sans-serif" font-size="15" font-weight="normal" fill="#1a1a1a" text-anchor="start">&#8594; &#916;PPL (code / general) and &#916;pass@1</text>
+<rect x="504" y="492" width="448" height="60" rx="7" fill="#ececea" stroke="#3a3a3a" stroke-width="1.5"/>
+<text x="516" y="517" font-family="Helvetica, Arial, sans-serif" font-size="18" font-weight="bold" fill="#1a1a1a" text-anchor="start">Adapt (optional)</text>
+<text x="516" y="539" font-family="Helvetica, Arial, sans-serif" font-size="15" font-weight="normal" fill="#1a1a1a" text-anchor="start">train: full &#183; spot-freeze &#183; spot-only &#183; LoRA &#8212; reversible</text>
+<rect x="504" y="564" width="448" height="98" rx="7" fill="#f7f7f5" stroke="#3a3a3a" stroke-width="1.5"/>
+<text x="728.0" y="609.0" font-family="Helvetica, Arial, sans-serif" font-size="15" font-weight="normal" fill="#1a1a1a" text-anchor="middle">resident model &#183; bf16 &#183; CUDA / MPS</text>
+<text x="728.0" y="631.0" font-family="Helvetica, Arial, sans-serif" font-size="15" font-weight="normal" fill="#1a1a1a" text-anchor="middle">multi-GPU parallel &#8212; spot &amp; eval split across cards</text>
+<rect x="976" y="62" width="250" height="68" rx="7" fill="#e7f6ec" stroke="#15803d" stroke-width="1.5"/>
+<text x="1101.0" y="92" font-family="Helvetica, Arial, sans-serif" font-size="20" font-weight="bold" fill="#1a1a1a" text-anchor="middle">GPU &#215; N</text>
+<text x="1101.0" y="115" font-family="Helvetica, Arial, sans-serif" font-size="15" font-weight="normal" fill="#1a1a1a" text-anchor="middle">CUDA &#183; multi-card</text>
+<rect x="976" y="152" width="250" height="60" rx="7" fill="#f7f7f5" stroke="#3a3a3a" stroke-width="1.5"/>
+<text x="1101.0" y="179" font-family="Helvetica, Arial, sans-serif" font-size="17" font-weight="bold" fill="#1a1a1a" text-anchor="middle">Hugging Face Hub</text>
+<text x="1101.0" y="200" font-family="Helvetica, Arial, sans-serif" font-size="15" font-weight="normal" fill="#1a1a1a" text-anchor="middle">models &#183; datasets</text>
+<text x="1101.0" y="242" font-family="Menlo, monospace" font-size="15" font-weight="normal" fill="#1a1a1a" text-anchor="middle">~/.parametic_studio/</text>
+<path d="M976,267 v62 a125.0,11 0 0 0 250,0 v-62" fill="#ececea" stroke="#3a3a3a" stroke-width="1.5"/>
+<ellipse cx="1101.0" cy="267" rx="125.0" ry="11" fill="#f7f7f5" stroke="#3a3a3a" stroke-width="1.5"/>
+<text x="1101.0" y="294.0" font-family="Menlo, monospace" font-size="15" font-weight="normal" fill="#1a1a1a" text-anchor="middle">regions/*.pt</text>
+<text x="1101.0" y="316.0" font-family="Helvetica, Arial, sans-serif" font-size="13" font-weight="normal" fill="#556070" text-anchor="middle" font-style="italic">masks + importance</text>
+<path d="M976,363 v46 a125.0,11 0 0 0 250,0 v-46" fill="#ececea" stroke="#3a3a3a" stroke-width="1.5"/>
+<ellipse cx="1101.0" cy="363" rx="125.0" ry="11" fill="#f7f7f5" stroke="#3a3a3a" stroke-width="1.5"/>
+<text x="1101.0" y="388.0" font-family="Menlo, monospace" font-size="15" font-weight="normal" fill="#1a1a1a" text-anchor="middle">datasets/*.jsonl</text>
+<path d="M976,445 v46 a125.0,11 0 0 0 250,0 v-46" fill="#ececea" stroke="#3a3a3a" stroke-width="1.5"/>
+<ellipse cx="1101.0" cy="445" rx="125.0" ry="11" fill="#f7f7f5" stroke="#3a3a3a" stroke-width="1.5"/>
+<text x="1101.0" y="470.0" font-family="Menlo, monospace" font-size="15" font-weight="normal" fill="#1a1a1a" text-anchor="middle">runs/*.json.gz</text>
+<line x1="964" y1="367.0" x2="976" y2="367.0" stroke="#3a3a3a" stroke-width="2.5" marker-start="url(#aNs)" marker-end="url(#aN)"/>
+<text transform="rotate(-90 970.0 345.0)" x="970.0" y="345.0" font-family="Helvetica, Arial, sans-serif" font-size="13" fill="#556070" text-anchor="middle" font-style="italic">load / save</text>
+</svg>

@@ -1,6 +1,10 @@
 import os
+from dotenv import load_dotenv
 import torch
 from transformers import AutoModelForCausalLM
+
+load_dotenv()
+hf_token = os.getenv("HF_TOKEN")
 
 # Create a new directory to store the layer weights
 new_directory = 'CodeLlama-34b-Instruct-hf'
@@ -8,7 +12,7 @@ os.makedirs(new_directory, exist_ok=True)
 
 # Load the model
 model_id = "meta-llama/CodeLlama-34b-Instruct-hf"
-model = AutoModelForCausalLM.from_pretrained(model_id, torch_dtype=torch.float16)
+model = AutoModelForCausalLM.from_pretrained(model_id, torch_dtype=torch.float16, token=hf_token)
 
 # Iterate over each layer and save the weights
 for i, layer in enumerate(model.model.layers):

@@ -1,49 +1,62 @@
-# Must be ran inside the data_preprocess directory
-# Example Usage: bash run_preprocess.sh "tiny-codes" "bash,java,python" "tokenizers/llama-3.1"
+#!/bin/bash
+set -euo pipefail
 
-# Get the dataset name, languages, and tokenizer path from command-line arguments
-DATASET_NAME=$1
-LANGUAGE=$2
-TOKENIZER_PATH=$3
+# Must be run from any directory. Defaults come from ../../config.json.
+# Example Usage: bash run_preprocess.sh "tiny-codes" "go,java" "data_preprocess/tokenizers/llama-3.2"
 
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
-
-# Check if dataset name is provided
-if [ -z "$DATASET_NAME" ]; then
-    echo "Please specify the dataset name as the first argument."
-    exit 1
-fi
-if [ -z "$LANGUAGE" ]; then
-    echo "Please specify the languages as the second argument."
-    exit 1
-fi
-if [ -z "$TOKENIZER_PATH" ]; then
-    echo "Please specify the tokenizer path as the third argument."
-    exit 1
+REPO_ROOT="$( cd "$SCRIPT_DIR/.." &> /dev/null && pwd )"
+CONFIG_PATH="${CONFIG_PATH:-$REPO_ROOT/config.json}"
+CONFIG_GET="$REPO_ROOT/scripts/config_get.py"
+if [[ -n "${PARAMETIC_PYTHON_BIN:-}" ]]; then
+    PYTHON_BIN="$PARAMETIC_PYTHON_BIN"
+elif [[ -n "${PYTHON_BIN:-}" ]]; then
+    PYTHON_BIN="$PYTHON_BIN"
+elif [[ "${PARAMETIC_IGNORE_REPO_VENV:-0}" != "1" && -x "$REPO_ROOT/.venv/bin/python" ]]; then
+    PYTHON_BIN="$REPO_ROOT/.venv/bin/python"
+else
+    PYTHON_BIN="python"
 fi
 
-DATASET_TYPE=(test train)
+config_get() { "$PYTHON_BIN" "$CONFIG_GET" "$CONFIG_PATH" "$1"; }
+config_join() { "$PYTHON_BIN" "$CONFIG_GET" "$CONFIG_PATH" "$1" --join "$2"; }
+config_path() { "$PYTHON_BIN" "$CONFIG_GET" "$CONFIG_PATH" "$1" --path-root "$REPO_ROOT"; }
 
-for type in "${DATASET_TYPE[@]}"
-do
-    for lang in "${LANGUAGE[@]}"
-    do
-        # Define the input file path based on dataset type
-        INPUT_FILE_PATH="./dataset/${DATASET_NAME}/${type}/${lang}.jsonl"
+DATASET_NAME="${1:-$(config_get data.dataset_name)}"
+LANGUAGE_ARG="${2:-$(config_join data.languages " ")}"
+TOKENIZER_PATH="${3:-$(config_get data.tokenizer_path)}"
 
-        # Create output directory based on dataset type and language
-        OUTPUT_DIR="./dataset/${DATASET_NAME}/preprocessed/${TOKENIZER_PATH##*/}/${type}/$lang/"
+# Local tokenizer directories are resolved relative to the repo. Hugging Face IDs
+# such as Qwen/Qwen3-8B are passed through unchanged.
+if [[ "$TOKENIZER_PATH" != /* && -e "$REPO_ROOT/$TOKENIZER_PATH" ]]; then
+    TOKENIZER_PATH="$REPO_ROOT/$TOKENIZER_PATH"
+fi
+
+TOKENIZER_NAME="$(basename "$TOKENIZER_PATH")"
+SEQ_LENGTH="$(config_get data.preprocess_seq_length)"
+NUM_WORKERS="$(config_get data.preprocess_num_workers)"
+DO_KEEP_NEWLINES="$(config_get data.do_keep_newlines)"
+DO_SPLIT_FUNCTIONS="$(config_get data.do_split_functions)"
+
+LANGUAGE_ARG="${LANGUAGE_ARG//,/ }"
+read -r -a LANGUAGES <<< "$LANGUAGE_ARG"
+
+OPTIONAL_ARGS=()
+if [[ "$DO_KEEP_NEWLINES" == "true" ]]; then
+    OPTIONAL_ARGS+=(--do_keep_newlines)
+fi
+if [[ "$DO_SPLIT_FUNCTIONS" == "true" ]]; then
+    OPTIONAL_ARGS+=(--do_split_functions)
+fi
+
+DATASET_TYPES=(test train)
+
+for type in "${DATASET_TYPES[@]}"; do
+    for lang in "${LANGUAGES[@]}"; do
+        INPUT_FILE_PATH="$SCRIPT_DIR/dataset/${DATASET_NAME}/${type}/${lang}.jsonl"
+        OUTPUT_DIR="$SCRIPT_DIR/dataset/${DATASET_NAME}/preprocessed/${TOKENIZER_NAME}/${type}/$lang/"
         mkdir -p "$OUTPUT_DIR"
 
-        python preprocess-llama.py \
-            --mode "write" \
-            --file_path "$INPUT_FILE_PATH" \
-            --save_prefix $type \
-            --save_path "$OUTPUT_DIR" \
-            --language $lang \
-            --do_keep_newlines \
-            --seq_length 2048 \
-            --tokenizer_path "$TOKENIZER_PATH" \
-            --num_workers 16
+        "$PYTHON_BIN" "$SCRIPT_DIR/preprocess-llama.py"             --mode "write"             --file_path "$INPUT_FILE_PATH"             --save_prefix "$type"             --save_path "$OUTPUT_DIR"             --language "$lang"             --seq_length "$SEQ_LENGTH"             --tokenizer_path "$TOKENIZER_PATH"             --num_workers "$NUM_WORKERS"             "${OPTIONAL_ARGS[@]}"
     done
 done

@@ -2,9 +2,19 @@
 # SPDX-License-Identifier: Apache-2.0
 
 # DeepSpeed Team
-from datasets import load_dataset
+from datasets import load_dataset as hf_load_dataset
+from dotenv import load_dotenv
+import os
 from torch.utils.data import Subset
 import re
+
+load_dotenv()
+hf_token = os.getenv("HF_TOKEN")
+
+
+def load_dataset(*args, **kwargs):
+    kwargs.setdefault("token", hf_token)
+    return hf_load_dataset(*args, **kwargs)
 
 
 # The template prompt dataset class that all new dataset porting needs to
