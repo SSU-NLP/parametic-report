@@ -39,6 +39,11 @@
     "resources": {
       "resources/parametic_studio": "parametic_studio"
     },
+    "windows": {
+      "nsis": {
+        "installerHooks": "installer-hooks.nsh"
+      }
+    },
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
