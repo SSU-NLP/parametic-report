@@ -66,22 +66,35 @@ fn python_candidates(configured: Option<String>) -> Vec<String> {
     }
 }
 
-fn spawn_kernel() -> Option<Child> {
+/// The kernel source (`parametic_studio/`) is bundled into the app as a resource, so the packaged app
+/// finds it with no config — `kernel_dir` becomes automatic. Returns the resource dir if it holds the
+/// package. (See tauri.conf.json `bundle.resources` + studio_web/scripts/bundle-kernel.mjs.)
+fn bundled_kernel_dir(app: &tauri::AppHandle) -> Option<PathBuf> {
+    let res = app.path().resource_dir().ok()?;
+    if res.join("parametic_studio").is_dir() {
+        Some(res)
+    } else {
+        None
+    }
+}
+
+fn spawn_kernel(app: &tauri::AppHandle) -> Option<Child> {
     if kernel_running() {
         log::info!("kernel already on :8000 — attach mode, not spawning");
         return None;
     }
     let (python_path, kernel_dir, model) = load_config();
-    // dev fallback: `tauri dev` runs with cwd = studio_web/src-tauri → repo root is two levels up
-    // (std Path .parent() is separator-agnostic → works on windows too)
-    let dir = kernel_dir.or_else(|| {
-        std::env::current_dir()
-            .ok()
-            .and_then(|d| d.parent().and_then(|p| p.parent()).map(|p| p.to_path_buf()))
-    })?;
+    // where the `parametic_studio` package lives: explicit config wins → the bundled copy (packaged app,
+    // no config needed) → dev fallback (cwd two levels up when running `tauri dev`).
+    let dir = kernel_dir
+        .or_else(|| bundled_kernel_dir(app))
+        .or_else(|| {
+            std::env::current_dir()
+                .ok()
+                .and_then(|d| d.parent().and_then(|p| p.parent()).map(|p| p.to_path_buf()))
+        })?;
     if !dir.join("parametic_studio").is_dir() {
-        // packaged app with no kernel_dir in config.json: cwd fallback points nowhere useful
-        log::error!("no kernel source at {dir:?} — set kernel_dir in ~/.parametic_studio/config.json");
+        log::error!("no kernel source at {dir:?} — the bundled copy is missing and no kernel_dir is set");
         return None;
     }
     let candidates = python_candidates(python_path);
@@ -89,7 +102,8 @@ fn spawn_kernel() -> Option<Child> {
         let mut cmd = Command::new(python);
         cmd.args(["-m", "parametic_studio.api"])
             .current_dir(&dir)
-            .env("PARAMETIC_STUDIO_PARENT_WATCH", "1"); // kernel self-exits if the app dies uncleanly
+            .env("PARAMETIC_STUDIO_PARENT_WATCH", "1") // kernel self-exits if the app dies uncleanly
+            .env("PYTHONDONTWRITEBYTECODE", "1"); // resource dir is read-only (Program Files) — don't write .pyc
         if let Some(m) = &model {
             cmd.env("PARAMETIC_STUDIO_MODEL", m);
         }
@@ -205,7 +219,7 @@ pub fn run() {
             app.on_menu_event(|app, event| {
                 let _ = app.emit("menu", event.id().0.as_str());
             });
-            app.manage(Kernel(Mutex::new(spawn_kernel())));
+            app.manage(Kernel(Mutex::new(spawn_kernel(app.handle()))));
             // hard 8s splash fallback — must be Rust-side (hidden webview timers are suspended)
             let handle = app.handle().clone();
             std::thread::spawn(move || {
