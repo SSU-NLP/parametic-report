@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
+import { Fragment, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import CodeMirror, { EditorView, keymap } from '@uiw/react-codemirror'
 import { python } from '@codemirror/lang-python'
 import { json } from '@codemirror/lang-json'
@@ -38,8 +38,30 @@ const isRemoteConnected = () => WS_URL === SSH_TUNNEL_WS  // URL points at the t
 // so it tells the two apart: tunnel is actually live only if the flag is still here.
 const isTunnelLive = () => isRemoteConnected() && sessionStorage.getItem('ps_tunnel_live') === '1'
 const DEFAULT = { id: 'Qwen/Qwen2.5-1.5B-Instruct', label: 'Qwen2.5-1.5B' }
-const VIEWS = ['output', 'attention', 'activations', 'logitlens', 'spot', 'train', 'eval', 'log'] as const
+const SPOT_TOPK_OPTIONS = [0.005, 0.01, 0.05] as const
+// fraction → percent label without spurious rounding: 0.005 → "0.5", 0.01 → "1", 0.05 → "5".
+// fraction → percent label. 3 significant figures so tiny paper-scale values survive (0.000025 → "0.0025",
+// not "0" as a fixed-2-decimal round would give), while whole values stay clean (0.05 → "5", 0.01 → "1").
+const pctLabel = (k: number) => String(+((k * 100).toPrecision(3)))
+const VIEWS = ['output', 'attention', 'importance', 'activations', 'activations-spot', 'usage', 'logitlens', 'spot', 'tensors', 'control', 'code', 'train', 'eval', 'log'] as const
 type View = typeof VIEWS[number]
+const VIEW_LABEL: Record<string, string> = {
+  output: 'Output',
+  attention: 'Attention',
+  importance: 'Parameter Importance',
+  activations: 'Activations',
+  'activations-spot': 'Spot activation',
+  usage: 'Region usage',
+  logitlens: 'Logit lens',
+  spot: 'Spot',
+  tensors: 'Tensors',
+  control: 'Region control',
+  code: 'Code',
+  train: 'Train',
+  eval: 'Eval',
+  log: 'Log',
+}
+const viewLabel = (v: string) => VIEW_LABEL[v] ?? v
 const DEFAULT_DATASET = 'def add(a, b):\n    return a + b\nfor i in range(10):\n    print(i)\nx = [3, 1, 2]\nx.sort()'
 const GENERAL_SET = 'The weather was pleasant and the streets were quiet.\nShe walked to the market to buy fresh vegetables.\nHistory teaches us patience and perspective.\nThe orchestra played beautifully through the evening.'
 const PRESETS: Record<string, string> = {
@@ -83,10 +105,19 @@ function cmLangExt(name: string) {
 
 type Logit = { token: string; prob: number }
 type Spot = { layers: number; modules: string[]; grid: number[][] }
+type Cond = { code_ppl: number; general_ppl: number | null }
 type KnobRow = { key: string; kind: 'cell' | 'spot' | 'named'; layer?: number; module?: string; name?: string; topk?: number; op: string; alpha: number }
 type ModelData = {
   output: string; frames: number[][][]; act: number[][] | null; logit: Logit[] | null;
-  spot: Spot | null; spotProg: { i: number; total: number } | null; perhead: { layer: number; data: number[][] } | null
+  actDetail: Spot | null; promptImportance: Spot | null; promptImportanceProg: { i: number; total: number } | null;
+  spot: Spot | null; spotAct: Spot | null; spotProg: { i: number; total: number } | null; perhead: { layer: number; data: number[][] } | null
+  actFrames: number[][][]; actDetailFrames: number[][][]; spotActFrames: number[][][]; tokenTexts: string[]  // per-token grids + labels → cumulative + timeline views
+  promptTokens: string[]  // decoded prompt tokens → attention axes labelled with real text (prompt ⧺ generated)
+  concentration: number[][] | null  // Lorenz/CDF: [[frac_params, frac_importance], ...]
+  contrast: { topk: number; clean?: Cond; spot?: Cond; random?: Cond; bottom?: Cond } | null; contrastProg: string | null
+  // k-sweep control experiment (paper Table 1): zero spot/random/bottom at each top-k%, measure code+general PPL
+  sweep: { topks: number[]; clean?: Cond; rows: { topk: number; cond: string; code_ppl: number; general_ppl: number | null }[] } | null; sweepProg: string | null
+  usage: { rows: { prompt: string; overall: number }[]; running: boolean; detail: { prompt: string; overall: number; per_layer: number[]; tokens: { text: string; usage: number }[] } | null }
   knobs: KnobRow[]; kppl: { base: number | null; inter: number | null }; ab: { base: string | null; inter: string | null }
   regions: { name: string; count: number; base_topk?: number }[]; evals: { code: number | null; general: number | null }
   evalProg: { i: number; total: number; passed: number } | null
@@ -99,7 +130,7 @@ type ModelData = {
   download: { pct: number; done_mb: number; total_mb: number } | null  // HF download stream (open only)
 }
 const emptyTrain = (): ModelData['train'] => ({ losses: [], total: 0, running: false, trained: false, before: null, error: null })
-const empty = (): ModelData => ({ output: '', frames: [], act: null, logit: null, spot: null, spotProg: null, perhead: null, knobs: [], kppl: { base: null, inter: null }, ab: { base: null, inter: null }, regions: [], evals: { code: null, general: null }, evalProg: null, evalResult: null, evalPrev: null, train: emptyTrain(), tensors: null, count: 0, busy: false, loading: false, lastRunId: null, framesFlushed: false, download: null })
+const empty = (): ModelData => ({ output: '', frames: [], act: null, actDetail: null, promptImportance: null, promptImportanceProg: null, logit: null, spot: null, spotAct: null, spotProg: null, perhead: null, actFrames: [], actDetailFrames: [], spotActFrames: [], tokenTexts: [], promptTokens: [], concentration: null, contrast: null, contrastProg: null, sweep: null, sweepProg: null, usage: { rows: [], running: false, detail: null }, knobs: [], kppl: { base: null, inter: null }, ab: { base: null, inter: null }, regions: [], evals: { code: null, general: null }, evalProg: null, evalResult: null, evalPrev: null, train: emptyTrain(), tensors: null, count: 0, busy: false, loading: false, lastRunId: null, framesFlushed: false, download: null })
 
 type Tile = { id: number; model: string; tabs: string[]; active: number; h: number }  // tabs: View | `data:<name>`
 type Col = { id: number; w: number; tiles: Tile[] }
@@ -137,10 +168,28 @@ function ScaleBar({ max, color, label }: { max: number; color: (v: number, max: 
     <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 10, color: 'var(--text-2)', margin: '4px 0' }}>
       {label && <span>{label}</span>}
       <span>0</span>
-      <div style={{ width: 90, height: 8, borderRadius: 2, background: `linear-gradient(to right, ${color(0, 1)}, ${color(0.5, 1)}, ${color(1, 1)})` }} />
+      <div style={{ width: 90, height: 8, borderRadius: 6, background: `linear-gradient(to right, ${color(0, 1)}, ${color(0.5, 1)}, ${color(1, 1)})` }} />
       <span>{Number.isFinite(max) ? max.toPrecision(3) : '—'}</span>
     </div>
   )
+}
+function normalizedScoreGrid(grid: number[][]): { grid: number[][]; max: number } {
+  const max = grid.flat().reduce((a, v) => Math.max(a, Number(v) || 0), 0)
+  return { max, grid: grid.map((row) => row.map((v) => (max > 0 ? ((Number(v) || 0) / max) * 100 : 0))) }
+}
+// Same, but scaled against an external reference max (the region's importance mass at its base top-k%)
+// instead of the grid's own max. Re-thresholding a region to a smaller % captures less importance mass,
+// so on a fixed reference the whole map visibly dims — otherwise per-threshold re-normalization pins the
+// max at 100 every time and the heatmap looks identical at 1% vs 5%. `max` is still this grid's own raw
+// max (for the "raw max |g×w|" readout). refMax ≤ 0 → fall back to self-normalization.
+function scoreGridAgainst(grid: number[][], refMax: number): { grid: number[][]; max: number } {
+  const max = grid.flat().reduce((a, v) => Math.max(a, Number(v) || 0), 0)
+  const denom = refMax > 0 ? refMax : max
+  return { max, grid: grid.map((row) => row.map((v) => (denom > 0 ? ((Number(v) || 0) / denom) * 100 : 0))) }
+}
+function moduleAlignedDiffGrid(a: number[][], aModules: string[], b: number[][], bModules: string[]): number[][] {
+  const bIdx = new Map(bModules.map((m, i) => [m, i]))
+  return a.map((row, l) => row.map((v, c) => v - (b[l]?.[bIdx.get(aModules[c]) ?? -1] ?? 0)))
 }
 function Grid({ rows, cols, rowH, onRow, onRowEnter, onLeave, cellTitle }: { rows: number[][]; cols: number; rowH: number; onRow?: (i: number) => void; onRowEnter?: (i: number) => void; onLeave?: () => void; cellTitle?: (i: number, k: number, v: number) => string }) {
   const max = Math.max(...rows.flat())
@@ -166,6 +215,22 @@ function moduleAbbrev(name: string): string {
     'input_layernorm': 'ln1', 'post_attention_layernorm': 'ln2',
   }
   return (map[s] ?? s.split('.').filter((p) => p !== 'proj').pop() ?? s) + (bias ? '+b' : '')
+}
+function moduleFullLabel(name: string): string {
+  const bias = name.endsWith('.bias')
+  const s = name.replace(/\.(weight|bias)$/, '')
+  const map: Record<string, string> = {
+    'self_attn.q_proj': 'query',
+    'self_attn.k_proj': 'key',
+    'self_attn.v_proj': 'value',
+    'self_attn.o_proj': 'output',
+    'mlp.gate_proj': 'gate',
+    'mlp.up_proj': 'up',
+    'mlp.down_proj': 'down',
+    'input_layernorm': 'input norm',
+    'post_attention_layernorm': 'post-attn norm',
+  }
+  return (map[s] ?? (s.split('.').filter((p) => p !== 'proj').join(' ') || s)) + (bias ? ' bias' : '')
 }
 function SpotGrid({ grid, modules, onCell, selected, color = ampColor, cellTitle, onHover, hovered, labels = true }: { grid: number[][]; modules: string[]; onCell?: (l: number, module: string) => void; selected?: Set<string>; color?: (v: number, max: number) => string; cellTitle?: (l: number, module: string, v: number) => string; onHover?: (cell: string | null) => void; hovered?: string | null; labels?: boolean }) {
   // coerce to finite numbers — a stray NaN/Infinity/null in the grid must not throw during render (white screen).
@@ -208,6 +273,200 @@ function SpotGrid({ grid, modules, onCell, selected, color = ampColor, cellTitle
   )
 }
 
+// horizontal labelled bars, each showing value as a % of the total — reads left→right, biggest first.
+function BarList({ items, color, valueLabel }: { items: { label: string; value: number; title?: string }[]; color: (v: number, max: number) => string; valueLabel?: (v: number, total: number) => string }) {
+  const max = items.reduce((a, b) => Math.max(a, b.value), 0)
+  const total = items.reduce((a, b) => a + b.value, 0) || 1
+  return (
+    <div style={{ display: 'grid', gap: 6 }}>
+      {items.map((it) => (
+        <div key={it.label} title={it.title} style={{ display: 'grid', gridTemplateColumns: '52px 1fr 38px', gap: 8, alignItems: 'center', fontSize: 11 }}>
+          <span className="mono" style={{ color: 'var(--text-1)', overflow: 'hidden', textOverflow: 'ellipsis' }}>{it.label}</span>
+          <div style={{ background: 'var(--bg-2)', borderRadius: 5, height: 11, overflow: 'hidden' }}>
+            <div style={{ height: 11, width: `${max ? (it.value / max) * 100 : 0}%`, background: color(it.value, max), borderRadius: 5, transition: 'width var(--ease)' }} />
+          </div>
+          <span style={{ color: 'var(--text-2)', textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{valueLabel ? valueLabel(it.value, total) : `${((it.value / total) * 100).toFixed(0)}%`}</span>
+        </div>
+      ))}
+    </div>
+  )
+}
+// Concentration Lorenz/CDF: filled area under the cumulative curve, with the equality diagonal as a
+// reference. A curve that bows hard toward the top-left = importance concentrated in a few weights.
+function LineChart({ points, width = 300, height = 150 }: { points: number[][]; width?: number; height?: number }) {
+  const pad = 6, W = width, H = height
+  const px = (x: number) => pad + x * (W - 2 * pad)
+  const py = (y: number) => H - pad - y * (H - 2 * pad)
+  const line = points.map((p, i) => `${i ? 'L' : 'M'}${px(p[0]).toFixed(1)} ${py(p[1]).toFixed(1)}`).join(' ')
+  const area = `${line} L${px(points.at(-1)![0]).toFixed(1)} ${py(0).toFixed(1)} L${px(0).toFixed(1)} ${py(0).toFixed(1)} Z`
+  return (
+    <svg width={W} height={H} style={{ display: 'block' }}>
+      <line x1={px(0)} y1={py(0)} x2={px(1)} y2={py(1)} stroke="var(--line-strong)" strokeWidth={1} strokeDasharray="3 3" />
+      <path d={area} fill="var(--accent-soft)" />
+      <path d={line} fill="none" stroke="var(--accent)" strokeWidth={1.8} strokeLinejoin="round" />
+    </svg>
+  )
+}
+// Causal contrast: for each condition (clean / spot / random / bottom), a log-scaled bar per metric
+// (code PPL, general PPL). The story: spot damage explodes code PPL while controls + general stay flat.
+function ContrastBars({ contrast }: { contrast: NonNullable<ModelData['contrast']> }) {
+  const conds = ['clean', 'spot', 'random', 'bottom'] as const
+  const color: Record<string, string> = { clean: 'var(--text-2)', spot: 'var(--danger)', random: 'var(--accent)', bottom: 'var(--live)' }
+  const metrics: { key: 'code_ppl' | 'general_ppl'; label: string }[] = [{ key: 'code_ppl', label: 'code PPL' }, { key: 'general_ppl', label: 'general PPL' }]
+  const allVals = conds.flatMap((c) => metrics.map((m) => contrast[c]?.[m.key])).filter((v): v is number => typeof v === 'number' && v > 0)
+  const lmax = Math.log10(Math.max(...allVals, 10))
+  const clean = contrast.clean
+  return (
+    <div style={{ display: 'flex', gap: 18, flexWrap: 'wrap' }}>
+      {metrics.map((m) => (
+        <div key={m.key} style={{ flex: '1 1 200px', minWidth: 190 }}>
+          <div style={{ ...hint, fontSize: 11, marginBottom: 8 }}>{m.label}</div>
+          <div style={{ display: 'grid', gap: 7 }}>
+            {conds.map((c) => {
+              const v = contrast[c]?.[m.key]
+              const ratio = clean && typeof v === 'number' && clean[m.key] ? v / (clean[m.key] as number) : null
+              const w = typeof v === 'number' && v > 0 ? (Math.log10(v) / lmax) * 100 : 0
+              return (
+                <div key={c} style={{ display: 'grid', gridTemplateColumns: '52px 1fr 96px', gap: 8, alignItems: 'center', fontSize: 11 }}>
+                  <span style={{ color: color[c], fontWeight: c === 'spot' ? 600 : 500 }}>{c}</span>
+                  <div style={{ background: 'var(--bg-2)', borderRadius: 5, height: 12, overflow: 'hidden' }}>
+                    <div style={{ height: 12, width: `${Math.max(2, w)}%`, background: color[c], borderRadius: 5, transition: 'width var(--ease)' }} />
+                  </div>
+                  <span className="mono" style={{ color: 'var(--text-1)', textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>
+                    {typeof v === 'number' ? v.toPrecision(4) : '…'}{ratio && ratio >= 1.5 ? <span style={{ color: 'var(--danger)' }}> ×{ratio < 100 ? ratio.toFixed(1) : Math.round(ratio)}</span> : ''}
+                  </span>
+                </div>
+              )
+            })}
+          </div>
+        </div>
+      ))}
+    </div>
+  )
+}
+// Symmetric N×N overlap heatmap of pairwise Jaccard (|A∩B|/|A∪B|) between saved spots — reveals a
+// shared coding core (high off-diagonal) vs language-specific spots (low). Diagonal is self (—).
+function JaccardMatrix({ names, jaccard }: { names: string[]; jaccard: Record<string, number> }) {
+  const val = (a: string, b: string) => (a === b ? 1 : (jaccard[`${a}|${b}`] ?? jaccard[`${b}|${a}`] ?? 0))
+  const short = (n: string) => n.replace(/-spot$/, '').replace(/^qwen[\d.]*-[\d.]*-/i, '')
+  const cell = 40
+  return (
+    <div style={{ overflowX: 'auto' }}>
+      <div style={{ display: 'grid', gridTemplateColumns: `72px repeat(${names.length}, ${cell}px)`, gap: 3, fontSize: 10 }}>
+        <div />
+        {names.map((n) => <div key={n} title={n} style={{ textAlign: 'center', color: 'var(--text-2)', overflow: 'hidden', whiteSpace: 'nowrap' }}>{short(n)}</div>)}
+        {names.map((r) => (
+          <Fragment key={r}>
+            <div title={r} style={{ color: 'var(--text-2)', textAlign: 'right', paddingRight: 5, whiteSpace: 'nowrap', overflow: 'hidden', alignSelf: 'center' }}>{short(r)}</div>
+            {names.map((c) => {
+              const v = val(r, c)
+              return <div key={c} title={`${r} ∩ ${c} = ${(v * 100).toFixed(1)}%`}
+                style={{ height: cell, display: 'flex', alignItems: 'center', justifyContent: 'center', borderRadius: 6, background: r === c ? 'var(--bg-2)' : ampColor(v, 1), color: v > 0.5 && r !== c ? (isLight() ? '#fff' : '#1a1717') : 'var(--text-1)', fontVariantNumeric: 'tabular-nums' }}>{r === c ? '—' : (v * 100).toFixed(0)}</div>
+            })}
+          </Fragment>
+        ))}
+      </div>
+    </div>
+  )
+}
+// Given a layer×module importance grid, derive the two summary breakdowns that tell the spot's story:
+// which module types hold it, and at which network depth it concentrates.
+function SpotSummary({ grid, modules }: { grid: number[][]; modules: string[] }) {
+  const byModule = modules
+    .map((m, c) => ({ label: moduleAbbrev(String(m ?? '')), value: grid.reduce((a, row) => a + (Number(row[c]) || 0), 0), title: String(m) }))
+    .filter((x) => x.value > 0)
+    .sort((a, b) => b.value - a.value)
+  const L = grid.length
+  const layerSum = grid.map((row) => row.reduce((a, b) => a + (Number(b) || 0), 0))
+  const bands = Math.min(6, L)
+  const bandSize = Math.ceil(L / bands)
+  const byLayer = Array.from({ length: bands }, (_, b) => {
+    const lo = b * bandSize, hi = Math.min(L, lo + bandSize)
+    return { label: hi - lo === 1 ? `L${lo}` : `L${lo}–${hi - 1}`, value: layerSum.slice(lo, hi).reduce((a, c) => a + c, 0) }
+  }).filter((x) => x.value > 0)
+  return (
+    <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginTop: 12 }}>
+      <div style={{ flex: '1 1 240px', minWidth: 220, maxWidth: 300 }}>
+        <VizCard title="By module" accent="var(--accent)"><BarList items={byModule} color={ampColor} /></VizCard>
+      </div>
+      <div style={{ flex: '1 1 240px', minWidth: 220, maxWidth: 300 }}>
+        <VizCard title="By layer depth" accent="var(--accent)"><BarList items={byLayer} color={ampColor} /></VizCard>
+      </div>
+    </div>
+  )
+}
+// mean of per-token [L,M] grids → one cumulative [L,M] grid (the "누적 활성화도").
+function meanFrames(frames: number[][][]): number[][] {
+  if (!frames.length) return []
+  const L = frames[0].length, M = frames[0][0]?.length ?? 0
+  const out = Array.from({ length: L }, () => Array(M).fill(0))
+  for (const f of frames) for (let l = 0; l < L; l++) for (let c = 0; c < M; c++) out[l][c] += (f[l]?.[c] ?? 0)
+  for (let l = 0; l < L; l++) for (let c = 0; c < M; c++) out[l][c] /= frames.length
+  return out
+}
+// per-token [L,M] grids → layer×token matrix (cell = that layer's total activation at that token).
+function layerTimeMatrix(frames: number[][][]): number[][] {
+  if (!frames.length) return []
+  const L = frames[0].length
+  return Array.from({ length: L }, (_, l) => frames.map((f) => (f[l] ?? []).reduce((a, b) => a + (b || 0), 0)))
+}
+// layer×token heatmap with a fixed column width (so long runs scroll horizontally) + rotated token
+// labels under each column so you can read WHICH token each column is, not just on hover.
+function ActivationTimeline({ matrix, tokens, label }: { matrix: number[][]; tokens: string[]; label: string }) {
+  const L = matrix.length, T = matrix[0]?.length ?? 0
+  const colW = 15, rowH = 7
+  const max = matrix.reduce((a, r) => Math.max(a, ...r), 1e-9)
+  const fmt = (t: string) => (t ?? '').replace(/\n/g, '⏎').replace(/\t/g, '⇥').replace(/ /g, '·') || '∅'
+  return (
+    <div>
+      <ScaleBar max={max} color={cellColor} label={label} />
+      <div style={{ overflowX: 'auto', paddingBottom: 6 }}>
+        <div style={{ width: T * (colW + 1), minWidth: '100%' }}>
+          <div style={{ display: 'grid', gridTemplateRows: `repeat(${L}, ${rowH}px)`, gap: 1 }}>
+            {matrix.map((row, l) => (
+              <div key={l} style={{ display: 'grid', gridTemplateColumns: `repeat(${T}, ${colW}px)`, gap: 1 }}>
+                {row.map((v, t) => <div key={t} title={`L${l} · tok ${t} "${fmt(tokens[t])}" · ${v.toFixed(2)}`} style={{ background: cellColor(v, max), height: rowH }} />)}
+              </div>
+            ))}
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: `repeat(${T}, ${colW}px)`, gap: 1, marginTop: 4, height: 56 }}>
+            {Array.from({ length: T }, (_, t) => (
+              <div key={t} title={fmt(tokens[t])} style={{ position: 'relative', width: colW }}>
+                <span style={{ position: 'absolute', top: 1, left: Math.round(colW / 2) + 3, transform: 'rotate(90deg)', transformOrigin: 'left top', fontSize: 9, lineHeight: `${colW}px`, color: 'var(--text-2)', whiteSpace: 'nowrap', fontFamily: 'var(--mono)' }}>{fmt(tokens[t])}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+// [Cumulative | Timeline] pill toggle for the activation views.
+function ModeToggle({ mode, set }: { mode: 'cumulative' | 'timeline'; set: (m: 'cumulative' | 'timeline') => void }) {
+  return (
+    <span style={{ display: 'inline-flex', gap: 4 }}>
+      {(['cumulative', 'timeline'] as const).map((m) => (
+        <span key={m} onClick={() => set(m)} className={`chip${mode === m ? ' on' : ''}`} style={{ textTransform: 'capitalize' }}>{m}</span>
+      ))}
+    </span>
+  )
+}
+// Linear-style content card: accent dot + title + optional right slot, then padded body.
+function VizCard({ title, subtitle, accent, right, children }: { title: string; subtitle?: string; accent?: string; right?: ReactNode; children: ReactNode }) {
+  return (
+    <div className="card" style={{ maxWidth: 560 }}>
+      <div className="card-head">
+        <span style={{ width: 8, height: 8, borderRadius: 3, background: accent ?? 'var(--accent)', flexShrink: 0 }} />
+        <span className="card-title">{title}</span>
+        {right && <span style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 8 }}>{right}</span>}
+      </div>
+      <div style={{ padding: '14px 16px' }}>
+        {subtitle && <div style={{ color: 'var(--text-2)', fontSize: 12, marginBottom: 14, lineHeight: 1.55 }}>{subtitle}</div>}
+        {children}
+      </div>
+    </div>
+  )
+}
 const hint = { color: 'var(--text-2)' as const }
 const iconBtn = { background: 'transparent', border: 'none', color: 'var(--text-2)', cursor: 'pointer', padding: '0 5px', fontSize: 11 }
 // common bordered action button — mechanical replacement target for the ~30 inline `[...]` buttons
@@ -276,7 +535,7 @@ function ContextMenu({ x, y, items, onClose }: { x: number; y: number; items: Me
 }
 
 // PENDING_OPS: request ops that get a ⟳-pending badge until their matching response (or error) arrives
-const PENDING_OPS = new Set(['ppl', 'intervene', 'save_region', 'drilldown', 'region_compare', 'region_info', 'eval_code'])
+const PENDING_OPS = new Set(['ppl', 'intervene', 'save_region', 'import_region', 'drilldown', 'region_compare', 'region_info', 'eval_code', 'causal_contrast', 'region_usage', 'region_usage_batch', 'tensor_values', 'causal_sweep', 'run_code', 'gen_code', 'code_contrast', 'training_delta'])
 
 // Dataset content → training/spot examples. Understands JSON arrays / JSONL (records), with an
 // optional per-dataset field selection (e.g. context+question for benchmark files); plain text
@@ -314,7 +573,7 @@ type LogEntry = { ts: string; model: string; kind: 'action' | 'result'; text: st
 function regionPy(r: any): string {
   if (!r) return 'None'
   if (r.kind === 'cell') return `s.locate_cell(${r.layer}, ${JSON.stringify(r.module)})`
-  if (r.kind === 'spot') return `s.locate_spot(examples, topk=${r.topk ?? 0.05})`
+  if (r.kind === 'spot') return `s.locate_spot(examples, topk=${r.topk ?? 0.01})`
   return `s.regions[${JSON.stringify(r.name)}]`
 }
 // ponytail: examples arrays can hit ~1MB (2000 lines) — truncate the log's python column, not the actual WS payload.
@@ -333,6 +592,7 @@ function actionPy(m: any): string | null {
     case 'resume': return 's.resume()'
     case 'ppl': return `s.ppl(${pyList(m.examples)})${m.tag ? `  # ${m.tag}` : ''}`
     case 'save_region': return `s.save_region(${JSON.stringify(m.name)}, ${regionPy(m.region)})`
+    case 'import_region': return `s.import_region(${JSON.stringify(m.name)}, ${JSON.stringify(m.path)})`
     case 'train': return `list(s.train_steps(${pyList(m.examples)}, mode=${JSON.stringify(m.mode ?? 'full')}, steps=${m.steps ?? 50}, lr=${m.lr ?? 1e-4}${m.region ? `, region=${regionPy(m.region)}` : ''}))`
     case 'stop_train': return 's.stop()'
     case 'reset_train': return 's.reset_training()'
@@ -371,15 +631,23 @@ export default function App() {
   const [open, setOpen] = useState<{ id: string; label: string }[]>([DEFAULT])
   const [catalog, setCatalog] = useState<{ id: string; label: string; installed?: boolean; size_mb?: number | null }[]>([])
   const [data, setData] = useState<Record<string, ModelData>>({ [DEFAULT.id]: empty() })
-  const [cols, setCols] = useState<Col[]>([{ id: 1, w: 1, tiles: [{ id: 1, model: DEFAULT.id, tabs: ['output', 'attention'], active: 0, h: 1 }] }])
+  const [cols, setCols] = useState<Col[]>([{ id: 1, w: 1, tiles: [{ id: 1, model: DEFAULT.id, tabs: ['output', 'importance', 'attention'], active: 0, h: 1 }] }])
+  const [maxTile, setMaxTile] = useState<number | null>(null)  // maximized tile id: fills the whole workspace (hides other panes + chat dock)
   const [ds] = useState(DEFAULT_DATASET)  // seed examples; spot is dataset-driven now, so this never changes
   const [layer, setLayer] = useState(0)
   const [hoverLayer, setHoverLayer] = useState<number | null>(null)  // attention: hover=preview, click=pin
+  const [attnCell, setAttnCell] = useState<{ q: number; k: number } | null>(null)  // attention matrix: hovered (query, key) cell
+  const [attnZoom, setAttnZoom] = useState(15)  // attention matrix cell size (px) — zoom in/out
+  const [activMode, setActivMode] = useState<'cumulative' | 'timeline'>('cumulative')  // activations views: cumulative vs per-token timeline
+  type TrainDelta = { mode: string; region_rms: number | null; region_max?: number | null; region_params?: number; other_rms: number | null; other_max?: number | null; other_params?: number }
+  const [trainDelta, setTrainDelta] = useState<Record<string, TrainDelta | null>>({})
   const [trainMode, setTrainMode] = useState('spot-freeze')
   const [trainRegion, setTrainRegion] = useState('')
-  const [trainSteps, setTrainSteps] = useState(30)
-  const [trainLr, setTrainLr] = useState(1e-4)
-  const [trainDs, setTrainDs] = useState(PRESETS.java)
+  const [trainRegionTopk, setTrainRegionTopk] = useState(0.01)  // freeze/train the region re-thresholded to this top-k% (≤ its saved base)
+  const [trainEpochs, setTrainEpochs] = useState(2)  // passes over the selected examples; steps = epochs × #examples
+  const [trainLr, setTrainLr] = useState(2e-5)  // safe fine-tuning default; 1e-4 often diverges (loss climbs) on a 1.5B model
+  const [trainDsName, setTrainDsName] = useState('')  // benchmark/dataset to fine-tune on (each record = one example)
+  const [trainLimit, setTrainLimit] = useState(30)     // # examples from the dataset to use
   // presets are client-side seeds; server entries live in $PARAMETIC_STUDIO_HOME/datasets (content lazy-fetched)
   const [datasets, setDatasets] = useState<{ name: string; content: string | null; fields?: string[]; server?: boolean; size?: number; link?: string | null }[]>([
     { name: 'python', content: PRESETS.python }, { name: 'java', content: PRESETS.java },
@@ -388,9 +656,11 @@ export default function App() {
   ])
   const [spotN, setSpotN] = useState('')                 // '' = all examples
   const [spotPick, setSpotPick] = useState<'first' | 'random'>('first')
+  const [sweepKs, setSweepKs] = useState('0.0025, 0.01, 0.09, 0.25')  // percent values for the Table-1 k-sweep (paper's range)
+  const [spotTopk, setSpotTopk] = useState<number>(0.01)  // parameter-region mask size: default top 1%
   const [evalDsName, setEvalDsName] = useState('')       // '' = eval kppl on spot data (dsExamples); else a loaded dataset name
   const [namedRegionPick, setNamedRegionPick] = useState('')   // knob board: "+ from saved region" picker
-  const [namedRegionTopk, setNamedRegionTopk] = useState(0.05) // its topk %, capped by the picked region's base_topk
+  const [namedRegionTopk, setNamedRegionTopk] = useState(0.01) // its topk %, capped by the picked region's base_topk
   // P13: pass@k (HumanEvalPack) eval view — separate dataset pick + gen params from the spot kppl "eval on"
   const [codeEvalDsName, setCodeEvalDsName] = useState('')
   const [codeEvalTemp, setCodeEvalTemp] = useState(0)
@@ -404,9 +674,50 @@ export default function App() {
     for (let i = 0; i < n; i++) { const j = i + Math.floor(Math.random() * (pool.length - i)); [pool[i], pool[j]] = [pool[j], pool[i]] }
     return pool.slice(0, n)
   }
-  const [regionInfo, setRegionInfo] = useState<Record<string, { layers: number; modules: string[]; grid: number[][]; importance: number[][] | null; count: number; base_topk?: number }>>({})
+  const [regionInfo, setRegionInfo] = useState<Record<string, { layers: number; modules: string[]; grid: number[][]; importance: number[][] | null; count: number; base_topk?: number; view_topk?: number | null }>>({})
+  // Per-region importance reference max: the running-max raw |g×w| cell seen across every top-k% viewed.
+  // The heatmap normalizes against this (not each threshold's own max) so lowering the % visibly dims it.
+  const [regionImpMax, setRegionImpMax] = useState<Record<string, number>>({})
+  // Tensor inspector (layer → tensor → values). Selection + last-fetched window, keyed by model.
+  type TensorView = { name: string; shape: number[]; dtype: string; source: string; signed: boolean; rows_total: number; cols_total: number; r0: number; c0: number; values: number[][]; flattened: boolean; stats: { min: number; max: number; mean: number; std: number; absmax: number } }
+  // value source: 'weights' (원본 모델 θ) | 'importance' (실시간 |g×w|) | a saved region name (저장 영역)
+  const [tvSource, setTvSource] = useState<Record<string, string>>({})
+  const [tvSel, setTvSel] = useState<Record<string, { layer: string; tensor: string | null }>>({})
+  const [tvData, setTvData] = useState<Record<string, TensorView>>({})
+  const [tvHover, setTvHover] = useState<{ i: number; j: number; v: number } | null>(null)  // hovered heatmap cell → value readout; null when the mouse leaves
+  const tvFetched = useRef<Set<string>>(new Set())  // guards the one-shot tensor-list fetch per model in the view
+  // Region control tab: pick a saved region and adjust it (op/alpha/topk) with a clean-vs-adjusted PPL compare
+  const [ctrlSel, setCtrlSel] = useState<Record<string, string>>({})       // selected region name per model
+  const [ctrlOp, setCtrlOp] = useState('zero')                             // scale | zero | mean | random
+  const [ctrlAlpha, setCtrlAlpha] = useState(0)                           // scale factor (only used by op=scale)
+  const [ctrlTopk, setCtrlTopk] = useState<Record<string, number>>({})     // topk fraction per region (capped by base_topk)
+  const [ctrlApplied, setCtrlApplied] = useState<Record<string, { name: string; op: string; alpha: number; topk: number } | null>>({})
+  const [ctrlPpl, setCtrlPpl] = useState<Record<string, { cleanCode?: number; cleanGen?: number; adjCode?: number; adjGen?: number }>>({})
+  const [ctrlEvalDs, setCtrlEvalDs] = useState('')                         // HumanEval dataset for the benchmark
+  const [ctrlEvalLimit, setCtrlEvalLimit] = useState(20)                   // # problems (paper used 20; keeps it fast)
+  const [ctrlEval, setCtrlEval] = useState<Record<string, { clean?: { pass_at_1: number; passed: number; total: number }; deleted?: { pass_at_1: number; passed: number; total: number } }>>({})
+  const ctrlEvalSlot = useRef<Record<string, 'clean' | 'deleted'>>({})     // routes the next eval_result into clean|deleted for the control tab
+  // Train tab benchmark: pass@1 of the model base (pre-train) vs trained. eval fans out over GPUs (unlike training).
+  type PassResult = { pass_at_1: number; passed: number; total: number }
+  const [trainEval, setTrainEval] = useState<Record<string, { base?: PassResult; trained?: PassResult }>>({})
+  const trainEvalSlot = useRef<Record<string, 'base' | 'trained'>>({})
+  const [trainEvalDs, setTrainEvalDs] = useState('')
+  const [trainEvalLimit, setTrainEvalLimit] = useState(20)
+  const [trainEvalGpus, setTrainEvalGpus] = useState<Record<string, number[]>>({})
+  const [ctrlEvalGpus, setCtrlEvalGpus] = useState<Record<string, number[]>>({})  // extra GPUs to split the benchmark across
+  const ctrlTopkRef = useRef(0.01)                                         // latest slider top-k (avoids stale closure on drag-release re-apply)
+  // Code tab (VSCode-style): Explorer of in-memory files + full editor, model code-gen, clean-vs-deleted contrast
+  type RunOut = { exit: number | null; stdout: string; stderr: string; timed_out: boolean; duration_ms: number }
+  type CodeFile = { name: string; src: string }
+  const DEFAULT_CODE_PROMPT = 'def sort_evens(nums):\n    """Return the even numbers from `nums`, sorted ascending."""\n'
+  const [codeFiles, setCodeFiles] = useState<Record<string, CodeFile[]>>({})
+  const [codeActive, setCodeActive] = useState<Record<string, string>>({})
+  const codeActiveRef = useRef<Record<string, string>>({})  // active filename for message handlers (avoids stale closure)
+  const [codeResult, setCodeResult] = useState<Record<string, RunOut>>({})
+  const [codeContrast, setCodeContrast] = useState<Record<string, { clean?: { completion: string; run: RunOut }; deleted?: { completion: string; run: RunOut } }>>({})
   const [compareSel, setCompareSel] = useState<string[]>([])  // selected region names (a toggle set; hue is fixed per region, see regHue)
   const [compareHover, setCompareHover] = useState<string | null>(null)  // shared "L.module" cell — cross-highlights every compare grid
+  const [importanceCompareRegion, setImportanceCompareRegion] = useState('')
   const [interMetric, setInterMetric] = useState<'shared' | 'lift' | 'fraction'>('shared')  // intersection grid coloring
   const [compareData, setCompareData] = useState<{ names: string[]; layers: number; modules: string[]; grids: Record<string, number[][]>; kinds: Record<string, string>; intersection: number[][]; intersectionLift: number[][] | null; jaccard: Record<string, number> } | null>(null)
   // parse each dataset ONCE per change — parsing in render paths re-chewed megabytes of JSONL on
@@ -421,7 +732,20 @@ export default function App() {
   // multi-line examples (code) don't survive the ex.join('\n')→toExamples split round-trip, so re-parsing
   // the editor yields a different set → importance cache miss → save recomputes. Keeping the array fixes it.
   const [spotExamples, setSpotExamples] = useState<Record<string, string[]>>({})  // per-model: each keeps the array ITS spot ran on
-  const emitSpot = (mid: string, ex: string[]) => { setSpotExamples((s) => ({ ...s, [mid]: ex })); sendTo(mid, { type: 'spot', examples: ex }) }
+  // extra GPUs to help compute_spot's backward passes, per model — home GPU is always included, this is on TOP of it
+  const [spotExtraGpus, setSpotExtraGpus] = useState<Record<string, number[]>>({})
+  const emitSpot = (mid: string, ex: string[]) => {
+    setSpotExamples((s) => ({ ...s, [mid]: ex }))
+    const extra = (spotExtraGpus[mid] ?? []).map((i) => `cuda:${i}`)
+    sendTo(mid, { type: 'spot', examples: ex, ...(extra.length ? { extra_devices: extra } : {}) })
+  }
+  // activations-spot source, per model: '' = the just-computed spot; else a saved region name (no recompute needed)
+  const [spotActRegion, setSpotActRegion] = useState<Record<string, string>>({})
+  // region-usage: per-model region source ('' = current spot) + the prompt set to compare
+  const [usageRegion, setUsageRegion] = useState<Record<string, string>>({})
+  const [usagePrompts, setUsagePrompts] = useState<Record<string, string>>({})
+  const [regionName, setRegionName] = useState<Record<string, string>>({})  // per-model "Save region" name input (controlled — was a fragile getElementById)
+  const USAGE_DEFAULT = 'write a quicksort in python\nexplain photosynthesis\nsummarize this paragraph\nfix this python bug: def f(x) return x+1'
   // spot is driven by a dataset pick (no free-text editor): pick → sample → compute. content lazy-loads,
   // so remember the pending pick and fire once it lands (see dataset_content handler).
   const [spotSrc, setSpotSrc] = useState('')            // dataset name the spot ran on (shown in the picker)
@@ -450,11 +774,13 @@ export default function App() {
   const logScrollRef = useRef<HTMLDivElement>(null)
   const logPinned = useRef(true)
   const abPhase = useRef<Record<string, 'base' | 'inter'>>({})  // A/B sequencing (refs: onmessage closure is created once)
+  const promptImportancePending = useRef<Record<string, string>>({})
+  const generatedText = useRef<Record<string, string>>({})
   const promptRef = useRef(prompt); promptRef.current = prompt
   const [genOpen, setGenOpen] = useState(false)
   const [maxTokens, setMaxTokens] = useState(256)
   const [temperature, setTemperature] = useState(0)
-  const [probesOn, setProbesOn] = useState<Record<string, boolean>>({ attention: true, activation: true, logitlens: true })
+  const [probesOn, setProbesOn] = useState<Record<string, boolean>>({ attention: true, activation: true, logitlens: true, spot_activation: true })
   const genRef = useRef({ maxTokens, temperature }); genRef.current = { maxTokens, temperature }
   // kernel liveness: null=connecting, true=up, false=down (reconnecting with backoff)
   const [kernelUp, setKernelUp] = useState<boolean | null>(null)
@@ -538,11 +864,12 @@ export default function App() {
     }, delay)
   }
   // webview-safe dialogs: inline inputs replace window.prompt, two-step "sure?" replaces window.confirm
-  const [asking, setAsking] = useState<'hf' | 'editor' | 'path' | 'hf-dataset' | null>(null)
+  const [asking, setAsking] = useState<'hf' | 'editor' | 'path' | 'hf-dataset' | 'import-region' | null>(null)
   const [askValue, setAskValue] = useState('')
   const [askSplit, setAskSplit] = useState('')
   const [askConfig, setAskConfig] = useState('')          // HF dataset config (e.g. humanevalpack language)
   const [askFilter, setAskFilter] = useState('')           // 'col=value' row filter (e.g. tiny-codes programming_language=Python)
+  const [askRegionPath, setAskRegionPath] = useState('')   // import-region: folder of per-param .pt masks
   const [hfLoading, setHfLoading] = useState<string | null>(null)  // repo id currently loading, for the Data section hint
   const [uploading, setUploading] = useState<string[]>([])  // dataset file names being uploaded to the kernel store (+ File/+ Folder)
   const [armed, setArmed] = useState<string | null>(null)
@@ -625,24 +952,68 @@ export default function App() {
     if (m.type === 'download_progress') { patch(mid, (d) => ({ ...d, download: { pct: m.pct, done_mb: m.done_mb, total_mb: m.total_mb } })); return }
     if (m.type === 'loading_weights') { patch(mid, (d) => ({ ...d, download: null })); return }  // download done, GPU load begins → drop to indeterminate
     if (m.type === 'load_failed') { delete loadStart.current[mid]; toast(`[open] ${openRef.current.find((o) => o.id === mid)?.label ?? mid} failed to load`); closeModel(mid); return }
-    if (m.type === 'token') patch(mid, (d) => ({ ...d, output: d.output + m.text, count: d.count + 1 }))
+    if (m.type === 'token') {
+      generatedText.current[mid] = (generatedText.current[mid] ?? '') + m.text
+      patch(mid, (d) => ({ ...d, output: d.output + m.text, count: d.count + 1, tokenTexts: [...d.tokenTexts, m.text] }))
+    }
+    else if (m.type === 'prompt_tokens') patch(mid, (d) => ({ ...d, promptTokens: m.tokens }))
     else if (m.type === 'attention') patch(mid, (d) => ({ ...d, frames: [...d.frames, m.data] }))
-    else if (m.type === 'activation') patch(mid, (d) => ({ ...d, act: m.data }))
+    else if (m.type === 'activation') patch(mid, (d) => {
+      const detail = m.detail ? { layers: m.detail.layers, modules: m.detail.modules, grid: m.detail.grid } : null
+      return {
+        ...d,
+        act: m.data,
+        actDetail: detail ?? d.actDetail,
+        actFrames: [...d.actFrames, m.data],
+        actDetailFrames: detail ? [...d.actDetailFrames, detail.grid] : d.actDetailFrames,
+      }
+    })
+    else if (m.type === 'spot_activation') patch(mid, (d) => ({ ...d, spotAct: { layers: m.layers, modules: m.modules, grid: m.grid }, spotActFrames: [...d.spotActFrames, m.grid] }))
     else if (m.type === 'logitlens') patch(mid, (d) => ({ ...d, logit: m.layers }))
-    else if (m.type === 'spot_progress') patch(mid, (d) => ({ ...d, spot: { layers: m.layers, modules: m.modules, grid: m.grid }, spotProg: { i: m.i, total: m.total } }))
-    else if (m.type === 'spotmap') patch(mid, (d) => ({ ...d, spot: { layers: m.layers, modules: m.modules, grid: m.grid }, spotProg: null }))
+    else if (m.type === 'spot_progress') patch(mid, (d) => ({ ...d, ...(m.grid ? { spot: { layers: m.layers, modules: m.modules, grid: m.grid } } : {}), spotProg: { i: m.i, total: m.total } }))  // multi-GPU runs omit the live grid (see spot_activation_grid docstring) — keep d.spot as-is then
+    else if (m.type === 'spotmap') { patch(mid, (d) => ({ ...d, spot: { layers: m.layers, modules: m.modules, grid: m.grid }, spotProg: null, concentration: null, contrast: null })); sendTo(mid, { type: 'concentration' }) }  // fresh spot → pull its concentration curve, drop stale contrast
+    else if (m.type === 'prompt_importance_progress') patch(mid, (d) => ({ ...d, ...(m.grid ? { promptImportance: { layers: m.layers, modules: m.modules, grid: m.grid } } : {}), promptImportanceProg: { i: m.i, total: m.total } }))
+    else if (m.type === 'prompt_importance') patch(mid, (d) => ({ ...d, promptImportance: { layers: m.layers, modules: m.modules, grid: m.grid }, promptImportanceProg: null }))
+    else if (m.type === 'concentration') patch(mid, (d) => ({ ...d, concentration: m.curve }))
+    else if (m.type === 'contrast_progress') patch(mid, (d) => ({ ...d, contrastProg: m.stage, contrast: { ...(d.contrast ?? { topk: 0 }), [m.stage]: { code_ppl: m.code_ppl, general_ppl: m.general_ppl } } }))
+    else if (m.type === 'contrast_result') { setPendingKey(`causal_contrast:${mid}`, false); patch(mid, (d) => ({ ...d, contrastProg: null, contrast: { topk: m.topk, clean: m.clean, spot: m.spot, random: m.random, bottom: m.bottom } })) }
+    else if (m.type === 'sweep_progress') patch(mid, (d) => ({ ...d, sweepProg: m.cond === 'clean' ? 'clean' : `${(m.topk * 100).toFixed(4)}% · ${m.cond}`, sweep: m.cond === 'clean' ? { ...(d.sweep ?? { topks: [], rows: [] }), clean: { code_ppl: m.code_ppl, general_ppl: m.general_ppl } } : { ...(d.sweep ?? { topks: [], rows: [] }), rows: [...(d.sweep?.rows ?? []), { topk: m.topk, cond: m.cond, code_ppl: m.code_ppl, general_ppl: m.general_ppl }] } }))
+    else if (m.type === 'sweep_result') { setPendingKey(`causal_sweep:${mid}`, false); patch(mid, (d) => ({ ...d, sweepProg: null, sweep: { topks: m.topks, clean: m.clean, rows: m.rows } })) }
+    else if (m.type === 'code_result') { setPendingKey(`run_code:${mid}`, false); setCodeResult((c) => ({ ...c, [mid]: { exit: m.exit, stdout: m.stdout, stderr: m.stderr, timed_out: m.timed_out, duration_ms: m.duration_ms } })) }
+    else if (m.type === 'code_gen') {
+      setPendingKey(`gen_code:${mid}`, false)
+      const full = (m.prompt ?? '') + (m.completion ?? '')
+      const act = codeActiveRef.current[mid] ?? 'main.py'
+      setCodeFiles((cf) => { const files = cf[mid] ?? [{ name: 'main.py', src: '' }]; const has = files.some((f) => f.name === act)
+        return { ...cf, [mid]: has ? files.map((f) => f.name === act ? { ...f, src: full } : f) : [...files, { name: act, src: full }] } })
+    }
+    else if (m.type === 'code_contrast_progress') setCodeContrast((c) => ({ ...c, [mid]: { ...c[mid], [m.stage]: { completion: m.completion, run: m.run } } }))
+    else if (m.type === 'code_contrast') { setPendingKey(`code_contrast:${mid}`, false); setCodeContrast((c) => ({ ...c, [mid]: { clean: m.clean, deleted: m.deleted } })) }
+    else if (m.type === 'usage_row') patch(mid, (d) => ({ ...d, usage: { ...d.usage, rows: [...d.usage.rows.filter((r) => r.prompt !== m.prompt), { prompt: m.prompt, overall: m.overall }] } }))
+    else if (m.type === 'usage_batch_done') { setPendingKey(`region_usage_batch:${mid}`, false); patch(mid, (d) => ({ ...d, usage: { ...d.usage, running: false } })) }
+    else if (m.type === 'region_usage') { setPendingKey(`region_usage:${mid}`, false); patch(mid, (d) => ({ ...d, usage: { ...d.usage, detail: { prompt: m.prompt, overall: m.overall, per_layer: m.per_layer, tokens: m.tokens } } })) }
     else if (m.type === 'ppl') {
       setPendingKey(`ppl:${mid}`, false)
       logEntry(mid, 'result', `ppl${m.tag ? `[${m.tag}]` : ''} = ${Number(m.value).toPrecision(5)}`)
       if (m.tag === 'code' || m.tag === 'general') patch(mid, (d) => ({ ...d, evals: { ...d.evals, [m.tag]: m.value } }))
+      else if (typeof m.tag === 'string' && m.tag.startsWith('ctrl:')) { const key = m.tag.slice(5); setCtrlPpl((c) => ({ ...c, [mid]: { ...c[mid], [key]: m.value } })) }
       else patch(mid, (d) => ({ ...d, kppl: { ...d.kppl, [m.tag === 'base' ? 'base' : 'inter']: m.value } }))
     }
     else if (m.type === 'intervened') { setPendingKey(`intervene:${mid}`, false); setLocateProg((p) => { const n = { ...p }; delete n[`${mid}:intervene`]; return n }) }
     else if (m.type === 'region_saved') {
-      setPendingKey(`save_region:${mid}`, false); setLocateProg((p) => { const n = { ...p }; delete n[`${mid}:save_region`]; return n })
-      logEntry(mid, 'result', `region "${m.name}" saved (${m.count} weights)`); sendTo(mid, { type: 'regions' })
+      setPendingKey(`save_region:${mid}`, false); setPendingKey(`import_region:${mid}`, false)
+      setLocateProg((p) => { const n = { ...p }; delete n[`${mid}:save_region`]; return n })
+      const detail = m.imported != null ? ` · imported ${m.imported} param(s)${m.skipped?.length ? `, skipped ${m.skipped.length}` : ''}` : ''
+      logEntry(mid, 'result', `region "${m.name}" saved (${m.count} weights)${detail}`); sendTo(mid, { type: 'regions' })
     }
-    else if (m.type === 'region_info') { setPendingKey(`region_info:${mid}`, false); setRegionInfo((ri) => ({ ...ri, [m.name]: { layers: m.layers, modules: m.modules, grid: m.grid, importance: m.importance ?? null, count: m.count, base_topk: m.base_topk } })) }
+    else if (m.type === 'region_info') {
+      setPendingKey(`region_info:${mid}`, false)
+      setRegionInfo((ri) => ({ ...ri, [m.name]: { layers: m.layers, modules: m.modules, grid: m.grid, importance: m.importance ?? null, count: m.count, base_topk: m.base_topk, view_topk: m.view_topk ?? null } }))
+      if (m.importance) {  // widen the fixed normalization reference to the largest importance mass seen (≈ base top-k%)
+        const rawMax = (m.importance as number[][]).flat().reduce((a: number, v: number) => Math.max(a, Number(v) || 0), 0)
+        setRegionImpMax((rm) => ({ ...rm, [m.name]: Math.max(rm[m.name] ?? 0, rawMax) }))
+      }
+    }
     else if (m.type === 'region_comparison') { setPendingKey(`region_compare:${mid}`, false); setCompareData({ names: m.names, layers: m.layers, modules: m.modules, grids: m.grids, kinds: m.kinds ?? {}, intersection: m.intersection, intersectionLift: m.intersection_lift ?? null, jaccard: m.jaccard }) }
     else if (m.type === 'regions') patch(mid, (d) => ({ ...d, regions: m.regions }))
     else if (m.type === 'train_step') patch(mid, (d) => ({ ...d, train: { ...d.train, losses: [...d.train.losses, m.loss], total: m.total, running: true } }))
@@ -653,22 +1024,33 @@ export default function App() {
       sendTo(mid, { type: 'ppl', examples: PRESETS.python.split('\n').filter(Boolean), tag: 'code' })
       sendTo(mid, { type: 'ppl', examples: GENERAL_SET.split('\n').filter(Boolean), tag: 'general' })
     }
-    else if (m.type === 'train_reset') patch(mid, (d) => ({ ...d, train: emptyTrain() }))
+    else if (m.type === 'train_reset') { setTrainDelta((td) => ({ ...td, [mid]: null })); patch(mid, (d) => ({ ...d, train: emptyTrain() })) }
+    else if (m.type === 'training_delta') { setPendingKey(`training_delta:${mid}`, false); setTrainDelta((td) => ({ ...td, [mid]: m.delta })) }
     else if (m.type === 'tensors') patch(mid, (d) => ({ ...d, tensors: m.tensors }))
+    else if (m.type === 'tensor_values') { setPendingKey(`tensor_values:${mid}`, false); setTvData((tv) => ({ ...tv, [mid]: { name: m.name, shape: m.shape, dtype: m.dtype, source: m.source, signed: m.signed, rows_total: m.rows_total, cols_total: m.cols_total, r0: m.r0, c0: m.c0, values: m.values, flattened: m.flattened, stats: m.stats } })) }
     else if (m.type === 'locate_progress') setLocateProg((p) => ({ ...p, [`${mid}:${m.op}`]: { i: m.i, total: m.total } }))
     else if (m.type === 'error') {
       toast(`[${m.op ?? 'kernel'}] ${m.reason}`)
       if (m.op === 'load_hf_dataset') setHfLoading(null)
       if (m.op === 'save_dataset') setUploading([])  // error carries no name → clear the whole batch
       if (m.op) { setPendingKey(`${m.op}:${mid}`, false); setLocateProg((p) => { const n = { ...p }; delete n[`${mid}:${m.op}`]; return n }) }
-      if (m.op === 'train') patch(mid, (d) => ({ ...d, train: { ...d.train, running: false, error: m.reason } }))
+      if (m.op === 'train') {
+        // a stale training left on the kernel → auto-clear it so the next Train works (older kernels raise this)
+        if (typeof m.reason === 'string' && m.reason.includes('reset_training')) { sendTo(mid, { type: 'reset_train' }); patch(mid, (d) => ({ ...d, train: { ...emptyTrain(), error: 'cleared a leftover training — press Train again' } })) }
+        else patch(mid, (d) => ({ ...d, train: { ...d.train, running: false, error: m.reason } }))
+      }
       if (m.op === 'eval_code') patch(mid, (d) => ({ ...d, evalProg: null }))
+      if (m.op === 'region_usage_batch') patch(mid, (d) => ({ ...d, usage: { ...d.usage, running: false } }))  // clear the spinner on error
     }
     else if (m.type === 'perhead') { setPendingKey(`drilldown:${mid}`, false); patch(mid, (d) => ({ ...d, perhead: { layer: m.layer, data: m.data } })) }
     else if (m.type === 'eval_progress') patch(mid, (d) => ({ ...d, evalProg: { i: m.i, total: m.total, passed: m.passed } }))
     else if (m.type === 'eval_result') {
       setPendingKey(`eval_code:${mid}`, false)
       logEntry(mid, 'result', `eval[${m.dataset}] pass@1 = ${(m.pass_at_1 * 100).toFixed(2)}% (${m.passed}/${m.total})`)
+      const slot = ctrlEvalSlot.current[mid]  // benchmark launched from the Region control tab → route into clean|deleted
+      if (slot) { setCtrlEval((c) => ({ ...c, [mid]: { ...c[mid], [slot]: { pass_at_1: m.pass_at_1, passed: m.passed, total: m.total } } })); delete ctrlEvalSlot.current[mid] }
+      const tslot = trainEvalSlot.current[mid]  // benchmark launched from the Train tab → route into base|trained
+      if (tslot) { setTrainEval((c) => ({ ...c, [mid]: { ...c[mid], [tslot]: { pass_at_1: m.pass_at_1, passed: m.passed, total: m.total } } })); delete trainEvalSlot.current[mid] }
       patch(mid, (d) => {
         const damaged = d.knobs.length > 0
         const result = { dataset: m.dataset, passed: m.passed, total: m.total, pass_at_1: m.pass_at_1, damaged, knobCount: d.knobs.length }
@@ -693,6 +1075,11 @@ export default function App() {
         if (d.frames.length > 32) sendTo(mid, { type: 'save_run', run: { prompt: promptRef.current, output: d.output, frames: d.frames, act: d.act, logit: d.logit, settings: { maxTokens: genRef.current.maxTokens, temperature: genRef.current.temperature }, reason: m.reason, ts: Date.now() } })
         return { ...d, busy: false }
       })
+      const pendingPrompt = promptImportancePending.current[mid]
+      if (pendingPrompt) {
+        delete promptImportancePending.current[mid]
+        sendTo(mid, { type: 'prompt_importance', prompt: pendingPrompt, completion: generatedText.current[mid] ?? '' })
+      }
     }
     else if (m.type === 'run_saved') patch(mid, (d) => ({ ...d, lastRunId: m.id, framesFlushed: true, frames: d.frames.slice(-1) }))
     else if (m.type === 'run_data') patch(mid, (d) => ({ ...d, frames: m.run.frames ?? d.frames, framesFlushed: false }))
@@ -844,11 +1231,19 @@ export default function App() {
   }
   function send() {
     if (!prompt.trim()) return
-    for (const mid of targets()) { patch(mid, (d) => ({ ...empty(), spot: d.spot, knobs: d.knobs, kppl: d.kppl, regions: d.regions, evals: d.evals, train: d.train, tensors: d.tensors, busy: true })); sendTo(mid, { type: 'generate', prompt, max_tokens: maxTokens, temperature, probes: ['attention', 'activation', 'logitlens'].filter((p) => probesOn[p]) }) }  // keep workspace (spot/knobs/regions/train) across re-runs
+    for (const mid of targets()) {
+      patch(mid, (d) => ({ ...empty(), spot: d.spot, knobs: d.knobs, kppl: d.kppl, regions: d.regions, evals: d.evals, train: d.train, tensors: d.tensors, busy: true }))  // keep workspace (spot/knobs/regions/train) across re-runs
+      const spotRegion = spotActRegion[mid]
+      promptImportancePending.current[mid] = prompt
+      generatedText.current[mid] = ''
+      sendTo(mid, { type: 'generate', prompt, max_tokens: maxTokens, temperature, probes: ['attention', 'activation', 'logitlens', 'spot_activation'].filter((p) => probesOn[p]), spot_topk: spotTopk, ...(spotRegion ? { spot_region: spotRegion } : {}) })
+    }
   }
   function stop() {
     for (const mid of targets()) {
       delete abPhase.current[mid]  // stopping mid-A/B must not chain into the next generation
+      delete promptImportancePending.current[mid]
+      delete generatedText.current[mid]
       sockets.current[mid]?.send(JSON.stringify({ type: 'stop', model: mid }))
     }
   }
@@ -889,7 +1284,12 @@ export default function App() {
     openTabId(`data:${name}`)
   }
   function openRegionTab(name: string) {
-    sendTo(focused(), { type: 'region_info', name })  // refresh the grid every open (cheap)
+    // default view = top 1% (the paper's headline size), not whatever % was last clicked globally.
+    // capped by the region's saved base_topk — a region saved tighter than 1% can't be widened to 1%.
+    const base = (data[focused()]?.regions ?? []).find((r) => r.name === name)?.base_topk
+    const k = base != null ? Math.min(0.01, base) : 0.01
+    setSpotTopk(k)  // keep the chip highlight in sync with what we requested
+    sendTo(focused(), { type: 'region_info', name, topk: k })  // refresh the grid every open (cheap)
     openTabId(`region:${name}`)
   }
   function toggleCompare(name: string) {
@@ -1001,7 +1401,7 @@ export default function App() {
         <div style={{ display: 'flex', gap: 6, alignItems: 'center', marginBottom: 6 }}>
           <span style={{ color: 'var(--text-1)' }}><span className="mono">▤ {name}</span><span style={hint}> · {examples.length} examples</span></span>
           <Btn onClick={() => emitSpot(focused(), sample(examples))} title="compute spot on the focused model with the parsed examples (sampling applies)" color="var(--accent)" style={{ padding: '2px 10px' }}>Spot</Btn>
-          <Btn onClick={() => setTrainDs(examples.join('\n'))} title="use the parsed examples as the training dataset" style={{ padding: '2px 10px' }}>→ Train data</Btn>
+          <Btn onClick={() => setTrainDsName(name)} title="select this dataset as the training benchmark (Train tab)" style={{ padding: '2px 10px' }}>→ Train data</Btn>
           <Btn onClick={() => sendTo(focused(), { type: 'save_dataset', name, content: dset.content })} title="write to ~/.parametic_studio/datasets (persists across restarts)" style={{ padding: '2px 10px' }}>{dset.server ? 'Save' : 'Save to disk'}</Btn>
         </div>
         {keys && (
@@ -1009,13 +1409,13 @@ export default function App() {
             <span style={{ ...hint, fontSize: 11 }}>fields:</span>
             {keys.map((k) => {
               const on = dset.fields?.includes(k)
-              return <span key={k} onClick={() => toggleField(k)} style={{ fontSize: 11, padding: '1px 8px', borderRadius: 4, cursor: 'pointer', border: '1px solid var(--line-strong)', color: on ? 'var(--accent)' : 'var(--text-2)', background: on ? 'var(--bg-2)' : 'transparent' }}>{on ? '● ' : ''}{k}</span>
+              return <span key={k} onClick={() => toggleField(k)} style={{ fontSize: 11, padding: '1px 8px', borderRadius: 10, cursor: 'pointer', border: '1px solid var(--line-strong)', color: on ? 'var(--accent)' : 'var(--text-2)', background: on ? 'var(--bg-2)' : 'transparent' }}>{on ? '● ' : ''}{k}</span>
             })}
             <span style={{ ...hint, fontSize: 11 }}>{dset.fields?.length ? '(joined per record)' : '(none = auto: text-ish or longest field)'}</span>
           </div>
         )}
         {keys && <div title={examples[0]} className="mono" style={{ ...hint, fontSize: 11, marginBottom: 6, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>parsed[0] → {examples[0] ?? '—'}</div>}
-        <div style={{ width: '100%', height: keys ? 'calc(100% - 96px)' : 'calc(100% - 34px)', minHeight: 120, border: '1px solid var(--line-strong)', borderRadius: 4, overflow: 'hidden', background: 'var(--bg-0)' }}>
+        <div style={{ width: '100%', height: keys ? 'calc(100% - 96px)' : 'calc(100% - 34px)', minHeight: 120, border: '1px solid var(--line-strong)', borderRadius: 10, overflow: 'hidden', background: 'var(--bg-0)' }}>
           <CodeMirror value={dset.content} height="100%" theme="none"
             onChange={(v) => setDatasets((dd) => dd.map((x) => (x.name === name ? { ...x, content: v } : x)))}
             extensions={[
@@ -1036,7 +1436,7 @@ export default function App() {
         <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', marginBottom: 10 }}>
           {regs.map((r) => {
             const on = compareSel.includes(r.name)
-            return <span key={r.name} onClick={() => toggleCompare(r.name)} style={{ fontSize: 11, padding: '1px 8px', borderRadius: 4, cursor: 'pointer', border: `1px solid ${on ? hueCss(regHue(r.name)) : 'var(--line-strong)'}`, color: on ? hueCss(regHue(r.name)) : 'var(--text-2)' }}>{on ? '● ' : ''}◈ {r.name}</span>
+            return <span key={r.name} onClick={() => toggleCompare(r.name)} style={{ fontSize: 11, padding: '1px 8px', borderRadius: 10, cursor: 'pointer', border: `1px solid ${on ? hueCss(regHue(r.name)) : 'var(--line-strong)'}`, color: on ? hueCss(regHue(r.name)) : 'var(--text-2)' }}>{on ? '● ' : ''}◈ {r.name}</span>
           })}
           {regs.length < 2 && <span style={{ ...hint, fontSize: 11 }}>save regions in the spot view first (one per dataset)</span>}
         </div>
@@ -1086,13 +1486,19 @@ export default function App() {
                 onHover={setCompareHover} hovered={compareHover} />
             </>)
           })()}
-          <div style={{ marginTop: 10, fontSize: 11 }}>
-            <span style={hint}>pairwise Jaccard (|A∩B| / |A∪B|):</span>
-            {Object.entries(cd.jaccard).map(([k, v]) => {
-              const [a, b] = k.split('|')
-              return <div key={k} style={{ color: 'var(--text-1)' }}><span style={{ color: hueCss(regHue(a)) }}>{a}</span> ∩ <span style={{ color: hueCss(regHue(b)) }}>{b}</span> = <span style={{ color: 'var(--text-0)' }}>{(v * 100).toFixed(1)}%</span></div>
-            })}
-          </div>
+          {cd.names.length >= 2 && (() => {
+            const pair = Object.values(cd.jaccard)
+            const lo = pair.length ? Math.min(...pair) : 0, hi = pair.length ? Math.max(...pair) : 0
+            return (
+              <div style={{ marginTop: 14 }}>
+                <VizCard title="Spot overlap" accent="var(--accent)"
+                  subtitle="Pairwise Jaccard between the selected spots — how much of the coding region they share. High off-diagonal = a common coding core across languages; low = language-specific weights.">
+                  <JaccardMatrix names={cd.names} jaccard={cd.jaccard} />
+                  <div style={{ ...hint, fontSize: 11, marginTop: 10 }}>shared across all pairs: <span style={{ color: 'var(--accent)' }}>{(lo * 100).toFixed(0)}–{(hi * 100).toFixed(0)}%</span> Jaccard{lo > 0.3 ? ' — strong common core' : lo < 0.1 ? ' — largely language-specific' : ''}</div>
+                </VizCard>
+              </div>
+            )
+          })()}
         </>)}
       </>)
     }
@@ -1101,47 +1507,721 @@ export default function App() {
       if (!(data[focused()]?.regions ?? []).some((r) => r.name === name)) return <span style={hint}>region deleted</span>
       const info = regionInfo[name]
       if (!info) return <span style={hint}>loading region {name}…</span>
-      const g = info.importance ?? info.grid
+      const raw = info.importance ?? info.grid
+      // fixed reference (largest mass seen ≈ base top-k%) so a smaller % dims the map instead of re-pinning it to 100
+      const normalized = info.importance ? scoreGridAgainst(info.importance, regionImpMax[name] ?? 0) : null
+      const g = normalized?.grid ?? raw
+      const viewTopk = info.view_topk ?? info.base_topk ?? spotTopk
+      const topkPct = pctLabel(viewTopk)
+      const shown = Math.min(Math.max(0, hoverLayer ?? layer), Math.max(0, g.length - 1))
       return (<>
-        <div style={{ color: 'var(--text-1)', marginBottom: 4 }}>◈ {name}<span style={hint}> · {info.count.toLocaleString()} weights selected</span></div>
-        <div style={{ ...hint, fontSize: 11, marginBottom: 4 }}>{info.importance
-          ? '|grad×param| importance captured when this spot was computed — same heatmap as the spot view. rows=layers (0↑), cols=modules.'
-          : 'selection fraction per (layer, module) — legacy region without a saved importance map (re-save to get one). note: per-param top-k% makes this ~uniform by construction.'}</div>
-        <ScaleBar max={Math.max(...g.flat())} color={ampColor} label={info.importance ? '|g×w|' : 'fraction'} />
-        <SpotGrid grid={g} modules={info.modules} />
-        {info.base_topk != null && <div style={{ ...hint, fontSize: 11, marginTop: 4 }}>saved at top {(info.base_topk * 100).toFixed(3)}% — adjustable down from there as a knob, never up</div>}
-        <div style={{ ...hint, fontSize: 11, marginTop: 8 }}>to use it: spot view → named-region knob · train view → region select</div>
+        <VizCard title={name} accent="var(--syn-num, #e0a85e)"
+          right={<span style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
+            {SPOT_TOPK_OPTIONS.map((k) => {
+              const disabled = info.base_topk != null && k > info.base_topk
+              return <span key={k} onClick={() => {
+                if (disabled) return
+                setSpotTopk(k)
+                sendTo(mid, { type: 'region_info', name, topk: k })
+              }} className={`chip${spotTopk === k ? ' on' : ''}`} title={disabled ? `saved at ${pctLabel(info.base_topk!)}%, cannot expand to ${pctLabel(k)}%` : `show top ${pctLabel(k)}% parameter region`}
+                style={{ opacity: disabled ? 0.45 : 1, cursor: disabled ? 'default' : 'pointer' }}>{pctLabel(k)}%</span>
+            })}
+            <span className="badge" title="weights selected at the current top-k% (changes as you switch %)">top {topkPct}% · {info.count.toLocaleString()} weights</span>
+          </span>}
+          subtitle={info.importance
+            ? '|gradient × weight| importance captured when this spot was computed, normalized to 0–100 for comparison. Rows = layers (0↑), cols = modules — bright cells are the coding spot.'
+            : 'Selection fraction per (layer, module) — legacy region without a saved importance map (re-save to get one). Per-param top-k% makes this ~uniform by construction.'}>
+          <ScaleBar max={info.importance ? 100 : Math.max(...g.flat())} color={ampColor} label={info.importance ? 'score 0–100' : 'fraction'} />
+          <div style={{ marginTop: 4 }}><SpotGrid grid={g} modules={info.modules}
+            onCell={(l) => setLayer(l)}
+            selected={new Set([`${shown}.${info.modules[0] ?? ''}`])}
+            onHover={(cell) => setHoverLayer(cell ? Number(cell.split('.')[0]) : null)}
+            hovered={hoverLayer != null ? `${hoverLayer}.${info.modules[0] ?? ''}` : null}
+            cellTitle={(l, mod, v) => info.importance
+              ? `L${l} · ${mod} · Parameter Importance Score=${v.toFixed(1)}/100 · raw |g×w|=${(raw[l]?.[info.modules.indexOf(mod)] ?? 0).toExponential(3)}`
+              : `L${l} · ${mod} · fraction=${v.toPrecision(3)}`} /></div>
+          {normalized && <div style={{ ...hint, fontSize: 11, marginTop: 8 }}>raw max |g×w| = {normalized.max.toExponential(3)}</div>}
+          {info.base_topk != null && <div style={{ ...hint, fontSize: 11, marginTop: 8 }}>showing top {((info.view_topk ?? info.base_topk) * 100).toFixed(0)}% · saved at top {(info.base_topk * 100).toFixed(3)}% — adjustable down from there as a knob, never up · use it: spot view → named-region knob · train view → region select</div>}
+        </VizCard>
+        <SpotSummary grid={g} modules={info.modules} />
       </>)
     }
     if (d.loading) return <span style={hint}>loading {open.find((m) => m.id === mid)?.label ?? 'model'}…</span>
     if (view === 'output') return <div className="mono" style={{ whiteSpace: 'pre-wrap' }}>{d.output || <span style={hint}>run a prompt below</span>}{d.busy && <span style={{ color: 'var(--accent)' }}>▌</span>}</div>
     if (view === 'attention') {
-      const last = d.frames.at(-1) ?? null
-      if (!last) return <span style={hint}>attention while generating</span>
-      const shown = hoverLayer ?? layer  // hover previews a layer, click pins it
-      const tri = d.frames.map((f) => f[shown] ?? []); const triC = tri.at(-1)?.length ?? 0
+      const frames = d.frames
+      if (!frames.length) return <span style={hint}>attention shows here while generating (with the attention probe on)</span>
+      const L = frames.at(-1)?.length ?? 0
+      const layerSel = Math.min(Math.max(0, hoverLayer ?? layer), Math.max(0, L - 1))
+      const N = frames.length
+      const toks = [...d.promptTokens, ...d.tokenTexts]
+      const aligned = toks.length === N  // prompt ⧺ generated lines up with the frame count (no history trim)
+      const label = (i: number) => (aligned ? toks[i] : undefined) ?? `#${i}`
+      const disp = (t: string) => (t === '' ? '␀' : t.replace(/\n/g, '⏎').replace(/\t/g, '⇥').replace(/ /g, '·'))
+      const short = (t: string) => { const s = disp(t); return s.length > 11 ? s.slice(0, 11) + '…' : s }
+      const M = frames.map((f) => f[layerSel] ?? [])  // M[q] = attention weights q→k (causal, length q+1)
+      let max = 1e-9
+      for (const r of M) for (const v of r) if (v > max) max = v
+      const CELL = attnZoom
+      const hc = attnCell
+      const readout = hc ? `query ${JSON.stringify(label(hc.q))} → key ${JSON.stringify(label(hc.k))} = ${(M[hc.q]?.[hc.k] ?? 0).toFixed(3)}` : 'hover a cell — row = the token doing the attending, column = the token it looks at'
       return (<>
-        <div style={{ color: 'var(--text-1)', marginBottom: 4 }}>all layers · current token · {last.length}×{last[0].length}<span style={hint}> · rows=layers, cols=kv tokens · brighter = stronger attention · hover to preview, click to pin ↓</span></div>
-        <ScaleBar max={Math.max(...last.flat())} color={cellColor} label="attn" />
-        <Grid rows={last} cols={last[0].length} rowH={6} onRow={(i) => setLayer(i)} onRowEnter={(i) => setHoverLayer(i)} onLeave={() => setHoverLayer(null)} cellTitle={(i, k, v) => `L${i} · kv ${k} · ${v.toFixed(3)}`} />
-        <div style={{ color: 'var(--text-1)', margin: '14px 0 8px' }}>layer {shown}{hoverLayer != null && hoverLayer !== layer ? <span style={hint}> (preview · click to pin, pinned: L{layer})</span> : <span style={hint}> (pinned)</span>} · query × kv · causal<Btn onClick={() => sendTo(mid, { type: 'drilldown', layer: shown })} disabled={pending.has(`drilldown:${mid}`)} style={{ marginLeft: 10, padding: '1px 8px' }}>{pending.has(`drilldown:${mid}`) ? '⟳ ' : ''}Heads</Btn></div>
-        {d.framesFlushed && d.frames.length <= 1
-          ? <Btn onClick={() => sendTo(mid, { type: 'load_run', id: d.lastRunId })} color="var(--accent)">Load full history</Btn>
-          : <Grid rows={tri} cols={triC} rowH={Math.max(2, Math.min(8, Math.floor(200 / Math.max(1, tri.length))))} cellTitle={(i, k, v) => `query ${i} · kv ${k} · ${v.toFixed(3)}`} />}
-        {d.perhead && <div style={{ marginTop: 12, borderTop: '1px solid var(--line)', paddingTop: 10 }}><div style={{ color: 'var(--text-1)', marginBottom: 6 }}>layer {d.perhead.layer} · per-head</div><Grid rows={d.perhead.data} cols={d.perhead.data[0].length} rowH={13} cellTitle={(i, k, v) => `head ${i} · kv ${k} · ${v.toFixed(3)}`} /></div>}
+        <div style={{ color: 'var(--text-1)', marginBottom: 8 }}>Attention matrix<span style={hint}> · row = query token, column = key token, brighter = stronger · causal (upper-right empty) · {N}×{N}{aligned ? '' : ' · labels off (re-run)'}</span></div>
+        <div style={{ display: 'flex', gap: 10, alignItems: 'center', marginBottom: 8, fontSize: 12 }}>
+          <span style={hint}>layer</span>
+          <input type="range" min={0} max={Math.max(0, L - 1)} value={layerSel} onChange={(e) => setLayer(Number(e.target.value))} style={{ width: 200 }} />
+          <span className="mono" style={{ color: 'var(--text-1)' }}>L{layerSel} / {L - 1}</span>
+          <Btn onClick={() => sendTo(mid, { type: 'drilldown', layer: layerSel })} disabled={pending.has(`drilldown:${mid}`)} style={{ padding: '1px 8px' }}>{pending.has(`drilldown:${mid}`) ? '⟳ ' : ''}Heads</Btn>
+          <span style={{ ...hint, marginLeft: 6 }}>zoom</span>
+          <input type="range" min={7} max={40} value={attnZoom} onChange={(e) => setAttnZoom(Number(e.target.value))} title="cell size" style={{ width: 110 }} />
+          <span className="mono" style={{ color: 'var(--text-1)' }}>{attnZoom}px</span>
+          <ScaleBar max={max} color={cellColor} label="attn" />
+        </div>
+        {d.framesFlushed && N <= 1 && <div style={{ marginBottom: 8 }}><Btn onClick={() => sendTo(mid, { type: 'load_run', id: d.lastRunId })} color="var(--accent)">Load full history</Btn></div>}
+        <div className="mono" style={{ fontSize: 11.5, color: hc ? 'var(--text-1)' : 'var(--text-2)', marginBottom: 6, minHeight: 16 }}>{readout}</div>
+        <div style={{ overflow: 'auto', height: 480, minHeight: 200, minWidth: 240, resize: 'both', border: '1px solid var(--line)', borderRadius: 8, background: 'var(--bg-0)' }}
+          onMouseLeave={() => setAttnCell(null)}>
+          <div style={{ display: 'grid', gridTemplateColumns: `104px repeat(${N}, ${CELL}px)`, gap: 1, padding: 6, width: 'max-content' }}>
+            {/* header row: corner + key-token labels (vertical) */}
+            <div />
+            {toks.slice(0, N).map((_, k) => (
+              <div key={`h${k}`} style={{ height: 76, display: 'flex', alignItems: 'flex-end', justifyContent: 'center', overflow: 'hidden' }}>
+                <span title={JSON.stringify(label(k))} style={{ writingMode: 'vertical-rl', transform: 'rotate(180deg)', fontFamily: 'var(--mono, monospace)', fontSize: 10, color: attnCell?.k === k ? 'var(--accent)' : 'var(--text-2)', whiteSpace: 'nowrap' }}>{short(label(k))}</span>
+              </div>
+            ))}
+            {/* body: each row = a query token */}
+            {M.map((rowvals, q) => (
+              <Fragment key={q}>
+                <div title={JSON.stringify(label(q))} className="mono" style={{ height: CELL, display: 'flex', alignItems: 'center', justifyContent: 'flex-end', paddingRight: 6, overflow: 'hidden', fontSize: 10.5, whiteSpace: 'nowrap', color: attnCell?.q === q ? 'var(--accent)' : 'var(--text-1)' }}>{short(label(q))}</div>
+                {toks.slice(0, N).map((_, k) => {
+                  const v = k <= q ? (rowvals[k] ?? 0) : null
+                  const on = attnCell?.q === q && attnCell?.k === k
+                  return <div key={k} onMouseEnter={v == null ? undefined : () => setAttnCell({ q, k })}
+                    title={v == null ? undefined : `q ${q} → k ${k} · ${v.toFixed(3)}`}
+                    style={{ width: CELL, height: CELL, background: v == null ? 'transparent' : cellColor(v, max), outline: on ? '1.5px solid var(--accent)' : 'none', outlineOffset: -1 }} />
+                })}
+              </Fragment>
+            ))}
+          </div>
+        </div>
+        <div style={{ ...hint, fontSize: 11, marginTop: 8 }}>diagonal = self-attention · each row sums to 1 · ·=space ⏎=newline · <b>drag the bottom-right corner to resize</b>, or use the zoom slider to enlarge cells</div>
+        {d.perhead && <div style={{ marginTop: 14, borderTop: '1px solid var(--line)', paddingTop: 10 }}><div style={{ color: 'var(--text-1)', marginBottom: 6, fontSize: 12 }}>layer {d.perhead.layer} · per-head (rows = heads, cols = kv tokens)</div><Grid rows={d.perhead.data} cols={d.perhead.data[0].length} rowH={13} cellTitle={(i, k, v) => `head ${i} · kv ${k} · ${v.toFixed(3)}`} /></div>}
       </>)
+    }
+    if (view === 'importance') {
+      const importance = d.promptImportance
+      const impModules = importance?.modules ?? []
+      const impGrid = importance?.grid ?? null
+      const impScore = impGrid ? normalizedScoreGrid(impGrid) : null
+      const rowCount = impGrid?.length ?? 1
+      const shown = Math.min(Math.max(0, hoverLayer ?? layer), Math.max(0, rowCount - 1))
+      const openRegions = Array.from(new Set(cols.flatMap((c) => c.tiles.flatMap((t) => t.tabs))
+        .filter((t) => t.startsWith('region:')).map((t) => t.slice(7))))
+      const compareName = importanceCompareRegion && openRegions.includes(importanceCompareRegion) ? importanceCompareRegion : (openRegions[0] ?? '')
+      const compareInfo = compareName ? regionInfo[compareName] : null
+      const compareScore = compareInfo ? scoreGridAgainst(compareInfo.importance ?? compareInfo.grid, compareInfo.importance ? (regionImpMax[compareName] ?? 0) : 0).grid : null
+      const diffGrid = impScore && compareInfo && compareScore ? moduleAlignedDiffGrid(impScore.grid, impModules, compareScore, compareInfo.modules) : null
+      const diffVals = diffGrid?.[shown] ?? []
+      const meanAbsDiff = diffVals.length ? diffVals.reduce((a, v) => a + Math.abs(v), 0) / diffVals.length : 0
+      // whole-grid single-number summary of how different the two importance maps are (all layers × modules).
+      // MAD = mean |Δ| (avg score-point gap per cell); RMSE = √mean(Δ²) (weights large local gaps more).
+      const allDiff = diffGrid ? diffGrid.flat() : []
+      const overallMAD = allDiff.length ? allDiff.reduce((a, v) => a + Math.abs(v), 0) / allDiff.length : 0
+      const overallRMSE = allDiff.length ? Math.sqrt(allDiff.reduce((a, v) => a + v * v, 0) / allDiff.length) : 0
+      // cosine similarity of the two module-aligned score maps — scale-invariant, so it answers
+      // "are the important parameters in the same PLACES?" regardless of each map's normalization base.
+      let cosineSim = 0
+      if (impScore && compareInfo && compareScore) {
+        const bIdx = new Map(compareInfo.modules.map((m, i) => [m, i]))
+        let dot = 0, na = 0, nb = 0
+        impScore.grid.forEach((row, l) => row.forEach((av, c) => {
+          const bv = compareScore[l]?.[bIdx.get(impModules[c]) ?? -1] ?? 0
+          dot += av * bv; na += av * av; nb += bv * bv
+        }))
+        cosineSim = na && nb ? dot / (Math.sqrt(na) * Math.sqrt(nb)) : 0
+      }
+      const sub = 'Request + response Parameter Importance Score: |gradient × weight| for the generated exchange, reduced to layer × parameter module, then normalized to 0–100 for comparison. Hover a layer to inspect its module scores; click to pin.'
+      return (
+        <VizCard title="Parameter Importance" accent="var(--syn-num, #e0a85e)" subtitle={sub}
+          right={<span style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
+            {SPOT_TOPK_OPTIONS.map((k) => (
+              <span key={k} onClick={() => {
+                setSpotTopk(k)
+                setNamedRegionTopk(k)
+                if (compareName) sendTo(mid, { type: 'region_info', name: compareName, topk: k })
+              }} className={`chip${spotTopk === k ? ' on' : ''}`} title="top-k parameter region used for saved-region comparison">{pctLabel(k)}%</span>
+            ))}
+            {openRegions.length > 0 && <select value={compareName} onChange={(e) => {
+              const next = e.target.value
+              setImportanceCompareRegion(next)
+              if (next) sendTo(mid, { type: 'region_info', name: next, topk: spotTopk })
+            }} title="compare current prompt importance against an opened saved parameter region"
+              style={{ fontSize: 11, background: 'var(--bg-2)', color: 'var(--text-1)', border: '1px solid var(--line-strong)', borderRadius: 10, padding: '2px 6px', maxWidth: 180 }}>
+              {openRegions.map((n) => <option key={n} value={n}>{n}</option>)}
+            </select>}
+          </span>}>
+          {d.promptImportanceProg && <div style={{ marginBottom: 8 }}><div style={{ display: 'flex', gap: 8, alignItems: 'center' }}><span style={hint}>computing request+response importance · {d.promptImportanceProg.i}/{d.promptImportanceProg.total}</span></div><div style={{ background: 'var(--bg-2)', borderRadius: 6, height: 4, marginTop: 3 }}><div style={{ height: 4, width: `${Math.round((d.promptImportanceProg.i / d.promptImportanceProg.total) * 100)}%`, background: 'var(--accent)', borderRadius: 6 }} /></div></div>}
+          {!impGrid ? <span style={hint}>send a prompt and wait for generation to finish; this view will show only `|gradient × weight|` Parameter Importance Score, not activations.</span>
+            : <>
+              <ScaleBar max={100} color={ampColor} label="score 0–100" />
+              <div style={{ marginTop: 4 }}><SpotGrid grid={impScore!.grid} modules={impModules} color={ampColor}
+                onCell={(l) => setLayer(l)} selected={new Set([`${shown}.${impModules[0] ?? ''}`])}
+                onHover={(cell) => setHoverLayer(cell ? Number(cell.split('.')[0]) : null)}
+                hovered={hoverLayer != null ? `${hoverLayer}.${impModules[0] ?? ''}` : null}
+                cellTitle={(l, mod, v) => `L${l} · ${mod} · Parameter Importance Score=${v.toFixed(1)}/100 · raw |g×w|=${(impGrid[l]?.[impModules.indexOf(mod)] ?? 0).toExponential(3)} · click layer for detail`} /></div>
+              <div style={{ color: 'var(--text-1)', margin: '14px 0 8px' }}>layer {shown}{hoverLayer != null && hoverLayer !== layer ? <span style={hint}> · preview, pinned L{layer}</span> : <span style={hint}> · pinned</span>}<span style={hint}> · request+response Parameter Importance Score 0–100 · raw max {impScore!.max.toExponential(3)} · {impModules.length} parameter modules</span></div>
+              <BarList items={impModules.map((m, c) => ({ label: moduleFullLabel(m), value: impScore!.grid[shown]?.[c] ?? 0, title: `${m} · raw |g×w|=${(impGrid[shown]?.[c] ?? 0).toExponential(3)}` }))} color={ampColor} valueLabel={(v) => v.toFixed(1)} />
+              {openRegions.length === 0 ? <div style={{ ...hint, fontSize: 11, marginTop: 10 }}>Open a saved parameter region tab next to this view to show score differences for the hovered layer.</div>
+                : !compareInfo || !diffGrid ? <div style={{ ...hint, fontSize: 11, marginTop: 10 }}>loading comparison region {compareName}…</div>
+                  : <div style={{ marginTop: 14, borderTop: '1px solid var(--line)', paddingTop: 10 }}>
+                    <div style={{ color: 'var(--text-1)', marginBottom: 8 }}>Δ vs <span className="mono">{compareName}</span><span style={hint}> · current prompt − saved region · layer {shown} · this layer mean |Δ| {meanAbsDiff.toFixed(1)}</span></div>
+                    <div style={{ display: 'grid', gap: 6 }}>
+                      {impModules.map((m, c) => ({ label: moduleFullLabel(m), value: diffGrid[shown]?.[c] ?? 0, title: m })).map((it) => {
+                          const mag = Math.min(100, Math.abs(it.value))
+                          return (
+                            <div key={it.title} title={`${it.title} · Δ=${it.value >= 0 ? '+' : ''}${it.value.toFixed(1)} (${compareName})`} style={{ display: 'grid', gridTemplateColumns: '108px 1fr 48px', gap: 8, alignItems: 'center', fontSize: 11 }}>
+                              <span className="mono" style={{ color: 'var(--text-1)', overflow: 'hidden', textOverflow: 'ellipsis' }}>{it.label}</span>
+                              <div style={{ background: 'var(--bg-2)', borderRadius: 5, height: 11, overflow: 'hidden' }}>
+                                <div style={{ height: 11, width: `${mag}%`, background: it.value >= 0 ? 'var(--accent)' : 'var(--danger)', borderRadius: 5, transition: 'width var(--ease)' }} />
+                              </div>
+                              <span style={{ color: it.value >= 0 ? 'var(--accent)' : 'var(--danger)', textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{it.value >= 0 ? '+' : ''}{it.value.toFixed(1)}</span>
+                            </div>
+                          )
+                        })}
+                    </div>
+                    {/* bottom-of-tab summary: the whole prompt↔region divergence as single numbers */}
+                    <div style={{ marginTop: 16, borderTop: '2px solid var(--line-strong)', paddingTop: 12, display: 'flex', gap: 22, alignItems: 'baseline', flexWrap: 'wrap' }}>
+                      <span style={{ color: 'var(--text-1)', fontSize: 12, fontWeight: 600 }}>Overall difference<span style={hint}> · all {(diffGrid.length)}×{impModules.length} cells vs <span className="mono">{compareName}</span></span></span>
+                      <span style={{ display: 'flex', alignItems: 'baseline', gap: 6 }} title="mean |Δ| over ALL layers × modules — average score-point gap per cell (0–100 scale)">
+                        <span style={hint}>mean |Δ|</span><span style={{ color: 'var(--accent)', fontSize: 20, fontWeight: 700, fontVariantNumeric: 'tabular-nums' }}>{overallMAD.toFixed(1)}</span></span>
+                      <span style={{ display: 'flex', alignItems: 'baseline', gap: 6 }} title="√mean(Δ²) — like mean |Δ| but weights large local gaps more heavily">
+                        <span style={hint}>RMSE</span><span style={{ color: 'var(--text-1)', fontSize: 20, fontWeight: 700, fontVariantNumeric: 'tabular-nums' }}>{overallRMSE.toFixed(1)}</span></span>
+                      <span style={{ display: 'flex', alignItems: 'baseline', gap: 6 }} title="cosine similarity of the two score maps — scale-invariant pattern match (1.000 = identical layout of important modules, regardless of magnitude)">
+                        <span style={hint}>cosine sim</span><span style={{ color: 'var(--text-1)', fontSize: 20, fontWeight: 700, fontVariantNumeric: 'tabular-nums' }}>{cosineSim.toFixed(3)}</span></span>
+                    </div>
+                  </div>}
+            </>}
+        </VizCard>
+      )
     }
     if (view === 'activations') {
-      if (!d.act) return <span style={hint}>activations while generating</span>
       const mods = ['self_attn', 'mlp']
-      return (<>
-        <div style={{ color: 'var(--text-1)', marginBottom: 4 }}>layer × module · output norm</div>
-        <div style={{ ...hint, fontSize: 11, marginBottom: 4 }}>L2 norm of each module's output vector at the last generated token — rows=layers (0↑), cols=self_attn | mlp. brighter = larger contribution to this token.</div>
-        <ScaleBar max={Math.max(...d.act.flat())} color={cellColor} label="‖out‖" />
-        <Grid rows={d.act} cols={d.act[0].length} rowH={7} cellTitle={(i, k, v) => `L${i} · ${mods[k] ?? k} · ‖out‖=${v.toFixed(2)}`} />
-      </>)
+      const frames = d.actDetailFrames.length ? d.actDetailFrames : d.actFrames
+      const modules = d.actDetail?.modules ?? mods
+      const rowCount = frames[0]?.length ?? 1
+      const shown = Math.min(Math.max(0, hoverLayer ?? layer), Math.max(0, rowCount - 1))
+      const sub = 'Forward activation magnitude accumulated over all tokens in the latest generation state. This is not Parameter Importance; it shows which modules produced large output activations for the request/response context.'
+      return (
+        <VizCard title="Activations" accent="var(--accent)" subtitle={sub}>
+          {!frames.length ? <span style={hint}>generate a prompt with the activation probe on to see forward activations</span>
+            : (() => { const g = frames.at(-1)!; return (<>
+              <ScaleBar max={Math.max(...g.flat())} color={cellColor} label="Σ token ‖out‖" />
+              <div style={{ marginTop: 4 }}><SpotGrid grid={g} modules={modules} color={cellColor}
+                onCell={(l) => setLayer(l)} selected={new Set([`${shown}.${modules[0] ?? ''}`])}
+                onHover={(cell) => setHoverLayer(cell ? Number(cell.split('.')[0]) : null)}
+                hovered={hoverLayer != null ? `${hoverLayer}.${modules[0] ?? ''}` : null}
+                cellTitle={(l, mod, v) => `L${l} · ${mod} · Σ token activation ‖out‖=${v.toFixed(2)}`} /></div>
+              <div style={{ color: 'var(--text-1)', margin: '14px 0 8px' }}>layer {shown}{hoverLayer != null && hoverLayer !== layer ? <span style={hint}> · preview, pinned L{layer}</span> : <span style={hint}> · pinned</span>}<span style={hint}> · cumulative token activation · {modules.length} modules</span></div>
+              <BarList items={modules.map((m, c) => ({ label: moduleFullLabel(m), value: g[shown]?.[c] ?? 0, title: m }))} color={cellColor} />
+              <div style={{ ...hint, fontSize: 11, marginTop: 10 }}>Use this to compare which modules light up across prompts. For attribution or causal importance, use the Parameter Importance tab.</div>
+            </>) })()}
+        </VizCard>
+      )
     }
-    if (view === 'logitlens') return d.logit ? (<><div style={{ color: 'var(--text-1)', marginBottom: 8 }}>layer → top-1 · {d.logit.length} layers</div><div style={{ display: 'grid', gap: 3 }}>{d.logit.map((r, l) => <div key={l} style={{ display: 'grid', gridTemplateColumns: '34px 76px 1fr', gap: 8, alignItems: 'center' }}><span className="mono" style={hint}>L{l}</span><span className="mono" style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.token}</span><div style={{ background: 'var(--bg-2)', borderRadius: 2, height: 9 }}><div style={{ height: 9, width: `${Math.round(r.prob * 100)}%`, background: 'var(--accent)', borderRadius: 2 }} /></div></div>)}</div></>) : <span style={hint}>logit lens while generating</span>
+    if (view === 'activations-spot') {
+      const regionPick = spotActRegion[mid] ?? ''
+      const regionSel = (
+        <select value={regionPick} onChange={(e) => setSpotActRegion((s) => ({ ...s, [mid]: e.target.value }))}
+          title="which identified spot to show activation for — a saved region needs no recompute"
+          style={{ fontSize: 11, background: 'var(--bg-2)', color: 'var(--text-1)', border: '1px solid var(--line-strong)', borderRadius: 'var(--radius-ctrl)', padding: '3px 8px' }}>
+          <option value="">current spot</option>
+          {d.regions.map((r) => <option key={r.name} value={r.name}>{r.name} ({r.count.toLocaleString()})</option>)}
+        </select>
+      )
+      const ready = regionPick ? true : !!d.spot  // a saved region needs no computed spot this session
+      const frames = d.spotActFrames
+      const modules = d.spotAct?.modules ?? []
+      const sub = activMode === 'cumulative'
+        ? 'Mean |output value| at the spot\'s neurons over ALL generated tokens — 0 where a module holds no spot weights. The steady spot-firing profile for this run.'
+        : 'Per-token: rows = layers, cols = generated tokens, brightness = the spot\'s total activation at each token. See exactly which tokens light the coding region.'
+      const body = !ready
+        ? <span style={hint}>compute a spot first (Spot tab), or pick a saved region →</span>
+        : !frames.length
+          ? <span style={hint}>generate a prompt to see live activation over the spot</span>
+          : activMode === 'cumulative' ? (() => { const g = meanFrames(frames); return (<>
+              <ScaleBar max={Math.max(...g.flat())} color={cellColor} label="spot activation" />
+              <div style={{ marginTop: 4 }}><SpotGrid grid={g} modules={modules} color={cellColor} cellTitle={(l, mod, v) => `L${l} · ${mod} · mean spot act=${v.toFixed(3)}`} /></div>
+            </>) })()
+          : (<>
+              <ActivationTimeline matrix={layerTimeMatrix(frames)} tokens={d.tokenTexts} label="spot act/token" />
+              <div style={{ ...hint, fontSize: 10, marginTop: 4 }}>{frames.length} tokens · rows = layers · scroll → for long runs</div>
+            </>)
+      return (
+        <VizCard title="Spot activation" accent="var(--accent)" right={<span style={{ display: 'flex', gap: 8, alignItems: 'center' }}><ModeToggle mode={activMode} set={setActivMode} />{regionSel}</span>} subtitle={sub}>
+          {body}
+        </VizCard>
+      )
+    }
+    if (view === 'usage') {
+      const regionPick = usageRegion[mid] ?? ''
+      const promptText = usagePrompts[mid] ?? USAGE_DEFAULT
+      const ready = regionPick ? true : !!d.spot
+      const topk = d.knobs.find((k) => k.kind === 'spot')?.topk ?? spotTopk
+      const regionMsg = regionPick ? { region_name: regionPick } : { topk }
+      const runCompare = () => {
+        const prompts = promptText.split('\n').map((p) => p.trim()).filter(Boolean)
+        if (!prompts.length) return
+        patch(mid, (dd) => ({ ...dd, usage: { ...dd.usage, rows: [], running: true, detail: null } }))
+        sendTo(mid, { type: 'region_usage_batch', prompts, ...regionMsg })
+      }
+      const openDetail = (prompt: string) => sendTo(mid, { type: 'region_usage', prompt, ...regionMsg })
+      const regionSel = (
+        <select value={regionPick} onChange={(e) => setUsageRegion((s) => ({ ...s, [mid]: e.target.value }))} title="which spot to measure usage against"
+          style={{ fontSize: 11, background: 'var(--bg-2)', color: 'var(--text-1)', border: '1px solid var(--line-strong)', borderRadius: 'var(--radius-ctrl)', padding: '3px 8px' }}>
+          <option value="">current spot</option>
+          {d.regions.map((r) => <option key={r.name} value={r.name}>{r.name}</option>)}
+        </select>
+      )
+      const rows = [...d.usage.rows].sort((a, b) => b.overall - a.overall)
+      const detail = d.usage.detail
+      return (
+        <VizCard title="Region usage" accent="var(--accent)" right={regionSel}
+          subtitle="Activation share (Definition A): of all activation flowing through the spot's modules while processing a prompt, how much runs through the spot itself. High = the prompt heavily engages the coding region. Click a prompt for its per-token timeline.">
+          {!ready ? <span style={hint}>compute a spot first (Spot tab), or pick a saved region →</span> : (<>
+            <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start', marginBottom: 12 }}>
+              <textarea value={promptText} onChange={(e) => setUsagePrompts((s) => ({ ...s, [mid]: e.target.value }))} rows={4} spellCheck={false}
+                placeholder="one prompt per line" style={{ flex: 1, background: 'var(--bg-2)', border: '1px solid var(--line-strong)', borderRadius: 'var(--radius-ctrl)', padding: '6px 8px', outline: 'none', resize: 'vertical', fontSize: 12 }} />
+              <Btn onClick={runCompare} disabled={pending.has(`region_usage_batch:${mid}`)} color="var(--accent)" style={{ padding: '5px 14px' }}>{d.usage.running ? '⟳ …' : 'Compare'}</Btn>
+            </div>
+            {rows.length > 0 && (
+              <div style={{ display: 'grid', gap: 6, marginBottom: detail ? 16 : 0 }}>
+                <div style={{ ...hint, fontSize: 11, display: 'grid', gridTemplateColumns: '1fr 120px 44px', gap: 8 }}><span>prompt</span><span>region usage</span><span style={{ textAlign: 'right' }}></span></div>
+                {rows.map((r) => (
+                  <div key={r.prompt} onClick={() => openDetail(r.prompt)} className="hover-row" title="click → per-token timeline"
+                    style={{ display: 'grid', gridTemplateColumns: '1fr 120px 44px', gap: 8, alignItems: 'center', fontSize: 12, cursor: 'pointer', padding: '3px 4px', borderRadius: 6, background: detail?.prompt === r.prompt ? 'var(--accent-soft)' : 'transparent' }}>
+                    <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: 'var(--text-1)' }}>{r.prompt}</span>
+                    <div style={{ background: 'var(--bg-2)', borderRadius: 5, height: 12, overflow: 'hidden' }}><div style={{ height: 12, width: `${Math.round(r.overall * 100)}%`, background: cellColor(r.overall, 1), borderRadius: 5 }} /></div>
+                    <span className="mono" style={{ textAlign: 'right', color: 'var(--text-0)', fontVariantNumeric: 'tabular-nums' }}>{Math.round(r.overall * 100)}%</span>
+                  </div>
+                ))}
+              </div>
+            )}
+            {detail && (
+              <div style={{ borderTop: '1px solid var(--line)', paddingTop: 12 }}>
+                <div style={{ color: 'var(--text-1)', marginBottom: 8, fontSize: 12 }}>Token timeline<span style={hint}> · {detail.prompt} · overall {Math.round(detail.overall * 100)}%</span></div>
+                <div style={{ display: 'grid', gap: 4 }}>
+                  {detail.tokens.map((t, i) => (
+                    <div key={i} style={{ display: 'grid', gridTemplateColumns: '110px 1fr 40px', gap: 8, alignItems: 'center', fontSize: 11 }}>
+                      <span className="mono" style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: 'var(--text-1)' }}>{t.text.replace(/\n/g, '⏎').replace(/ /g, '·') || '∅'}</span>
+                      <div style={{ background: 'var(--bg-2)', borderRadius: 4, height: 10, overflow: 'hidden' }}><div style={{ height: 10, width: `${Math.round(t.usage * 100)}%`, background: cellColor(t.usage, 1), borderRadius: 4 }} /></div>
+                      <span className="mono" style={{ textAlign: 'right', color: 'var(--text-2)', fontVariantNumeric: 'tabular-nums' }}>{Math.round(t.usage * 100)}%</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </>)}
+        </VizCard>
+      )
+    }
+    if (view === 'logitlens') return d.logit ? (<><div style={{ color: 'var(--text-1)', marginBottom: 8 }}>layer → top-1 · {d.logit.length} layers</div><div style={{ display: 'grid', gap: 3 }}>{d.logit.map((r, l) => <div key={l} style={{ display: 'grid', gridTemplateColumns: '34px 76px 1fr', gap: 8, alignItems: 'center' }}><span className="mono" style={hint}>L{l}</span><span className="mono" style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.token}</span><div style={{ background: 'var(--bg-2)', borderRadius: 6, height: 9 }}><div style={{ height: 9, width: `${Math.round(r.prob * 100)}%`, background: 'var(--accent)', borderRadius: 6 }} /></div></div>)}</div></>) : <span style={hint}>logit lens while generating</span>
+    if (view === 'tensors') {
+      const ts = d.tensors
+      if (!ts) {
+        if (!tvFetched.current.has(mid)) { tvFetched.current.add(mid); sendTo(mid, { type: 'tensors' }) }
+        return <span style={hint}>loading tensors…</span>
+      }
+      const layerOf = (name: string) => { const mm = name.match(/^model\.layers\.(\d+)\./); return mm ? mm[1] : 'other' }
+      const keys = Array.from(new Set(ts.map((t) => layerOf(t.name))))
+      const layers = keys.filter((k) => k !== 'other').sort((a, b) => Number(a) - Number(b))
+      if (keys.includes('other')) layers.push('other')
+      const sel = tvSel[mid] ?? { layer: layers[0] ?? 'other', tensor: null }
+      const inLayer = ts.filter((t) => layerOf(t.name) === sel.layer)
+      const shortName = (name: string) => sel.layer === 'other' ? name : name.replace(`model.layers.${sel.layer}.`, '')
+      const src = tvSource[mid] ?? 'weights'
+      const isRegionSrc = src !== 'weights' && src !== 'importance'
+      const srcMsg = (name: string, r0: number, c0: number) => ({ type: 'tensor_values' as const, name, r0, c0, rows: 48, cols: 48, source: isRegionSrc ? 'region' : src, ...(isRegionSrc ? { region: src } : {}) })
+      const pickLayer = (l: string) => setTvSel((s) => ({ ...s, [mid]: { layer: l, tensor: null } }))
+      const load = (name: string, r0 = 0, c0 = 0) => { setTvHover(null); setTvSel((s) => ({ ...s, [mid]: { layer: sel.layer, tensor: name } })); setPendingKey(`tensor_values:${mid}`, true); sendTo(mid, srcMsg(name, r0, c0)) }
+      const pickSource = (next: string) => { setTvSource((s) => ({ ...s, [mid]: next })); setTvHover(null); if (sel.tensor) { setPendingKey(`tensor_values:${mid}`, true); const isReg = next !== 'weights' && next !== 'importance'; sendTo(mid, { type: 'tensor_values', name: sel.tensor, r0: 0, c0: 0, rows: 48, cols: 48, source: isReg ? 'region' : next, ...(isReg ? { region: next } : {}) }) } }
+      const tv = sel.tensor && tvData[mid]?.name === sel.tensor && tvData[mid]?.source === (isRegionSrc ? 'region' : src) ? tvData[mid] : null
+      const loading = pending.has(`tensor_values:${mid}`)
+      const absmax = tv?.stats.absmax || 1
+      const posMax = tv?.stats.max || 1
+      // weights → diverging blue/red (signed); importance/region → amber sequential (≥0)
+      const cellBg = (v: number) => tv?.signed
+        ? (v >= 0 ? `rgba(45,127,249,${Math.min(1, v / absmax)})` : `rgba(248,43,96,${Math.min(1, Math.abs(v) / absmax)})`)
+        : ampColor(v, posMax)
+      const cols = tv?.values[0]?.length ?? 0
+      const srcLabel = src === 'weights' ? 'model weights θ' : src === 'importance' ? 'live |grad×weight| importance' : `region “${src}” importance`
+      return (
+        <VizCard title="Tensors" accent="var(--syn-num, #e0a85e)"
+          subtitle="Pick a value source, a layer, then a tensor. weights = the model's parameters θ (signed). importance = the live |g×w| from the last spot/prompt. region = a saved spot's importance (0 outside the spot). Big tensors show a 48×48 window; stats are over the full tensor."
+          right={<select value={src} onChange={(e) => pickSource(e.target.value)} title="which values to show at each parameter position"
+            style={{ fontSize: 11, background: 'var(--bg-2)', color: 'var(--text-1)', border: '1px solid var(--line-strong)', borderRadius: 10, padding: '2px 6px', maxWidth: 220 }}>
+            <option value="weights">원본 모델 · weights θ</option>
+            <option value="importance">실시간 Parameter Importance</option>
+            {(d.regions ?? []).length > 0 && <optgroup label="저장된 영역 (region)">
+              {(d.regions ?? []).map((r) => <option key={r.name} value={r.name}>{r.name}</option>)}
+            </optgroup>}
+          </select>}>
+          <div style={{ ...hint, marginBottom: 8 }}>Showing: <span style={{ color: 'var(--text-1)' }}>{srcLabel}</span></div>
+          <div style={{ ...hint, marginBottom: 4 }}>Layer</div>
+          <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', marginBottom: 12 }}>
+            {layers.map((l) => <span key={l} onClick={() => pickLayer(l)} className={`chip${sel.layer === l ? ' on' : ''}`} style={{ cursor: 'pointer' }}>{l === 'other' ? 'other' : `L${l}`}</span>)}
+          </div>
+          <div style={{ ...hint, marginBottom: 4 }}>Tensors in {sel.layer === 'other' ? 'other' : `layer ${sel.layer}`} · {inLayer.length}</div>
+          <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', marginBottom: 14 }}>
+            {inLayer.map((t) => (
+              <span key={t.name} onClick={() => load(t.name)} className={`chip${sel.tensor === t.name ? ' on' : ''}`} title={`${t.name} · [${t.shape.join('×')}] ${t.dtype}`} style={{ cursor: 'pointer', display: 'inline-flex', gap: 6, alignItems: 'center' }}>
+                <Icon name="tensor" size={11} /><span className="mono">{shortName(t.name)}</span><span style={hint}>[{t.shape.join('×')}]</span>
+              </span>
+            ))}
+          </div>
+          {!tv ? <span style={hint}>{loading ? 'loading values…' : 'select a tensor above to see its values'}</span>
+            : <>
+              <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', alignItems: 'baseline', marginBottom: 8, fontSize: 11 }}>
+                <span className="mono" style={{ color: 'var(--text-1)', fontWeight: 600 }}>{tv.name}</span>
+                <span style={hint}>shape [{tv.shape.join('×')}] · {tv.dtype}{tv.flattened ? ' · flattened to 2D' : ''}</span>
+                <span style={{ fontVariantNumeric: 'tabular-nums' }}><span style={hint}>min </span>{tv.stats.min.toExponential(2)} <span style={hint}>max </span>{tv.stats.max.toExponential(2)} <span style={hint}>mean </span>{tv.stats.mean.toExponential(2)} <span style={hint}>std </span>{tv.stats.std.toExponential(2)}</span>
+              </div>
+              {/* paging: windows into a tensor larger than 48×48 */}
+              {(tv.rows_total > tv.values.length || tv.cols_total > cols) && (
+                <div style={{ display: 'flex', gap: 10, alignItems: 'center', marginBottom: 8, fontSize: 11 }}>
+                  <span style={hint}>rows {tv.r0}–{tv.r0 + tv.values.length} / {tv.rows_total} · cols {tv.c0}–{tv.c0 + cols} / {tv.cols_total}</span>
+                  <span style={{ display: 'flex', gap: 3 }}>
+                    <Btn onClick={() => load(tv.name, Math.max(0, tv.r0 - 48), tv.c0)} disabled={tv.r0 <= 0} style={{ padding: '1px 7px' }}>↑</Btn>
+                    <Btn onClick={() => load(tv.name, tv.r0 + 48, tv.c0)} disabled={tv.r0 + tv.values.length >= tv.rows_total} style={{ padding: '1px 7px' }}>↓</Btn>
+                    <Btn onClick={() => load(tv.name, tv.r0, Math.max(0, tv.c0 - 48))} disabled={tv.c0 <= 0} style={{ padding: '1px 7px' }}>←</Btn>
+                    <Btn onClick={() => load(tv.name, tv.r0, tv.c0 + 48)} disabled={tv.c0 + cols >= tv.cols_total} style={{ padding: '1px 7px' }}>→</Btn>
+                  </span>
+                </div>
+              )}
+              <div style={{ display: 'flex', gap: 10, alignItems: 'center', marginBottom: 6, fontSize: 11 }}>
+                {tv.signed ? <>
+                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}><span style={{ width: 12, height: 12, background: 'rgba(248,43,96,0.85)', borderRadius: 2 }} /><span style={hint}>negative</span></span>
+                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}><span style={{ width: 12, height: 12, background: 'rgba(45,127,249,0.85)', borderRadius: 2 }} /><span style={hint}>positive</span></span>
+                  <span style={hint}>intensity = |value| / {absmax.toExponential(2)} (abs max)</span>
+                </> : <>
+                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}><span style={{ width: 12, height: 12, background: ampColor(0, 1), borderRadius: 2 }} />→<span style={{ width: 12, height: 12, background: ampColor(1, 1), borderRadius: 2 }} /><span style={hint}>low → high</span></span>
+                  <span style={hint}>{src === 'importance' ? '|grad×weight| importance' : 'region importance'} · dark = 0 (outside the spot / unimportant) · max {posMax.toExponential(2)}</span>
+                </>}
+              </div>
+              {/* hover readout: value appears while over the map, clears when the mouse leaves. min-height keeps layout stable */}
+              <div style={{ minHeight: 20, marginBottom: 6, fontSize: 12, fontVariantNumeric: 'tabular-nums' }}>
+                {tvHover
+                  ? <span><span style={hint}>[row {tv.r0 + tvHover.i}, col {tv.c0 + tvHover.j}] = </span><span style={{ color: tvHover.v >= 0 ? 'var(--accent)' : 'var(--danger)', fontWeight: 700 }}>{tvHover.v.toExponential(6)}</span></span>
+                  : <span style={hint}>hover a cell to read its value</span>}
+              </div>
+              <div onMouseLeave={() => setTvHover(null)} style={{ overflow: 'auto', maxWidth: '100%', border: '1px solid var(--line)', borderRadius: 6, padding: 4 }}>
+                <div style={{ display: 'grid', gridTemplateColumns: `repeat(${cols}, 13px)`, gap: 1 }}>
+                  {tv.values.flatMap((row, i) => row.map((v, j) => (
+                    <div key={`${i}.${j}`} onMouseEnter={() => setTvHover({ i, j, v })}
+                      style={{ width: 13, height: 13, background: cellBg(v), borderRadius: 2, outline: tvHover?.i === i && tvHover?.j === j ? '1px solid var(--text-1)' : 'none' }} />
+                  )))}
+                </div>
+              </div>
+            </>}
+        </VizCard>
+      )
+    }
+    if (view === 'control') {
+      const regions = d.regions ?? []
+      const sel = ctrlSel[mid] ?? ''
+      const selReg = regions.find((r) => r.name === sel)
+      const base = selReg?.base_topk
+      const topk = ctrlTopk[mid] ?? (base != null ? Math.min(0.01, base) : 0.01)
+      const applied = ctrlApplied[mid]
+      const cp = ctrlPpl[mid] ?? {}
+      const busy = pending.has(`ppl:${mid}`) || pending.has(`intervene:${mid}`)
+      const fmt = (v: number | undefined) => v == null ? '—' : v >= 1e4 ? v.toExponential(1) : v.toFixed(1)
+      const shortRegion = (name: string) => name.length > 28 ? `${name.slice(0, 25)}…` : name
+      const pick = (name: string) => { setCtrlSel((s) => ({ ...s, [mid]: name })); setCtrlApplied((a) => ({ ...a, [mid]: null })); setCtrlPpl((c) => ({ ...c, [mid]: {} })) }
+      const apply = () => { if (!sel) return; sendTo(mid, { type: 'intervene', region: { kind: 'named', name: sel, topk }, op: ctrlOp, alpha: ctrlAlpha, key: 'control' }); setCtrlApplied((a) => ({ ...a, [mid]: { name: sel, op: ctrlOp, alpha: ctrlAlpha, topk } })) }
+      const clear = () => { sendTo(mid, { type: 'clear', key: 'control' }); setCtrlApplied((a) => ({ ...a, [mid]: null })) }
+      // one-click A/B: measure clean → apply the adjustment → measure adjusted (kernel processes ws msgs in order)
+      const compare = () => {
+        if (!sel) return
+        const code = dsExamples; const gen = GENERAL_SET.split('\n').filter(Boolean)
+        setCtrlPpl((c) => ({ ...c, [mid]: {} }))
+        sendTo(mid, { type: 'clear', key: 'control' })
+        sendTo(mid, { type: 'ppl', examples: code, tag: 'ctrl:cleanCode' })
+        sendTo(mid, { type: 'ppl', examples: gen, tag: 'ctrl:cleanGen' })
+        sendTo(mid, { type: 'intervene', region: { kind: 'named', name: sel, topk }, op: ctrlOp, alpha: ctrlAlpha, key: 'control' })
+        sendTo(mid, { type: 'ppl', examples: code, tag: 'ctrl:adjCode' })
+        sendTo(mid, { type: 'ppl', examples: gen, tag: 'ctrl:adjGen' })
+        setCtrlApplied((a) => ({ ...a, [mid]: { name: sel, op: ctrlOp, alpha: ctrlAlpha, topk } }))
+      }
+      // benchmark: HumanEval pass@1 on the CURRENT weights (clean if nothing applied, else the deleted state)
+      const ce = ctrlEval[mid] ?? {}
+      const evalBusy = pending.has(`eval_code:${mid}`)
+      const evalMsg = (slot: 'clean' | 'deleted') => {
+        ctrlEvalSlot.current[mid] = slot
+        const extra = (ctrlEvalGpus[mid] ?? []).map((i) => `cuda:${i}`)
+        setPendingKey(`eval_code:${mid}`, true)
+        sendTo(mid, { type: 'eval_code', dataset: ctrlEvalDs, temperature: 0, max_tokens: 512, limit: ctrlEvalLimit, ...(extra.length ? { extra_devices: extra } : {}) })
+      }
+      const runBench = () => {
+        if (!ctrlEvalDs) { toast('[bench] pick a HumanEval dataset first'); return }
+        evalMsg(applied ? 'deleted' : 'clean')
+      }
+      // one-click: zero the region at the current top-k%, then benchmark THAT damaged model right away.
+      // messages are processed in order on the connection, so the intervene lands before the eval reads weights.
+      const deleteAndBench = () => {
+        if (!ctrlEvalDs) { toast('[bench] pick a HumanEval dataset first'); return }
+        apply()
+        evalMsg('deleted')
+      }
+      const pctFmt = (v: number | undefined) => v == null ? '—' : `${(v * 100).toFixed(1)}%`
+      return (
+        <VizCard title="Region control" accent="var(--accent)"
+          subtitle="Pick one of the regions you've found and adjust its weights — zero it (delete), scale by α, or randomize — then measure the effect on code vs general PPL. Reversible: Clear restores the original weights.">
+          {regions.length === 0 ? <span style={hint}>no saved regions yet — compute a spot in the Spot view and Save it first.</span>
+            : <>
+              <div style={{ ...hint, marginBottom: 4 }}>Regions · {regions.length}</div>
+              <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 14 }}>
+                {regions.map((r) => (
+                  <span key={r.name} onClick={() => pick(r.name)} className={`chip${sel === r.name ? ' on' : ''}`} style={{ cursor: 'pointer', display: 'inline-flex', gap: 6, alignItems: 'center' }}
+                    title={`${r.count.toLocaleString()} weights${r.base_topk != null ? ` · saved at top ${pctLabel(r.base_topk)}%` : ''}`}>
+                    <span className="mono">{r.name}</span><span style={hint}>{r.count.toLocaleString()}{r.base_topk != null ? ` · ${pctLabel(r.base_topk)}%` : ''}</span>
+                  </span>
+                ))}
+              </div>
+              {!sel ? <span style={hint}>select a region above to adjust it</span>
+                : <>
+                  <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'flex-end', marginBottom: 12 }}>
+                    <label style={{ display: 'flex', flexDirection: 'column', gap: 3, fontSize: 11 }}><span style={hint}>operation</span>
+                      <select value={ctrlOp} onChange={(e) => setCtrlOp(e.target.value)} style={{ fontSize: 12, background: 'var(--bg-2)', color: 'var(--text-1)', border: '1px solid var(--line-strong)', borderRadius: 8, padding: '3px 6px' }}>
+                        {['zero', 'scale', 'mean', 'random'].map((o) => <option key={o} value={o}>{o === 'zero' ? 'zero (delete)' : o === 'scale' ? 'scale × α' : o}</option>)}
+                      </select></label>
+                    {ctrlOp === 'scale' && <label style={{ display: 'flex', flexDirection: 'column', gap: 3, fontSize: 11 }}><span style={hint}>α = {ctrlAlpha.toFixed(2)}</span>
+                      <input type="range" min={0} max={2} step={0.05} value={Math.min(ctrlAlpha, 2)} onChange={(e) => setCtrlAlpha(Number(e.target.value))} style={{ width: 130 }} /></label>}
+                    {(() => {
+                      // log-scale slider over the paper range (0.0025%) up to 5% or the region's saved base, whichever is smaller
+                      const lo = 0.000025, hi = Math.max(lo, base != null ? Math.min(0.05, base) : 0.05)
+                      const Llo = Math.log10(lo), Lhi = Math.log10(hi), span = Lhi - Llo
+                      const cur = Math.min(Math.max(topk, lo), hi)
+                      const pos = span > 0 ? Math.round(((Math.log10(cur) - Llo) / span) * 1000) : 0
+                      const fromPos = (pp: number) => span > 0 ? Math.pow(10, Llo + (pp / 1000) * span) : lo
+                      const setTopk = (t: number) => { ctrlTopkRef.current = t; setCtrlTopk((tt) => ({ ...tt, [mid]: t })) }
+                      const reapply = () => { if (applied) { const t = ctrlTopkRef.current; sendTo(mid, { type: 'intervene', region: { kind: 'named', name: sel, topk: t }, op: ctrlOp, alpha: ctrlAlpha, key: 'control' }); setCtrlApplied((a) => ({ ...a, [mid]: { name: sel, op: ctrlOp, alpha: ctrlAlpha, topk: t } })) } }
+                      return <div style={{ display: 'flex', flexDirection: 'column', gap: 3, fontSize: 11 }}>
+                        <span style={hint}>top-k %{base != null ? ` (≤ ${pctLabel(hi)})` : ''}{applied ? ' · change → re-apply' : ''}</span>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                          <input type="range" min={0} max={1000} value={pos}
+                            onChange={(e) => setTopk(fromPos(Number(e.target.value)))} onPointerUp={reapply} style={{ width: 170 }} />
+                          <input type="number" min={0.0001} max={+(hi * 100).toFixed(4)} step={0.001} value={+(topk * 100).toFixed(4)}
+                            onChange={(e) => setTopk(Math.min(hi, Math.max(0.000001, (Number(e.target.value) || 0) / 100)))}
+                            onBlur={reapply} onKeyDown={(e) => { if (e.key === 'Enter') reapply() }}
+                            title="type an exact top-k% (e.g. 0.0025)" style={{ width: 72, fontSize: 12, background: 'var(--bg-2)', color: 'var(--text-1)', border: '1px solid var(--line-strong)', borderRadius: 8, padding: '3px 6px' }} />
+                          <span style={hint}>%</span>
+                        </div>
+                      </div>
+                    })()}
+                    <div style={{ display: 'flex', gap: 6 }}>
+                      <Btn onClick={apply} disabled={busy} color="var(--accent)" style={{ padding: '4px 12px' }}>Apply</Btn>
+                      <Btn onClick={clear} disabled={busy} style={{ padding: '4px 12px' }}>Clear</Btn>
+                      <Btn onClick={compare} disabled={busy} style={{ padding: '4px 12px' }} title="measure code+general PPL clean vs adjusted">{busy ? '⟳' : 'Compare PPL'}</Btn>
+                    </div>
+                  </div>
+                  <div style={{ ...hint, fontSize: 11, marginBottom: 10 }}>
+                    {applied ? <span style={{ color: 'var(--danger)' }}>● applied: {applied.op}{applied.op === 'scale' ? ` ×${applied.alpha.toFixed(2)}` : ''} on “{applied.name}” @ top {pctLabel(applied.topk)}% — weights are modified now</span>
+                      : <span>● not applied — original weights</span>}
+                  </div>
+                  {(cp.cleanCode != null || cp.adjCode != null) && (
+                    <div style={{ borderTop: '1px solid var(--line)', paddingTop: 10 }}>
+                      <div style={{ color: 'var(--text-1)', marginBottom: 8, fontSize: 12, fontWeight: 600 }}>PPL · clean vs adjusted<span style={hint}> · code = {(dsExamples.length)} spot-editor examples · general = neutral text</span></div>
+                      <div style={{ display: 'grid', gridTemplateColumns: '90px 1fr 1fr', gap: 1, maxWidth: 460, fontSize: 12 }}>
+                        <div style={{ ...hint, padding: '3px 6px' }} />
+                        <div style={{ padding: '3px 6px', fontWeight: 600, background: 'var(--bg-2)' }}>code PPL</div>
+                        <div style={{ padding: '3px 6px', fontWeight: 600, background: 'var(--bg-2)' }}>general PPL</div>
+                        <div style={{ ...hint, padding: '3px 6px' }}>clean</div>
+                        <div className="mono" style={{ padding: '3px 6px', fontVariantNumeric: 'tabular-nums' }}>{fmt(cp.cleanCode)}</div>
+                        <div className="mono" style={{ padding: '3px 6px', fontVariantNumeric: 'tabular-nums' }}>{fmt(cp.cleanGen)}</div>
+                        <div style={{ ...hint, padding: '3px 6px' }}>adjusted</div>
+                        <div className="mono" style={{ padding: '3px 6px', fontVariantNumeric: 'tabular-nums', color: (cp.adjCode != null && cp.cleanCode != null && cp.adjCode > cp.cleanCode * 3) ? 'var(--danger)' : 'var(--text-1)', fontWeight: 600 }}>{fmt(cp.adjCode)}</div>
+                        <div className="mono" style={{ padding: '3px 6px', fontVariantNumeric: 'tabular-nums' }}>{fmt(cp.adjGen)}</div>
+                      </div>
+                      <div style={{ ...hint, fontSize: 10, marginTop: 6 }}>red = code PPL collapsed (&gt;3× clean). Damaging a real coding spot should spike code PPL while general stays put.</div>
+                    </div>
+                  )}
+                  {/* Benchmark: HumanEval pass@1 on the current state (clean vs deleted) */}
+                  <div style={{ borderTop: '1px solid var(--line)', paddingTop: 10, marginTop: 12 }}>
+                    <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginBottom: 8 }}>
+                      <span style={{ color: 'var(--text-1)', fontSize: 12, fontWeight: 600 }}>Benchmark pass@1</span>
+                      <select value={ctrlEvalDs} onChange={(e) => setCtrlEvalDs(e.target.value)} title="a HumanEvalPack dataset (rows with a `prompt`)"
+                        style={{ fontSize: 11, background: 'var(--bg-2)', color: 'var(--text-1)', border: '1px solid var(--line-strong)', borderRadius: 8, padding: '2px 6px', maxWidth: 260 }}>
+                        <option value="">pick dataset…</option>
+                        {datasets.filter((x) => x.name.endsWith('.jsonl')).map((x) => <option key={x.name} value={x.name}>{x.name}</option>)}
+                      </select>
+                      <label style={{ display: 'inline-flex', alignItems: 'center', gap: 4, whiteSpace: 'nowrap', fontSize: 11 }} title="how many problems to evaluate (dataset has up to 164)">
+                        <span style={hint}># problems</span>
+                        <input type="number" min={1} value={ctrlEvalLimit} onChange={(e) => setCtrlEvalLimit(Math.max(1, Number(e.target.value) || 1))}
+                          style={{ width: 56, fontSize: 11, background: 'var(--bg-2)', color: 'var(--text-1)', border: '1px solid var(--line-strong)', borderRadius: 8, padding: '2px 6px' }} />
+                      </label>
+                      <Btn onClick={deleteAndBench} disabled={evalBusy} color="var(--accent)" style={{ padding: '4px 12px' }}
+                        title={`zero “${sel}” at top ${pctLabel(topk)}% and benchmark that damaged model in one click`}>
+                        {evalBusy ? `⟳ running ${shortRegion(sel)}` : `${ctrlOp === 'zero' ? 'Delete' : 'Apply'} ${shortRegion(sel)} @ ${pctLabel(topk)}% → benchmark`}</Btn>
+                      <Btn onClick={runBench} disabled={evalBusy} style={{ padding: '4px 12px' }}
+                        title="benchmark the CURRENT state as-is (clean if nothing applied, else the damaged model) — use for a clean baseline before deleting">
+                        {applied ? 'Run on deleted' : 'Run on clean'}</Btn>
+                    </div>
+                    {gpus && gpus.count > 1 && (() => {
+                      const home = gpus.devices.find((g) => g.models.includes(mid))?.index
+                      const ex = ctrlEvalGpus[mid] ?? []
+                      const toggle = (i: number) => { if (evalBusy) return; setCtrlEvalGpus((s) => ({ ...s, [mid]: ex.includes(i) ? ex.filter((x) => x !== i) : [...ex, i] })) }
+                      return (
+                        <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap', fontSize: 11, marginBottom: 8, opacity: evalBusy ? 0.55 : 1 }}>
+                          <span style={hint} title="split the benchmark problems across these GPUs too — faster, same pass@1">+ GPUs to help</span>
+                          {gpus.devices.filter((g) => g.index !== home).map((g) => (
+                            <span key={g.index} onClick={() => toggle(g.index)} title={evalBusy ? 'locked while running' : `${g.name} · ${Math.round(g.mem_used_mb / 1024)}/${Math.round(g.mem_total_mb / 1024)}G used`}
+                              className={`chip${ex.includes(g.index) ? ' on' : ''}`} style={{ cursor: evalBusy ? 'default' : 'pointer' }}>
+                              {ex.includes(g.index) ? '●' : '○'} GPU{g.index}
+                            </span>
+                          ))}
+                          {ex.length > 0 && <span style={hint}>· runs on {1 + ex.length} GPUs in parallel{evalBusy ? ' (locked)' : ''}</span>}
+                        </div>
+                      )
+                    })()}
+                    {evalBusy && (() => {
+                      const done = d.evalProg?.i ?? 0, tot = d.evalProg?.total ?? ctrlEvalLimit, pct = tot ? Math.round((done / tot) * 100) : 0
+                      return <div style={{ marginBottom: 10 }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, marginBottom: 3 }}>
+                          <span style={hint}>{done === 0 ? 'generating first solution…' : `solving · ${done}/${tot} · passed ${d.evalProg?.passed ?? 0}`}</span>
+                          <span style={hint}>{pct}%</span>
+                        </div>
+                        <div style={{ background: 'var(--bg-2)', borderRadius: 6, height: 6, overflow: 'hidden' }}>
+                          <div style={{ height: 6, width: `${pct}%`, background: 'var(--accent)', borderRadius: 6, transition: 'width var(--ease)' }} />
+                        </div>
+                      </div>
+                    })()}
+                    {(ce.clean || ce.deleted) && (
+                      <div style={{ display: 'grid', gridTemplateColumns: '90px 1fr', gap: 1, maxWidth: 360, fontSize: 12 }}>
+                        <div style={{ ...hint, padding: '3px 6px' }} /><div style={{ padding: '3px 6px', fontWeight: 600, background: 'var(--bg-2)' }}>pass@1</div>
+                        <div style={{ ...hint, padding: '3px 6px' }}>clean</div>
+                        <div className="mono" style={{ padding: '3px 6px', fontVariantNumeric: 'tabular-nums' }}>{ce.clean ? `${pctFmt(ce.clean.pass_at_1)} (${ce.clean.passed}/${ce.clean.total})` : '—'}</div>
+                        <div style={{ ...hint, padding: '3px 6px' }}>deleted</div>
+                        <div className="mono" style={{ padding: '3px 6px', fontVariantNumeric: 'tabular-nums', color: (ce.deleted && ce.clean && ce.deleted.pass_at_1 < ce.clean.pass_at_1) ? 'var(--danger)' : 'var(--text-1)', fontWeight: 600 }}>{ce.deleted ? `${pctFmt(ce.deleted.pass_at_1)} (${ce.deleted.passed}/${ce.deleted.total})` : '—'}</div>
+                      </div>
+                    )}
+                    <div style={{ ...hint, fontSize: 10, marginTop: 6 }}>Clear → Run (clean baseline), then Apply delete → Run (deleted). A real coding spot should drop pass@1 sharply. limit caps # problems — full set is slower.</div>
+                  </div>
+                </>}
+            </>}
+        </VizCard>
+      )
+    }
+    if (view === 'code') {
+      const files = codeFiles[mid] ?? [{ name: 'main.py', src: DEFAULT_CODE_PROMPT }]
+      const active = codeActive[mid] ?? files[0]?.name ?? 'main.py'
+      codeActiveRef.current[mid] = active
+      const file = files.find((f) => f.name === active) ?? files[0]
+      const src = file?.src ?? ''
+      const res = codeResult[mid]
+      const cc = codeContrast[mid]
+      const genBusy = pending.has(`gen_code:${mid}`)
+      const runBusy = pending.has(`run_code:${mid}`)
+      const ccBusy = pending.has(`code_contrast:${mid}`)
+      const busy = genBusy || runBusy || ccBusy
+      const csel = ctrlSel[mid] ?? ''  // reuse Region control's region for the clean-vs-deleted contrast
+      const cbase = (data[mid]?.regions ?? []).find((r) => r.name === csel)?.base_topk
+      const ctopk = ctrlTopk[mid] ?? (cbase != null ? Math.min(0.01, cbase) : 0.01)
+      const setSrc = (v: string) => setCodeFiles((cf) => ({ ...cf, [mid]: (cf[mid] ?? files).map((f) => f.name === active ? { ...f, src: v } : f) }))
+      const selectFile = (n: string) => setCodeActive((a) => ({ ...a, [mid]: n }))
+      const addFile = () => { let i = files.length + 1, n = `file${i}.py`; while (files.some((f) => f.name === n)) { i++; n = `file${i}.py` } setCodeFiles((cf) => ({ ...cf, [mid]: [...(cf[mid] ?? files), { name: n, src: '' }] })); selectFile(n) }
+      const delFile = (n: string) => { const next = (codeFiles[mid] ?? files).filter((f) => f.name !== n); if (!next.length) return; setCodeFiles((cf) => ({ ...cf, [mid]: next })); if (active === n) selectFile(next[0].name) }
+      const generate = () => { setPendingKey(`gen_code:${mid}`, true); sendTo(mid, { type: 'gen_code', prompt: src, max_tokens: 256, temperature: 0 }) }  // editor content IS the prompt
+      const run = () => { if (!src.trim()) { toast('[code] file is empty'); return } setPendingKey(`run_code:${mid}`, true); sendTo(mid, { type: 'run_code', source: src, timeout: 10 }) }
+      const compare = () => {
+        if (!csel) { toast('[code] pick a region in Region control first'); return }
+        setCodeContrast((c) => ({ ...c, [mid]: {} })); setPendingKey(`code_contrast:${mid}`, true)
+        sendTo(mid, { type: 'code_contrast', prompt: src, region: { kind: 'named', name: csel, topk: ctopk }, op: ctrlOp, alpha: ctrlAlpha, max_tokens: 256, timeout: 10 })
+      }
+      const runBadge = (r: RunOut | undefined) => r == null ? null : (
+        r.timed_out ? <span style={{ color: 'var(--danger)' }}>&#9201; timed out</span>
+          : r.exit === 0 ? <span style={{ color: 'var(--accent)' }}>&#10003; exit 0 &#183; {r.duration_ms}ms</span>
+            : <span style={{ color: 'var(--danger)' }}>&#10007; exit {r.exit} &#183; {r.duration_ms}ms</span>)
+      const outBox = (r: RunOut | undefined, max = 160) => r == null ? <span style={hint}>&#8212;</span> : (
+        <div className="mono" style={{ fontSize: 11, whiteSpace: 'pre-wrap', maxHeight: max, overflow: 'auto' }}>
+          {r.stdout && <div style={{ color: 'var(--text-1)' }}>{r.stdout}</div>}
+          {r.stderr && <div style={{ color: 'var(--danger)' }}>{r.stderr}</div>}
+          {!r.stdout && !r.stderr && <span style={hint}>(no output)</span>}
+        </div>)
+      return (
+        <div style={{ margin: '-12px -14px', height: 'calc(100vh - 118px)', minHeight: 620, display: 'flex', flexDirection: 'column', background: 'var(--bg-0)', overflow: 'hidden' }}>
+          <div style={{ height: 38, flexShrink: 0, display: 'flex', alignItems: 'center', gap: 8, padding: '0 12px', borderBottom: '1px solid var(--line)', background: 'var(--bg-1)' }}>
+            <span style={{ width: 8, height: 8, borderRadius: 3, background: 'var(--accent)' }} />
+            <span style={{ color: 'var(--text-0)', fontWeight: 700, fontSize: 13 }}>Code</span>
+            <span className="mono" style={{ color: 'var(--text-2)', fontSize: 11 }}>{active}</span>
+            <span style={{ marginLeft: 'auto', display: 'flex', gap: 6, alignItems: 'center' }}>
+              <Btn onClick={generate} disabled={busy} color="var(--accent)" style={{ padding: '3px 10px' }} title="current model completes/replaces the open editable file">{genBusy ? '⟳' : 'Generate with model'}</Btn>
+              <Btn onClick={run} disabled={busy} style={{ padding: '3px 10px' }} title="run the open file (⌘/Ctrl+Enter)">{runBusy ? '⟳' : 'Run'}</Btn>
+              <Btn onClick={compare} disabled={busy || !csel} style={{ padding: '3px 10px' }} title="the model writes the open file clean, then with the region deleted — both run">{ccBusy ? '⟳ comparing' : 'Clean vs deleted'}</Btn>
+            </span>
+          </div>
+
+          <div style={{ flex: 1, minHeight: 0, display: 'flex' }}>
+            <div style={{ width: 220, flexShrink: 0, borderRight: '1px solid var(--line)', background: 'var(--bg-1)', display: 'flex', flexDirection: 'column' }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', height: 34, padding: '0 10px', borderBottom: '1px solid var(--line)' }}>
+                <span style={{ ...hint, fontSize: 10, letterSpacing: '0.08em' }}>EXPLORER</span>
+                <button onClick={addFile} title="new file" style={{ ...iconBtn, color: 'var(--text-1)', fontSize: 15 }}>+</button>
+              </div>
+              <div style={{ flex: 1, overflow: 'auto', padding: '6px 5px' }}>
+                {files.map((f) => (
+                  <div key={f.name} onClick={() => selectFile(f.name)} className="mono"
+                    style={{ display: 'flex', alignItems: 'center', gap: 7, fontSize: 12, height: 28, padding: '0 8px', borderRadius: 6, cursor: 'pointer', background: f.name === active ? 'rgba(45,127,249,0.18)' : 'transparent', color: f.name === active ? 'var(--text-0)' : 'var(--text-1)' }}>
+                    <Icon name="tensor" size={12} />
+                    <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{f.name}</span>
+                    {files.length > 1 && <span onClick={(e) => { e.stopPropagation(); delFile(f.name) }} title="delete" style={{ ...hint, cursor: 'pointer', fontSize: 14 }}>&#215;</span>}
+                  </div>
+                ))}
+              </div>
+              <div style={{ padding: 10, borderTop: '1px solid var(--line)', fontSize: 11, color: 'var(--text-2)', lineHeight: 1.45 }}>
+                Generated model code is inserted into the active file and remains editable before run/compare.
+              </div>
+            </div>
+
+            <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', background: 'var(--bg-0)' }}>
+              <div style={{ height: 34, display: 'flex', alignItems: 'center', gap: 8, padding: '0 12px', borderBottom: '1px solid var(--line)', background: 'var(--bg-1)' }}>
+                <span className="mono" style={{ color: 'var(--text-1)', fontSize: 12 }}>{active}</span>
+                <span style={{ ...hint, fontSize: 11 }}>editable Python file</span>
+                <span style={{ marginLeft: 'auto', fontSize: 11 }}>{res && runBadge(res)}</span>
+              </div>
+              <div style={{ flex: 1, minHeight: 0 }}>
+                <CodeMirror value={src} height="100%" theme="none" onChange={setSrc}
+                  extensions={[cmTheme, cmHighlight, python(), keymap.of([{ key: 'Mod-Enter', run: () => { run(); return true } }])]} />
+              </div>
+            </div>
+          </div>
+
+          <div style={{ height: cc && (cc.clean || cc.deleted) ? 260 : 180, flexShrink: 0, borderTop: '1px solid var(--line)', background: 'var(--bg-1)', display: 'flex', flexDirection: 'column' }}>
+            <div style={{ height: 32, display: 'flex', alignItems: 'center', gap: 10, padding: '0 12px', borderBottom: '1px solid var(--line)' }}>
+              <span style={{ color: 'var(--text-1)', fontSize: 12, fontWeight: 700 }}>{cc && (cc.clean || cc.deleted) ? 'COMPARISON' : 'TERMINAL'}</span>
+              <span style={{ ...hint, fontSize: 11 }}>region: {csel ? <span className="mono" style={{ color: 'var(--text-1)' }}>{csel} · {ctrlOp} @ top {pctLabel(ctopk)}%</span> : 'pick one in Region control'}</span>
+            </div>
+            <div style={{ flex: 1, minHeight: 0, overflow: 'auto', padding: 10 }}>
+              {cc && (cc.clean || cc.deleted) ? (
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, height: '100%' }}>
+                  {(['clean', 'deleted'] as const).map((k) => { const st = cc[k]; return (
+                    <div key={k} style={{ border: '1px solid var(--line)', borderRadius: 8, padding: 8, minHeight: 0, overflow: 'auto' }}>
+                      <div style={{ fontSize: 12, fontWeight: 600, color: k === 'deleted' ? 'var(--danger)' : 'var(--text-1)', marginBottom: 4 }}>{k} <span style={{ fontWeight: 400 }}>{st && runBadge(st.run)}</span></div>
+                      {st ? <>
+                        <div className="mono" style={{ fontSize: 10, whiteSpace: 'pre-wrap', maxHeight: 92, overflow: 'auto', background: 'var(--bg-2)', borderRadius: 6, padding: 6, marginBottom: 4 }}>{src + st.completion}</div>
+                        {outBox(st.run, 110)}
+                      </> : <span style={hint}>{ccBusy ? '…' : '&#8212;'}</span>}
+                    </div>) })}
+                </div>
+              ) : (
+                <div>
+                  <div style={{ ...hint, fontSize: 11, marginBottom: 4 }}>OUTPUT {res && runBadge(res)}</div>
+                  {outBox(res, 128)}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )
+    }
     if (view === 'log') {
       const short = (id: string) => open.find((m) => m.id === id)?.label ?? id
       const toCSV = () => ['ts,model,kind,text,py', ...expLog.map((e) => [e.ts, short(e.model), e.kind, e.text, e.py].map((v) => `"${String(v).replace(/"/g, '""')}"`).join(','))].join('\n')
@@ -1159,7 +2239,7 @@ export default function App() {
         <div ref={logScrollRef} onScroll={(e) => { const el = e.currentTarget; logPinned.current = el.scrollHeight - el.scrollTop - el.clientHeight < 24 }}
           style={{ maxHeight: '100%', overflow: 'auto' }}>
           {logPy
-            ? <pre className="mono" style={{ fontSize: 11, whiteSpace: 'pre-wrap', background: 'var(--bg-2)', borderRadius: 4, padding: 8 }}>{expLog.filter((e) => e.py).map((e) => e.py).join('\n') || '# no actions yet'}</pre>
+            ? <pre className="mono" style={{ fontSize: 11, whiteSpace: 'pre-wrap', background: 'var(--bg-2)', borderRadius: 10, padding: 8 }}>{expLog.filter((e) => e.py).map((e) => e.py).join('\n') || '# no actions yet'}</pre>
             : <div className="mono" style={{ display: 'grid', gridTemplateColumns: '58px 74px 1fr', gap: '2px 8px', fontSize: 11 }}>
                 {expLog.map((e, i) => (<Fragment key={i}>
                   <span style={hint}>{e.ts.slice(11, 19)}</span>
@@ -1171,7 +2251,7 @@ export default function App() {
       </>)
     }
     if (view === 'eval') {
-      const sel = { fontSize: 11, background: 'var(--bg-2)', color: 'var(--text-1)', border: '1px solid var(--line-strong)', borderRadius: 4, padding: '2px 4px' } as const
+      const sel = { fontSize: 11, background: 'var(--bg-2)', color: 'var(--text-1)', border: '1px solid var(--line-strong)', borderRadius: 10, padding: '2px 4px' } as const
       const damaged = d.knobs.length > 0
       const busy = pending.has(`eval_code:${mid}`)
       const canRun = !busy && codeEvalDsName !== ''
@@ -1183,7 +2263,7 @@ export default function App() {
         })
       }
       const fmt = (r: { dataset: string; passed: number; total: number; pass_at_1: number; damaged: boolean; knobCount: number }) => (
-        <div style={{ padding: 10, border: '1px solid var(--line-strong)', borderRadius: 6 }}>
+        <div style={{ padding: 10, border: '1px solid var(--line-strong)', borderRadius: 12 }}>
           <div style={{ fontSize: 22, color: 'var(--text-0)' }}>pass@1 = {(r.pass_at_1 * 100).toFixed(2)}%</div>
           <div style={{ ...hint, fontSize: 11, marginTop: 2 }}>{r.passed}/{r.total} passed · {r.dataset}</div>
           <div style={{ fontSize: 11, marginTop: 4, color: r.damaged ? 'var(--danger)' : 'var(--accent)' }}>{r.damaged ? `damaged model (${r.knobCount} knobs)` : 'clean model'}</div>
@@ -1208,7 +2288,7 @@ export default function App() {
         {d.evalProg && (
           <div style={{ marginBottom: 10 }}>
             <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}><span style={hint}>{d.evalProg.i}/{d.evalProg.total} · passed {d.evalProg.passed}</span></div>
-            <div style={{ background: 'var(--bg-2)', borderRadius: 2, height: 4, marginTop: 3 }}><div style={{ height: 4, width: `${Math.round((d.evalProg.i / d.evalProg.total) * 100)}%`, background: 'var(--accent)', borderRadius: 2 }} /></div>
+            <div style={{ background: 'var(--bg-2)', borderRadius: 6, height: 4, marginTop: 3 }}><div style={{ height: 4, width: `${Math.round((d.evalProg.i / d.evalProg.total) * 100)}%`, background: 'var(--accent)', borderRadius: 6 }} /></div>
           </div>
         )}
         {d.evalResult && (
@@ -1223,62 +2303,209 @@ export default function App() {
     if (view === 'train') {
       const tr = d.train
       const needsRegion = trainMode.startsWith('spot')
-      const canTrain = !tr.running && !tr.trained && (!needsRegion || trainRegion !== '')
+      const dsLoading = trainDsName !== '' && dsMeta[trainDsName] == null   // selected but content not parsed yet
+      const trainEx = trainDsName ? (dsMeta[trainDsName]?.examples ?? []).slice(0, trainLimit) : []
+      const canTrain = !tr.running && !tr.trained && (!needsRegion || trainRegion !== '') && trainEx.length > 0
+      const pickTrainDs = (name: string) => { setTrainDsName(name); const dset = datasets.find((x) => x.name === name); if (dset && dset.content == null) sendTo(mid, { type: 'read_dataset', name }) }
       const runTrain = () => {
         patch(mid, (dd) => ({ ...dd, train: { ...emptyTrain(), running: true }, knobs: [], kppl: { base: null, inter: null } }))  // kernel auto-clears knobs
         sendTo(mid, { type: 'ppl', examples: PRESETS.python.split('\n').filter(Boolean), tag: 'code' })     // pre-train evals → "before"
         sendTo(mid, { type: 'ppl', examples: GENERAL_SET.split('\n').filter(Boolean), tag: 'general' })
         sendTo(mid, {
-          type: 'train', mode: trainMode, examples: toExamples(trainDs),
-          steps: trainSteps, lr: trainLr, lora_dim: 8, ...(needsRegion ? { region: { kind: 'named', name: trainRegion } } : {}),
+          type: 'train', mode: trainMode, examples: trainEx,
+          steps: Math.max(1, trainEpochs * trainEx.length), lr: trainLr, lora_dim: 8, ...(needsRegion ? { region: { kind: 'named', name: trainRegion, topk: trainRegionTopk } } : {}),
         })
       }
-      const sel = { fontSize: 11, background: 'var(--bg-2)', color: 'var(--text-1)', border: '1px solid var(--line-strong)', borderRadius: 4, padding: '2px 4px' } as const
+      const sel = { fontSize: 11, background: 'var(--bg-2)', color: 'var(--text-1)', border: '1px solid var(--line-strong)', borderRadius: 10, padding: '2px 4px' } as const
       const L = tr.losses
+      const MODES = [
+        { key: 'full', label: 'Full', desc: 'every weight trains', region: false },
+        { key: 'spot-freeze', label: 'Freeze region', desc: 'the region is frozen · everything else trains — protect the spot while adapting', region: true },
+        { key: 'spot-only', label: 'Only region', desc: 'only the region trains · everything else (the complement) is frozen', region: true },
+        { key: 'lora', label: 'LoRA', desc: 'base frozen · small adapters train', region: false },
+      ]
+      const modeInfo = MODES.find((m) => m.key === trainMode) ?? MODES[0]
+      // which side is frozen in the current mode → the freeze diagram
+      const froz = (part: 'region' | 'rest') => trainMode === 'lora' ? true : trainMode === 'full' ? false : trainMode === 'spot-freeze' ? part === 'region' : part === 'rest'
+      const seg = (part: 'region' | 'rest', flex: number, txt: string) => (
+        <div style={{ flex, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 10, height: 22, color: froz(part) ? 'var(--text-2)' : '#fff',
+          background: froz(part) ? 'repeating-linear-gradient(45deg, var(--bg-2), var(--bg-2) 4px, var(--line) 4px, var(--line) 5px)' : 'var(--accent)', whiteSpace: 'nowrap', overflow: 'hidden' }}>{txt}</div>
+      )
+      const td = trainDelta[mid]
+      const deltaBusy = pending.has(`training_delta:${mid}`)
+      const showDelta = () => { if (!needsRegion || !trainRegion) { sendTo(mid, { type: 'training_delta' }); setPendingKey(`training_delta:${mid}`, true); return } setPendingKey(`training_delta:${mid}`, true); sendTo(mid, { type: 'training_delta', region: { kind: 'named', name: trainRegion, topk: trainRegionTopk } }) }
+      const dPPL = (before: number | null | undefined, after: number | null | undefined) => {
+        if (before == null || after == null) return null
+        const delta = after - before
+        return <span style={{ color: delta < 0 ? 'var(--accent)' : delta > 0 ? 'var(--danger)' : 'var(--text-2)', marginLeft: 4 }}>{delta < 0 ? '▼' : delta > 0 ? '▲' : ''}{Math.abs(delta).toPrecision(3)}</span>
+      }
       return (<>
-        <div style={{ color: 'var(--text-1)', marginBottom: 6 }}>region-aware fine-tuning<span style={hint}> · reversible via reset</span></div>
-        <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap', marginBottom: 6 }}>
-          <select value={trainMode} onChange={(e) => setTrainMode(e.target.value)} style={sel} title="spot-freeze: train everything EXCEPT the region · spot-only: train ONLY the region">
-            {['full', 'spot-freeze', 'spot-only', 'lora'].map((m) => <option key={m} value={m}>{m}</option>)}
-          </select>
-          {needsRegion && (
-            <select value={trainRegion} onChange={(e) => setTrainRegion(e.target.value)} style={sel}>
-              <option value="">region…</option>
-              {d.regions.map((r) => <option key={r.name} value={r.name}>◈ {r.name}</option>)}
-            </select>
-          )}
-          <span style={hint}>steps</span><input type="number" min={1} value={trainSteps} onChange={(e) => setTrainSteps(Math.max(1, Math.round(Number(e.target.value)) || 1))} style={{ ...sel, width: 48 }} />
-          <span style={hint}>lr</span><input type="number" step={1e-5} value={trainLr} onChange={(e) => { const v = Number(e.target.value); if (v > 0) setTrainLr(v) }} style={{ ...sel, width: 72 }} />
+        <div style={{ color: 'var(--text-1)', marginBottom: 8 }}>region-aware fine-tuning<span style={hint}> · reversible via reset</span></div>
+        {/* mode picker — segmented, human-labelled */}
+        <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', marginBottom: 4 }}>
+          {MODES.map((m) => (
+            <span key={m.key} onClick={() => { if (!tr.running) setTrainMode(m.key) }} className={`chip${trainMode === m.key ? ' on' : ''}`}
+              style={{ cursor: tr.running ? 'default' : 'pointer', opacity: tr.running && trainMode !== m.key ? 0.5 : 1 }}>{m.label}</span>
+          ))}
         </div>
-        <textarea value={trainDs} onChange={(e) => setTrainDs(e.target.value)} rows={3} spellCheck={false} title="training examples (one per line)" style={{ width: '100%', background: 'var(--bg-2)', border: '1px solid var(--line-strong)', borderRadius: 4, padding: '6px 8px', outline: 'none', resize: 'vertical', marginBottom: 6, fontFamily: 'var(--mono)' }} />
-        <div style={{ display: 'flex', gap: 6, marginBottom: 8 }}>
+        <div style={{ ...hint, fontSize: 11, marginBottom: 8 }}>{modeInfo.desc}</div>
+        {/* region picker + freeze diagram */}
+        {needsRegion && (() => {
+          const rbase = d.regions.find((r) => r.name === trainRegion)?.base_topk
+          return (
+          <div style={{ marginBottom: 8 }}>
+            <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap', marginBottom: 6 }}>
+              <select value={trainRegion} onChange={(e) => setTrainRegion(e.target.value)} style={sel}>
+                <option value="">pick region…</option>
+                {d.regions.map((r) => <option key={r.name} value={r.name}>◈ {r.name}</option>)}
+              </select>
+              {trainRegion && <>
+                <span style={hint}>top-k%</span>
+                {SPOT_TOPK_OPTIONS.map((k) => {
+                  const disabled = rbase != null && k > rbase  // can only re-threshold DOWN from the saved base
+                  return <span key={k} onClick={() => { if (!disabled && !tr.running) setTrainRegionTopk(k) }} className={`chip${trainRegionTopk === k ? ' on' : ''}`}
+                    title={disabled ? `region saved at top ${pctLabel(rbase!)}% — can't expand to ${pctLabel(k)}%` : `freeze/train the top ${pctLabel(k)}% of the region`}
+                    style={{ cursor: disabled || tr.running ? 'default' : 'pointer', opacity: disabled ? 0.4 : 1 }}>{pctLabel(k)}%</span>
+                })}
+              </>}
+            </div>
+            {trainRegion && <>
+              <div style={{ display: 'flex', borderRadius: 6, overflow: 'hidden', border: '1px solid var(--line-strong)' }}>
+                {seg('region', 1, `◈ region ${pctLabel(trainRegionTopk)}% ${froz('region') ? '(frozen)' : '(trains)'}`)}
+                {seg('rest', 5, `everything else ${froz('rest') ? '(frozen)' : '(trains)'}`)}
+              </div>
+              <div style={{ ...hint, fontSize: 10, marginTop: 3 }}>▨ = frozen (gradients blocked) · ▮ = trains · region = top {pctLabel(trainRegionTopk)}% by importance</div>
+            </>}
+          </div>
+          )
+        })()}
+        {/* training data = a benchmark/dataset from the store (one record = one example) */}
+        <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap', marginBottom: 4 }}>
+          <span style={hint}>benchmark</span>
+          <select value={trainDsName} onChange={(e) => pickTrainDs(e.target.value)} style={sel} title="fine-tune on this dataset — each record is one training example">
+            <option value="">pick dataset…</option>
+            {datasets.map((x) => <option key={x.name} value={x.name}>{x.name} ({dsMeta[x.name]?.count ?? '…'})</option>)}
+          </select>
+          {trainDsName && <><span style={hint}>use</span><input type="number" min={1} value={trainLimit} onChange={(e) => setTrainLimit(Math.max(1, Math.round(Number(e.target.value)) || 1))} style={{ ...sel, width: 56 }} /><span style={hint}>examples</span></>}
+        </div>
+        {trainDsName && (dsLoading
+          ? <div style={{ ...hint, fontSize: 11, marginBottom: 6 }}>loading {trainDsName}…</div>
+          : <div style={{ ...hint, fontSize: 11, marginBottom: 6 }}>{trainEx.length} examples × {trainEpochs} epoch{trainEpochs > 1 ? 's' : ''} = {trainEpochs * trainEx.length} weight updates (each example seen {trainEpochs}×)</div>)}
+        <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap', marginBottom: 8 }}>
+          <span style={hint}>epochs</span><input type="number" min={1} value={trainEpochs} onChange={(e) => setTrainEpochs(Math.max(1, Math.round(Number(e.target.value)) || 1))} title="passes over the dataset — each example is seen this many times" style={{ ...sel, width: 48 }} />
+          <span style={hint}>Learning Rate</span><input type="number" step={1e-5} value={trainLr} onChange={(e) => { const v = Number(e.target.value); if (v > 0) setTrainLr(v) }} style={{ ...sel, width: 72 }} />
+        </div>
+        <div style={{ display: 'flex', gap: 6, marginBottom: 8, alignItems: 'center' }}>
           <Btn onClick={runTrain} disabled={!canTrain} color={canTrain ? 'var(--accent)' : 'var(--text-2)'}>Train</Btn>
           {tr.running && <Btn onClick={() => sendTo(mid, { type: 'stop_train' })} color="var(--danger)">Stop</Btn>}
           {tr.trained && <Btn onClick={() => sendTo(mid, { type: 'reset_train' })} title="restore pre-training weights">Reset</Btn>}
-          {tr.running && <span style={{ color: 'var(--live)', fontSize: 11, alignSelf: 'center' }}>● training {L.length}/{tr.total}</span>}
-          {tr.trained && <span style={{ color: 'var(--accent)', fontSize: 11, alignSelf: 'center' }}>trained · weights modified</span>}
+          {tr.running && <span style={{ color: 'var(--live)', fontSize: 11 }}>● training {L.length}/{tr.total}</span>}
+          {tr.trained && <span style={{ color: 'var(--accent)', fontSize: 11 }}>trained · weights modified</span>}
+          {needsRegion && !trainRegion && !tr.running && <span style={{ ...hint, fontSize: 11 }}>pick a region first</span>}
         </div>
         {tr.error && <div style={{ color: 'var(--danger)', fontSize: 11, marginBottom: 6 }}>{tr.error}</div>}
         {L.length > 0 && (() => {
           const mx = Math.max(...L), mn = Math.min(...L)
-          const pts = L.map((v, i) => `${(i / Math.max(1, tr.total - 1)) * 260},${36 - ((v - mn) / (mx - mn || 1)) * 30}`).join(' ')
+          // per-step loss is on ONE (cycling) example → very noisy. Overlay an EMA so the trend is readable.
+          const ema: number[] = []; let e = L[0]; for (const v of L) { e = 0.8 * e + 0.2 * v; ema.push(e) }
+          const xy = (v: number, i: number) => `${(i / Math.max(1, tr.total - 1)) * 260},${36 - ((v - mn) / (mx - mn || 1)) * 30}`
+          const raw = L.map(xy).join(' ')
+          const smooth = ema.map(xy).join(' ')
+          const diverging = L.length >= 6 && ema[ema.length - 1] > ema[Math.max(0, ema.length - 6)] * 1.15  // trend climbing
           return (<div style={{ marginBottom: 8 }}>
-            <div style={hint}>loss · <span className="mono">{L[L.length - 1].toFixed(4)}</span></div>
-            <svg width="100%" height={40} viewBox="0 0 260 40" preserveAspectRatio="none" style={{ background: 'var(--bg-2)', borderRadius: 4 }}><polyline points={pts} fill="none" stroke="var(--accent)" strokeWidth={1.2} /></svg>
+            <div style={hint}>loss <span className="mono">{L[L.length - 1].toFixed(3)}</span> · trend <span className="mono" style={{ color: diverging ? 'var(--danger)' : 'var(--accent)' }}>{ema[ema.length - 1].toFixed(3)}</span> · min <span className="mono">{mn.toFixed(3)}</span></div>
+            <svg width="100%" height={40} viewBox="0 0 260 40" preserveAspectRatio="none" style={{ background: 'var(--bg-2)', borderRadius: 10 }}>
+              <polyline points={raw} fill="none" stroke="var(--line-strong)" strokeWidth={0.8} opacity={0.7} />
+              <polyline points={smooth} fill="none" stroke={diverging ? 'var(--danger)' : 'var(--accent)'} strokeWidth={1.6} />
+            </svg>
+            {diverging && <div style={{ color: 'var(--danger)', fontSize: 11, marginTop: 3 }}>⚠ loss is climbing — likely the learning rate is too high. Lower <b>Learning Rate</b> (try 1e-5) and retrain.</div>}
+            <div style={{ ...hint, fontSize: 10, marginTop: 2 }}>faint line = per-step (one example, noisy) · bold = smoothed trend</div>
           </div>)
         })()}
+        {/* performance before vs after (Δ) */}
         {tr.before && (
-          <div style={{ fontSize: 11 }}>
-            <div style={{ display: 'grid', gridTemplateColumns: '70px 1fr 1fr', gap: 6 }}>
-              <span />
-              <span style={hint}>code PPL</span><span style={hint}>general PPL</span>
+          <div style={{ fontSize: 11, marginBottom: 8 }}>
+            <div style={{ ...hint, marginBottom: 3 }}>performance (PPL · ▼ lower = better)</div>
+            <div style={{ display: 'grid', gridTemplateColumns: '64px 1fr 1fr', gap: 6, alignItems: 'baseline' }}>
+              <span /><span style={hint}>code</span><span style={hint}>general</span>
               <span style={hint}>before</span>
               <span className="mono">{tr.before.code?.toPrecision(4) ?? '—'}</span><span className="mono">{tr.before.general?.toPrecision(4) ?? '—'}</span>
               <span style={hint}>after</span>
-              <span className="mono" style={{ color: 'var(--text-0)' }}>{d.evals.code?.toPrecision(4) ?? '…'}</span><span className="mono" style={{ color: 'var(--text-0)' }}>{d.evals.general?.toPrecision(4) ?? '…'}</span>
+              <span className="mono" style={{ color: 'var(--text-0)' }}>{d.evals.code?.toPrecision(4) ?? '…'}{dPPL(tr.before.code, d.evals.code)}</span>
+              <span className="mono" style={{ color: 'var(--text-0)' }}>{d.evals.general?.toPrecision(4) ?? '…'}{dPPL(tr.before.general, d.evals.general)}</span>
             </div>
           </div>
         )}
+        {/* region change: how far weights moved (validates the freeze) */}
+        {tr.trained && (
+          <div style={{ borderTop: '1px solid var(--line)', paddingTop: 8 }}>
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: td ? 6 : 0 }}>
+              <span style={{ ...hint, fontSize: 11 }}>region change</span>
+              <Btn onClick={showDelta} disabled={deltaBusy} style={{ padding: '2px 10px' }}>{deltaBusy ? '⟳' : 'What moved?'}</Btn>
+            </div>
+            {td && (
+              <div style={{ fontSize: 11 }}>
+                <div style={{ display: 'grid', gridTemplateColumns: '150px 1fr', gap: '3px 8px', alignItems: 'baseline' }}>
+                  <span style={hint}>region weights (RMS Δ)</span>
+                  <span className="mono" style={{ color: (td.region_rms ?? 0) < 1e-6 ? 'var(--text-2)' : 'var(--accent)' }}>{td.region_rms == null ? '—' : td.region_rms.toExponential(2)}{td.region_rms != null && td.region_rms < 1e-6 ? '  (frozen ✓)' : ''}</span>
+                  {td.other_rms != null && <>
+                    <span style={hint}>everything else (RMS Δ)</span>
+                    <span className="mono" style={{ color: td.other_rms < 1e-6 ? 'var(--text-2)' : 'var(--accent)' }}>{td.other_rms.toExponential(2)}{td.other_rms < 1e-6 ? '  (frozen ✓)' : ''}</span>
+                  </>}
+                </div>
+                <div style={{ ...hint, fontSize: 10, marginTop: 5 }}>RMS of (weight after − before). {trainMode === 'spot-freeze' ? 'region should read ~0 (frozen), rest > 0.' : trainMode === 'spot-only' ? 'only region moves; rest untouched.' : 'measures how far the run pushed the weights.'}</div>
+              </div>
+            )}
+          </div>
+        )}
+        {/* benchmark pass@1 — base (pre-train) vs trained. eval fans out over GPUs (unlike training). */}
+        {(() => {
+          const te = trainEval[mid] ?? {}
+          const evalBusy = pending.has(`eval_code:${mid}`)
+          const pct = (v: number | undefined) => v == null ? '—' : `${(v * 100).toFixed(1)}%`
+          const runBench = () => {
+            if (!trainEvalDs) { toast('[bench] pick a HumanEval dataset first'); return }
+            trainEvalSlot.current[mid] = tr.trained ? 'trained' : 'base'
+            const extra = (trainEvalGpus[mid] ?? []).map((i) => `cuda:${i}`)
+            setPendingKey(`eval_code:${mid}`, true)
+            sendTo(mid, { type: 'eval_code', dataset: trainEvalDs, temperature: 0, max_tokens: 512, limit: trainEvalLimit, ...(extra.length ? { extra_devices: extra } : {}) })
+          }
+          const dp = (te.base && te.trained) ? te.trained.pass_at_1 - te.base.pass_at_1 : null
+          return (
+            <div style={{ borderTop: '1px solid var(--line)', marginTop: 8, paddingTop: 8 }}>
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginBottom: 8 }}>
+                <span style={{ color: 'var(--text-1)', fontSize: 12, fontWeight: 600 }}>Benchmark pass@1</span>
+                <select value={trainEvalDs} onChange={(e) => setTrainEvalDs(e.target.value)} style={sel} title="a HumanEvalPack dataset">
+                  <option value="">pick dataset…</option>
+                  {datasets.filter((x) => x.name.endsWith('.jsonl')).map((x) => <option key={x.name} value={x.name}>{x.name}</option>)}
+                </select>
+                <label style={{ display: 'inline-flex', alignItems: 'center', gap: 4, whiteSpace: 'nowrap', fontSize: 11 }}><span style={hint}># problems</span>
+                  <input type="number" min={1} value={trainEvalLimit} onChange={(e) => setTrainEvalLimit(Math.max(1, Number(e.target.value) || 1))} style={{ ...sel, width: 56 }} /></label>
+                <Btn onClick={runBench} disabled={evalBusy} color="var(--accent)" style={{ padding: '3px 10px' }}
+                  title={tr.trained ? 'benchmark the trained model' : 'benchmark the base model — do this before training for a baseline'}>{evalBusy ? '⟳ running' : tr.trained ? 'Run on trained' : 'Run on base'}</Btn>
+              </div>
+              {gpus && gpus.count > 1 && (() => {
+                const home = gpus.devices.find((g) => g.models.includes(mid))?.index
+                const ex = trainEvalGpus[mid] ?? []
+                const toggle = (i: number) => { if (evalBusy) return; setTrainEvalGpus((s) => ({ ...s, [mid]: ex.includes(i) ? ex.filter((x) => x !== i) : [...ex, i] })) }
+                return <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap', fontSize: 11, marginBottom: 8, opacity: evalBusy ? 0.55 : 1 }}>
+                  <span style={hint} title="split the benchmark problems across these GPUs too">+ GPUs to help</span>
+                  {gpus.devices.filter((g) => g.index !== home).map((g) => <span key={g.index} onClick={() => toggle(g.index)} className={`chip${ex.includes(g.index) ? ' on' : ''}`} style={{ cursor: evalBusy ? 'default' : 'pointer' }}>{ex.includes(g.index) ? '●' : '○'} GPU{g.index}</span>)}
+                  {ex.length > 0 && <span style={hint}>· {1 + ex.length} GPUs in parallel</span>}
+                </div>
+              })()}
+              {evalBusy && (() => { const done = d.evalProg?.i ?? 0, tot = d.evalProg?.total ?? trainEvalLimit, passed = d.evalProg?.passed ?? 0, p = tot ? Math.round(done / tot * 100) : 0; return <div style={{ marginBottom: 8 }}><div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, marginBottom: 3 }}><span style={hint}>{done === 0 ? 'generating first solution… (slow on the first problem)' : `solving · ${done}/${tot} · passed ${passed}`}</span><span style={hint}>{p}%</span></div><div style={{ background: 'var(--bg-2)', borderRadius: 6, height: 6, overflow: 'hidden' }}><div style={{ height: 6, width: `${p}%`, background: 'var(--accent)', borderRadius: 6 }} /></div></div> })()}
+              {(te.base || te.trained) && (
+                <div style={{ display: 'grid', gridTemplateColumns: '84px 1fr', gap: 1, maxWidth: 340, fontSize: 12 }}>
+                  <div style={{ ...hint, padding: '3px 6px' }} /><div style={{ padding: '3px 6px', fontWeight: 600, background: 'var(--bg-2)' }}>pass@1</div>
+                  <div style={{ ...hint, padding: '3px 6px' }}>base</div><div className="mono" style={{ padding: '3px 6px' }}>{te.base ? `${pct(te.base.pass_at_1)} (${te.base.passed}/${te.base.total})` : '—'}</div>
+                  <div style={{ ...hint, padding: '3px 6px' }}>trained</div><div className="mono" style={{ padding: '3px 6px', fontWeight: 600, color: dp != null && dp !== 0 ? (dp > 0 ? 'var(--accent)' : 'var(--danger)') : undefined }}>{te.trained ? `${pct(te.trained.pass_at_1)} (${te.trained.passed}/${te.trained.total})` : '—'}{dp != null && dp !== 0 ? ` (${dp > 0 ? '+' : ''}${(dp * 100).toFixed(1)}%)` : ''}</div>
+                </div>
+              )}
+              <div style={{ ...hint, fontSize: 10, marginTop: 6 }}>measure <b>base</b> first (before Train), then Train → measure <b>trained</b>. higher pass@1 = training improved coding.</div>
+            </div>
+          )
+        })()}
       </>)
     }
     // if the editor still shows the untouched preview, recompute on the FULL cached set (parsing the
@@ -1286,26 +2513,59 @@ export default function App() {
     return (<>
       <div style={{ color: 'var(--text-1)', marginBottom: 6 }}>dataset → grad×param<span style={hint}> · pick a dataset · top cells = spot</span></div>
       <div style={{ display: 'flex', gap: 6, alignItems: 'center', marginBottom: 10, flexWrap: 'wrap' }}>
-        <select value={spotSrc} onChange={(e) => e.target.value && computeSpotFor(mid, e.target.value)} title="pick a dataset — samples and computes its spot" style={{ fontSize: 11, background: 'var(--bg-2)', color: 'var(--text-1)', border: '1px solid var(--line-strong)', borderRadius: 4, padding: '2px 4px' }}>
+        <select value={spotSrc} onChange={(e) => e.target.value && computeSpotFor(mid, e.target.value)} title="pick a dataset — samples and computes its spot" style={{ fontSize: 11, background: 'var(--bg-2)', color: 'var(--text-1)', border: '1px solid var(--line-strong)', borderRadius: 10, padding: '2px 4px' }}>
           <option value="">▤ dataset…</option>
           {datasets.map((x) => <option key={x.name} value={x.name}>{x.name} ({dsMeta[x.name]?.count ?? '…'})</option>)}
         </select>
         <span style={hint}>sample</span>
-        <input type="number" min={1} value={spotN} onChange={(e) => { const v = e.target.value; if (v === '' || Number(v) >= 1) setSpotN(v) }} placeholder="all" title="how many examples to use (empty = all)" style={{ width: 54, fontSize: 11, background: 'var(--bg-2)', color: 'var(--text-1)', border: '1px solid var(--line-strong)', borderRadius: 4, padding: '2px 4px' }} />
-        <select value={spotPick} onChange={(e) => setSpotPick(e.target.value as 'first' | 'random')} title="first-k or a random sample" style={{ fontSize: 11, background: 'var(--bg-2)', color: 'var(--text-1)', border: '1px solid var(--line-strong)', borderRadius: 4, padding: '2px 4px' }}>
+        <input type="number" min={1} value={spotN} onChange={(e) => { const v = e.target.value; if (v === '' || Number(v) >= 1) setSpotN(v) }} placeholder="all" title="how many examples to use (empty = all)" style={{ width: 54, fontSize: 11, background: 'var(--bg-2)', color: 'var(--text-1)', border: '1px solid var(--line-strong)', borderRadius: 10, padding: '2px 4px' }} />
+        <select value={spotPick} onChange={(e) => setSpotPick(e.target.value as 'first' | 'random')} title="first-k or a random sample" style={{ fontSize: 11, background: 'var(--bg-2)', color: 'var(--text-1)', border: '1px solid var(--line-strong)', borderRadius: 10, padding: '2px 4px' }}>
           <option value="first">first-k</option>
           <option value="random">random</option>
         </select>
+        <span style={hint}>region top</span>
+        {SPOT_TOPK_OPTIONS.map((k) => (
+          <span key={k} onClick={() => {
+            setSpotTopk(k)
+            setNamedRegionTopk(k)
+            patch(mid, (dd) => ({ ...dd, knobs: dd.knobs.map((row) => row.kind === 'spot' ? { ...row, topk: k } : row) }))
+            const ex = spotExamples[mid]?.length ? spotExamples[mid] : dsExamples
+            for (const row of d.knobs.filter((x) => x.kind === 'spot')) {
+              sendTo(mid, { type: 'intervene', region: { kind: 'spot', examples: ex, topk: k }, op: row.op, alpha: row.alpha, key: row.key })
+            }
+          }} className={`chip${spotTopk === k ? ' on' : ''}`} title="parameter region size used for saved regions, spot knobs, and spot activation">
+            {pctLabel(k)}%
+          </span>
+        ))}
         <Btn onClick={() => spotSrc && computeSpotFor(mid, spotSrc)} disabled={!spotSrc} color="var(--accent)" style={{ padding: '4px 12px' }}>Compute spot</Btn>
         {spotSrc && <span style={hint}>on {spotSrc}{spotExamples[mid]?.length ? ` · ${spotExamples[mid].length} ex` : ''}</span>}
       </div>
-      {d.spotProg && <div style={{ marginBottom: 8 }}><div style={{ display: 'flex', gap: 8, alignItems: 'center' }}><span style={hint}>computing · {d.spotProg.i}/{d.spotProg.total}</span><Btn onClick={() => sendTo(mid, { type: 'stop_spot' })} color="var(--danger)" style={{ padding: '0 8px' }}>Stop</Btn></div><div style={{ background: 'var(--bg-2)', borderRadius: 2, height: 4, marginTop: 3 }}><div style={{ height: 4, width: `${Math.round((d.spotProg.i / d.spotProg.total) * 100)}%`, background: 'var(--accent)', borderRadius: 2 }} /></div></div>}
+      {gpus && gpus.count > 1 && (() => {
+        const home = gpus.devices.find((g) => g.models.includes(mid))?.index
+        const extra = spotExtraGpus[mid] ?? []
+        const computing = !!d.spotProg  // selection is locked in once compute starts — mid-run toggles wouldn't apply
+        const toggle = (i: number) => { if (computing) return; setSpotExtraGpus((s) => ({ ...s, [mid]: extra.includes(i) ? extra.filter((x) => x !== i) : [...extra, i] })) }
+        return (
+          <div style={{ display: 'flex', gap: 6, alignItems: 'center', marginBottom: 10, flexWrap: 'wrap', fontSize: 11, opacity: computing ? 0.55 : 1 }}>
+            <span style={hint} title="split the backward passes across these GPUs too — faster, no change to the result">+ GPUs to help</span>
+            {gpus.devices.filter((g) => g.index !== home).map((g) => (
+              <span key={g.index} onClick={() => toggle(g.index)} title={computing ? 'locked while computing' : `${g.name} · ${Math.round(g.mem_used_mb / 1024)}/${Math.round(g.mem_total_mb / 1024)}G used`}
+                className={`chip${extra.includes(g.index) ? ' on' : ''}`} style={{ cursor: computing ? 'default' : 'pointer' }}>
+                {extra.includes(g.index) ? '●' : '○'} GPU{g.index}
+              </span>
+            ))}
+            {extra.length > 0 && <span style={hint}>· spot runs on {1 + extra.length} GPUs in parallel{computing ? ' (locked)' : ''}</span>}
+          </div>
+        )
+      })()}
+      {d.spotProg && <div style={{ marginBottom: 8 }}><div style={{ display: 'flex', gap: 8, alignItems: 'center' }}><span style={hint}>computing · {d.spotProg.i}/{d.spotProg.total}</span><Btn onClick={() => sendTo(mid, { type: 'stop_spot' })} color="var(--danger)" style={{ padding: '0 8px' }}>Stop</Btn></div><div style={{ background: 'var(--bg-2)', borderRadius: 6, height: 4, marginTop: 3 }}><div style={{ height: 4, width: `${Math.round((d.spotProg.i / d.spotProg.total) * 100)}%`, background: 'var(--accent)', borderRadius: 6 }} /></div></div>}
       {d.spot && (() => {
+        const spot = d.spot
         const examples = spotExamples[mid]?.length ? spotExamples[mid] : dsExamples  // reuse the exact set THIS model's spot ran on (cache hit on save); fall back to the editor before any compute
         const evalExamples = evalDsName ? (dsMeta[evalDsName]?.examples ?? examples) : examples  // kppl measurement set — may differ from spot data
         const selected = new Set(d.knobs.map((k) => k.key))
         const measure = () => sendTo(mid, { type: 'ppl', examples: evalExamples, tag: 'inter' })
-        const region = (k: KnobRow) => k.kind === 'spot' ? { kind: 'spot', examples, topk: k.topk ?? 0.05 }
+        const region = (k: KnobRow) => k.kind === 'spot' ? { kind: 'spot', examples, topk: k.topk ?? spotTopk }
           : k.kind === 'named' ? { kind: 'named', name: k.name, ...(k.topk != null ? { topk: k.topk } : {}) }
           : { kind: 'cell', layer: k.layer, module: k.module }
         const sendKnob = (k: KnobRow) => { sendTo(mid, { type: 'intervene', region: region(k), op: k.op, alpha: k.alpha, key: k.key }); measure() }
@@ -1329,31 +2589,123 @@ export default function App() {
         const remove = (key: string) => { sendTo(mid, { type: 'clear', key }); patch(mid, (dd) => ({ ...dd, knobs: dd.knobs.filter((k) => k.key !== key) })); measure() }
         const clearAll = () => { sendTo(mid, { type: 'clear' }); patch(mid, (dd) => ({ ...dd, knobs: [], kppl: { base: null, inter: null } })) }
         const { base, inter } = d.kppl
+        const shownSpotLayer = Math.min(Math.max(0, hoverLayer ?? layer), Math.max(0, spot.grid.length - 1))
+        const spotScore = normalizedScoreGrid(spot.grid)
         return (<>
-          <div style={hint}>{d.spot.layers} × {d.spot.modules.length} · |grad×param|<span> · rows=layers, cols=modules · bright cells = important (spot) · click a cell → knob</span></div>
-          <div style={{ ...hint, fontSize: 10 }}>cols: q k v o = attn q/k/v/o_proj · gate up down = mlp · ln1 ln2 = layernorms · +b = bias · left = layer index</div>
-          <ScaleBar max={Math.max(...d.spot.grid.flat())} color={ampColor} label="|g×w|" />
-          <div style={{ marginTop: 2 }}><SpotGrid grid={d.spot.grid} modules={d.spot.modules} onCell={addCell} selected={selected} /></div>
-          <div style={{ marginTop: 14, borderTop: '1px solid var(--line)', paddingTop: 10 }}>
+          <VizCard title="Coding spot" accent="var(--syn-num, #e0a85e)"
+            right={<span className="badge">{spot.layers} × {spot.modules.length}</span>}
+            subtitle="Per-parameter |gradient × weight| importance, reduced to layer × module, then normalized to 0–100 for comparison. Bright cells hold the coding spot. Hover a layer to inspect module scores; click a cell to add it as a knob.">
+            <ScaleBar max={100} color={ampColor} label="score 0–100" />
+            <div style={{ marginTop: 4 }}><SpotGrid grid={spotScore.grid} modules={spot.modules} onCell={(l, mod) => { setLayer(l); addCell(l, mod) }} selected={selected}
+              onHover={(cell) => setHoverLayer(cell ? Number(cell.split('.')[0]) : null)}
+              hovered={hoverLayer != null ? `${hoverLayer}.${spot.modules[0] ?? ''}` : null}
+              cellTitle={(l, mod, v) => `L${l} · ${mod} · Parameter Importance Score=${v.toFixed(1)}/100 · raw |g×w|=${(spot.grid[l]?.[spot.modules.indexOf(mod)] ?? 0).toExponential(3)} · click → knob`} /></div>
+            <div style={{ color: 'var(--text-1)', margin: '14px 0 8px' }}>layer {shownSpotLayer}{hoverLayer != null && hoverLayer !== layer ? <span style={hint}> · preview, pinned L{layer}</span> : <span style={hint}> · pinned</span>}<span style={hint}> · Parameter Importance Score 0–100 · raw max {spotScore.max.toExponential(3)} · {spot.modules.length} modules</span></div>
+            <BarList items={spot.modules.map((m, c) => ({ label: moduleAbbrev(m), value: spotScore.grid[shownSpotLayer]?.[c] ?? 0, title: `${m} · raw |g×w|=${(spot.grid[shownSpotLayer]?.[c] ?? 0).toExponential(3)}` })).sort((a, b) => b.value - a.value)} color={ampColor} valueLabel={(v) => v.toFixed(1)} />
+            <div style={{ ...hint, fontSize: 10, marginTop: 8 }}>cols: q k v o = attn · gate up down = mlp · ln1 ln2 = layernorms · +b = bias · left = layer index</div>
+          </VizCard>
+          <SpotSummary grid={spotScore.grid} modules={spot.modules} />
+          {(() => {
+            const conc = d.concentration
+            const topPct = (frac: number) => { if (!conc) return null; let best = conc[0]; for (const p of conc) { if (p[0] <= frac) best = p; else break } return best[1] }
+            const contrastTopk = d.knobs.find((k) => k.kind === 'spot')?.topk ?? spotTopk
+            const runContrast = () => { patch(mid, (dd) => ({ ...dd, contrast: { topk: contrastTopk }, contrastProg: 'clean' })); sendTo(mid, { type: 'causal_contrast', topk: contrastTopk, code_examples: examples, general_examples: GENERAL_SET.split('\n').filter(Boolean) }) }
+            return (
+              <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginTop: 12 }}>
+                <div style={{ flex: '1 1 320px', minWidth: 300 }}>
+                  <VizCard title="Concentration" accent="var(--accent)"
+                    subtitle="Cumulative importance vs fraction of weights (sorted by importance). The further the curve bows above the dashed equality line, the more the coding signal concentrates in a few weights.">
+                    {conc ? (<>
+                      <LineChart points={conc} />
+                      <div style={{ ...hint, fontSize: 11, marginTop: 8 }}>
+                        top 1% of weights → <span style={{ color: 'var(--accent)' }}>{((topPct(0.01) ?? 0) * 100).toFixed(1)}%</span> of importance ·
+                        top 5% → <span style={{ color: 'var(--accent)' }}>{((topPct(0.05) ?? 0) * 100).toFixed(1)}%</span>
+                      </div>
+                    </>) : <span style={hint}>computing concentration…</span>}
+                  </VizCard>
+                </div>
+                <div style={{ flex: '1 1 380px', minWidth: 320 }}>
+                  <VizCard title="Causal contrast" accent="var(--danger)"
+                    right={<Btn onClick={runContrast} disabled={pending.has(`causal_contrast:${mid}`)} color="var(--accent)" style={{ padding: '3px 10px' }}>{pending.has(`causal_contrast:${mid}`) ? '⟳ running' : 'Run'}</Btn>}
+                    subtitle="Zero the spot vs matched random / bottom controls (same size), measure code + general PPL each. The proof: spot damage collapses code PPL while controls and general text barely move.">
+                    {d.contrast ? <ContrastBars contrast={d.contrast} /> : <span style={hint}>Run to damage spot vs controls and compare PPL{gpus && gpus.count ? '' : ''}. Uses top-{(contrastTopk * 100).toFixed(1)}% (from the spot knob if set).</span>}
+                    {d.contrastProg && <div style={{ ...hint, fontSize: 11, marginTop: 8 }}>measuring {d.contrastProg}…</div>}
+                  </VizCard>
+                </div>
+              </div>
+            )
+          })()}
+          {(() => {
+            const parseKs = () => sweepKs.split(',').map((s) => parseFloat(s.trim())).filter((v) => !isNaN(v) && v > 0).map((v) => v / 100)
+            const runSweep = () => {
+              const topks = parseKs()
+              if (!topks.length) { toast('[sweep] enter comma-separated % values, e.g. 0.0025, 0.01, 0.09, 0.25'); return }
+              patch(mid, (dd) => ({ ...dd, sweep: { topks, rows: [] }, sweepProg: 'clean' }))
+              sendTo(mid, { type: 'causal_sweep', topks, code_examples: examples, general_examples: GENERAL_SET.split('\n').filter(Boolean) })
+            }
+            const sw = d.sweep
+            const cleanCode = sw?.clean?.code_ppl
+            const fmt = (v: number | null | undefined) => v == null ? '—' : v >= 1e4 ? v.toExponential(1) : v.toFixed(1)
+            const cell = (k: number, cond: string) => sw?.rows.find((r) => r.topk === k && r.cond === cond)
+            const codeColor = (v: number | undefined) => (v != null && cleanCode != null && v > cleanCode * 3) ? 'var(--danger)' : 'var(--text-1)'
+            const running = pending.has(`causal_sweep:${mid}`)
+            const ks = sw?.topks?.length ? sw.topks : parseKs()
+            const kPct = (k: number) => (k * 100).toFixed(4).replace(/0+$/, '').replace(/\.$/, '')
+            return (
+              <div style={{ marginTop: 14 }}>
+                <VizCard title="Control sweep · paper Table 1" accent="var(--danger)"
+                  right={<span style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                    <input value={sweepKs} onChange={(e) => setSweepKs(e.target.value)} title="comma-separated top-k% values to sweep (e.g. the paper's 0.0025, 0.01, 0.09, 0.25)"
+                      style={{ width: 190, fontSize: 11, background: 'var(--bg-2)', color: 'var(--text-1)', border: '1px solid var(--line-strong)', borderRadius: 8, padding: '2px 6px' }} />
+                    <span style={hint}>%</span>
+                    <Btn onClick={runSweep} disabled={running} color="var(--accent)" style={{ padding: '3px 10px' }}>{running ? '⟳ running' : 'Run sweep'}</Btn>
+                  </span>}
+                  subtitle="Zero the spot vs matched random / bottom controls at each top-k%, measuring code + general PPL. Reproduces the paper's Table 1: only spot damage collapses code PPL; equal-size random / bottom controls (and general text) barely move.">
+                  {!sw ? <span style={hint}>compute a spot first, then Run. Default k = the paper's 0.0025 – 0.25%.</span>
+                    : <>
+                      <div style={{ marginBottom: 8, fontSize: 12 }}><span style={hint}>clean (no damage) · </span><span style={{ fontWeight: 600 }}>code {fmt(sw.clean?.code_ppl)}</span><span style={hint}> · general {fmt(sw.clean?.general_ppl)}</span></div>
+                      <div style={{ overflowX: 'auto' }}>
+                        <div style={{ display: 'grid', gridTemplateColumns: '84px repeat(3, 1fr)', gap: 1, minWidth: 440, fontSize: 11 }}>
+                          <div style={{ ...hint, padding: '3px 6px' }}>top-k%</div>
+                          {['spot', 'random', 'bottom'].map((c) => <div key={c} style={{ padding: '3px 6px', fontWeight: 600, color: c === 'spot' ? 'var(--danger)' : 'var(--text-1)', background: 'var(--bg-2)' }}>{c}</div>)}
+                          {ks.map((k) => <Fragment key={k}>
+                            <div className="mono" style={{ padding: '3px 6px', color: 'var(--text-1)' }}>{kPct(k)}%</div>
+                            {['spot', 'random', 'bottom'].map((c) => { const r = cell(k, c); return (
+                              <div key={c} style={{ padding: '3px 6px', background: 'var(--bg-1)', fontVariantNumeric: 'tabular-nums' }}
+                                title={r ? `code ${r.code_ppl} · general ${r.general_ppl ?? '—'}` : undefined}>
+                                {r ? <><span style={{ color: codeColor(r.code_ppl), fontWeight: 600 }}>{fmt(r.code_ppl)}</span><span style={hint}> / {fmt(r.general_ppl)}</span></>
+                                  : <span style={hint}>{running ? '…' : '—'}</span>}
+                              </div>) })}
+                          </Fragment>)}
+                        </div>
+                      </div>
+                      <div style={{ ...hint, fontSize: 10, marginTop: 6 }}>each cell = code PPL / general PPL · red = code collapse (&gt;3× clean) · spot should collapse, random/bottom shouldn't</div>
+                    </>}
+                  {d.sweepProg && <div style={{ ...hint, fontSize: 11, marginTop: 8 }}>measuring {d.sweepProg}…</div>}
+                </VizCard>
+              </div>
+            )
+          })()}
+          <div style={{ marginTop: 14, borderTop: '1px solid var(--line)', paddingTop: 12 }}>
             <div style={{ color: 'var(--text-1)', marginBottom: 6, display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 6 }}>
               knob board<span style={hint}> · {d.knobs.length} active · reversible</span>
               <span style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 4, fontSize: 11 }}>
                 <span style={hint}>eval on</span>
-                <select value={evalDsName} onChange={(e) => setEvalDsName(e.target.value)} title="dataset used to measure baseline/combined PPL (kppl) — separate from the spot data above" style={{ fontSize: 11, background: 'var(--bg-2)', color: 'var(--text-1)', border: '1px solid var(--line-strong)', borderRadius: 4, padding: '2px 4px' }}>
+                <select value={evalDsName} onChange={(e) => setEvalDsName(e.target.value)} title="dataset used to measure baseline/combined PPL (kppl) — separate from the spot data above" style={{ fontSize: 11, background: 'var(--bg-2)', color: 'var(--text-1)', border: '1px solid var(--line-strong)', borderRadius: 10, padding: '2px 4px' }}>
                   <option value="">spot data ({examples.length})</option>
                   {datasets.map((x) => <option key={x.name} value={x.name}>{x.name} ({dsMeta[x.name]?.count ?? '…'})</option>)}
                 </select>
               </span>
             </div>
             <div style={{ marginBottom: 6, display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 6 }}>
-              {!selected.has('spot') && <Btn onClick={() => addKnob({ key: 'spot', kind: 'spot', topk: 0.05, op: 'scale', alpha: 0 })} style={{ padding: '2px 10px' }}>+ Top-k% spot</Btn>}
+              {!selected.has('spot') && <Btn onClick={() => addKnob({ key: 'spot', kind: 'spot', topk: spotTopk, op: 'scale', alpha: 0 })} style={{ padding: '2px 10px' }}>+ Top-k% spot</Btn>}
               {d.knobs.length === 0 && <span style={hint}>or click a spot cell above ↑</span>}
               {locateProg[`${mid}:intervene`] && <span style={{ ...hint, fontSize: 11 }}>locating… {locateProg[`${mid}:intervene`].i}/{locateProg[`${mid}:intervene`].total}</span>}
               {d.regions.length > 0 && (() => {
                 const cap = d.regions.find((r) => r.name === namedRegionPick)?.base_topk  // saved % = adjustable upper bound
                 const capPct = cap != null ? cap * 100 : 100
                 return (<>
-                  <select value={namedRegionPick} onChange={(e) => setNamedRegionPick(e.target.value)} title="apply a saved region as a knob, re-thresholded to the % below" style={{ fontSize: 11, background: 'var(--bg-2)', color: 'var(--text-1)', border: '1px solid var(--line-strong)', borderRadius: 4, padding: '2px 4px' }}>
+                  <select value={namedRegionPick} onChange={(e) => setNamedRegionPick(e.target.value)} title="apply a saved region as a knob, re-thresholded to the % below" style={{ fontSize: 11, background: 'var(--bg-2)', color: 'var(--text-1)', border: '1px solid var(--line-strong)', borderRadius: 10, padding: '2px 4px' }}>
                     <option value="">◈ from saved region…</option>
                     {d.regions.map((r) => <option key={r.name} value={r.name}>{r.name}</option>)}
                   </select>
@@ -1361,7 +2713,7 @@ export default function App() {
                     <input type="number" min={0.001} max={capPct} step={0.005} value={+(namedRegionTopk * 100).toFixed(4)}
                       onChange={(e) => setNamedRegionTopk(Math.min(capPct, Math.max(0.001, Number(e.target.value) || 0.001)) / 100)}
                       title={cap != null ? `top-k% of the saved region · adjustable down from the saved ${capPct.toFixed(3)}%` : 'top-k% of the saved region'}
-                      style={{ width: 56, background: 'var(--bg-2)', color: 'var(--text-1)', border: '1px solid var(--line-strong)', borderRadius: 3, fontSize: 11, padding: '0 2px' }} />
+                      style={{ width: 56, background: 'var(--bg-2)', color: 'var(--text-1)', border: '1px solid var(--line-strong)', borderRadius: 8, fontSize: 11, padding: '0 2px' }} />
                     <span style={hint}>%{cap != null ? ` (≤ saved ${capPct.toFixed(3)}%)` : ''}</span>
                     <Btn onClick={() => { const name = namedRegionPick; addKnob({ key: `named:${name}`, kind: 'named', name, topk: namedRegionTopk, op: 'scale', alpha: 0 }); setNamedRegionPick('') }}
                       disabled={selected.has(`named:${namedRegionPick}`)} style={{ padding: '2px 10px' }}>+ Add</Btn>
@@ -1372,24 +2724,24 @@ export default function App() {
             {d.knobs.map((k) => (
               <div key={k.key} style={{ display: 'flex', gap: 6, alignItems: 'center', marginBottom: 4 }}>
                 {k.kind === 'spot'
-                  ? <span style={{ width: 108, display: 'flex', alignItems: 'center', gap: 2, color: 'var(--accent)', fontSize: 11 }}>spot top<input type="number" min={0.001} max={100} step={0.005} value={+((k.topk ?? 0.05) * 100).toFixed(4)} onChange={(e) => adjust(k.key, { topk: Math.min(100, Math.max(0.001, Number(e.target.value) || 0.001)) / 100 })} style={{ width: 52, background: 'var(--bg-2)', color: 'var(--text-1)', border: '1px solid var(--line-strong)', borderRadius: 3, fontSize: 11, padding: '0 2px' }} />%</span>
+                  ? <span style={{ width: 108, display: 'flex', alignItems: 'center', gap: 2, color: 'var(--accent)', fontSize: 11 }}>spot top<input type="number" min={0.001} max={100} step={0.005} value={+((k.topk ?? spotTopk) * 100).toFixed(4)} onChange={(e) => adjust(k.key, { topk: Math.min(100, Math.max(0.001, Number(e.target.value) || 0.001)) / 100 })} style={{ width: 52, background: 'var(--bg-2)', color: 'var(--text-1)', border: '1px solid var(--line-strong)', borderRadius: 8, fontSize: 11, padding: '0 2px' }} />%</span>
                   : k.kind === 'named' ? (() => {
                       const cap = d.regions.find((r) => r.name === k.name)?.base_topk
                       const capPct = cap != null ? cap * 100 : 100
                       return (
                         <span style={{ width: 148, display: 'flex', alignItems: 'center', gap: 2, color: 'var(--accent)', fontSize: 11 }} title={cap != null ? `adjustable down from the saved ${capPct.toFixed(3)}%` : k.name}>
                           <span className="mono" style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 70 }}>◈ {k.name}</span>
-                          <input type="number" min={0.001} max={capPct} step={0.005} value={+((k.topk ?? capPct / 100) * 100).toFixed(4)} onChange={(e) => adjust(k.key, { topk: Math.min(capPct, Math.max(0.001, Number(e.target.value) || 0.001)) / 100 })} style={{ width: 48, background: 'var(--bg-2)', color: 'var(--text-1)', border: '1px solid var(--line-strong)', borderRadius: 3, fontSize: 11, padding: '0 2px' }} />%
+                          <input type="number" min={0.001} max={capPct} step={0.005} value={+((k.topk ?? capPct / 100) * 100).toFixed(4)} onChange={(e) => adjust(k.key, { topk: Math.min(capPct, Math.max(0.001, Number(e.target.value) || 0.001)) / 100 })} style={{ width: 48, background: 'var(--bg-2)', color: 'var(--text-1)', border: '1px solid var(--line-strong)', borderRadius: 8, fontSize: 11, padding: '0 2px' }} />%
                         </span>
                       )
                     })()
                   : <span className="mono" style={{ width: 96, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: 'var(--text-1)', fontSize: 11 }} title={`L${k.layer} · ${k.module}`}>L{k.layer}·{(k.module ?? '').replace('.weight', '').replace('_proj', '')}</span>}
-                <select value={k.op} onChange={(e) => adjust(k.key, { op: e.target.value })} style={{ fontSize: 11, background: 'var(--bg-2)', color: 'var(--text-1)', border: '1px solid var(--line-strong)', borderRadius: 4, padding: '1px 3px' }}>
+                <select value={k.op} onChange={(e) => adjust(k.key, { op: e.target.value })} style={{ fontSize: 11, background: 'var(--bg-2)', color: 'var(--text-1)', border: '1px solid var(--line-strong)', borderRadius: 10, padding: '1px 3px' }}>
                   {['scale', 'zero', 'mean', 'random'].map((o) => <option key={o} value={o}>{o}</option>)}
                 </select>
                 {k.op === 'scale' && <>
                   <input type="range" min={0} max={2} step={0.05} value={Math.min(k.alpha, 2)} onChange={(e) => adjust(k.key, { alpha: Number(e.target.value) })} style={{ flex: 1, minWidth: 40 }} />
-                  <input type="number" step={0.01} value={k.alpha} onChange={(e) => adjust(k.key, { alpha: Number(e.target.value) })} style={{ width: 52, background: 'var(--bg-2)', color: 'var(--text-1)', border: '1px solid var(--line-strong)', borderRadius: 3, fontSize: 11, padding: '1px 3px' }} title="precise α (can exceed 2 to amplify)" />
+                  <input type="number" step={0.01} value={k.alpha} onChange={(e) => adjust(k.key, { alpha: Number(e.target.value) })} style={{ width: 52, background: 'var(--bg-2)', color: 'var(--text-1)', border: '1px solid var(--line-strong)', borderRadius: 8, fontSize: 11, padding: '1px 3px' }} title="precise α (can exceed 2 to amplify)" />
                 </>}
                 <button onClick={() => remove(k.key)} style={{ ...iconBtn, color: 'var(--danger)' }}>×</button>
               </div>
@@ -1410,8 +2762,8 @@ export default function App() {
               )}
               {(d.ab.base != null || d.ab.inter != null) && (
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginTop: 8, fontSize: 11 }}>
-                  <div><span style={hint}>baseline output</span><div className="mono" style={{ whiteSpace: 'pre-wrap', background: 'var(--bg-2)', borderRadius: 4, padding: 6, marginTop: 3, maxHeight: 180, overflow: 'auto' }}>{d.ab.base ?? <span style={hint}>generating…</span>}</div></div>
-                  <div><span style={hint}>intervened output</span><div className="mono" style={{ whiteSpace: 'pre-wrap', background: 'var(--bg-2)', borderRadius: 4, padding: 6, marginTop: 3, maxHeight: 180, overflow: 'auto', border: '1px solid var(--line-strong)' }}>{d.ab.inter ?? (d.ab.base != null ? d.output || <span style={hint}>generating…</span> : <span style={hint}>…</span>)}</div></div>
+                  <div><span style={hint}>baseline output</span><div className="mono" style={{ whiteSpace: 'pre-wrap', background: 'var(--bg-2)', borderRadius: 10, padding: 6, marginTop: 3, maxHeight: 180, overflow: 'auto' }}>{d.ab.base ?? <span style={hint}>generating…</span>}</div></div>
+                  <div><span style={hint}>intervened output</span><div className="mono" style={{ whiteSpace: 'pre-wrap', background: 'var(--bg-2)', borderRadius: 10, padding: 6, marginTop: 3, maxHeight: 180, overflow: 'auto', border: '1px solid var(--line-strong)' }}>{d.ab.inter ?? (d.ab.base != null ? d.output || <span style={hint}>generating…</span> : <span style={hint}>…</span>)}</div></div>
                 </div>
               )}
               <div style={hint}>re-run the prompt to see the combined output · A/B compare runs it twice</div>
@@ -1419,8 +2771,17 @@ export default function App() {
           </div>
           <div style={{ marginTop: 12, borderTop: '1px solid var(--line)', paddingTop: 10 }}>
             <div style={{ display: 'flex', gap: 6, alignItems: 'center', marginBottom: 8 }}>
-              <input id={`rn-${mid}`} placeholder="region name" style={{ width: 110, background: 'var(--bg-2)', border: '1px solid var(--line-strong)', borderRadius: 4, padding: '2px 6px', outline: 'none', fontSize: 11 }} />
-              <Btn onClick={() => { const el = document.getElementById(`rn-${mid}`) as HTMLInputElement; const name = el?.value.trim(); if (name) { sendTo(mid, { type: 'save_region', name, region: { kind: 'spot', examples, topk: d.knobs.find((k) => k.kind === 'spot')?.topk ?? 0.05 } }); el.value = '' } }} disabled={pending.has(`save_region:${mid}`)} style={{ padding: '2px 10px' }} title="save the current top-k% spot mask to the workspace">{pending.has(`save_region:${mid}`) ? '⟳ ' : ''}Save region</Btn>
+              {(() => {
+                const rn = regionName[mid] ?? ''
+                // save base defaults to top 1% (the paper's headline size), not the drifting global spotTopk;
+                // an explicit spot-knob % still wins so a deliberate wider save is honored.
+                const doSave = () => { const name = rn.trim(); if (!name) { toast('[save] enter a region name first'); return } sendTo(mid, { type: 'save_region', name, region: { kind: 'spot', examples, topk: d.knobs.find((k) => k.kind === 'spot')?.topk ?? 0.01 } }); setRegionName((s) => ({ ...s, [mid]: '' })) }
+                return (<>
+                  <input value={rn} onChange={(e) => setRegionName((s) => ({ ...s, [mid]: e.target.value }))} onKeyDown={(e) => { if (e.key === 'Enter') doSave() }} placeholder="region name"
+                    style={{ width: 130, background: 'var(--bg-2)', border: '1px solid var(--line-strong)', borderRadius: 10, padding: '3px 8px', outline: 'none', fontSize: 11 }} />
+                  <Btn onClick={doSave} disabled={pending.has(`save_region:${mid}`)} style={{ padding: '2px 10px' }} title="save the current top-k% spot mask to the workspace">{pending.has(`save_region:${mid}`) ? '⟳ saving…' : 'Save region'}</Btn>
+                </>)
+              })()}
               <Btn onClick={() => { sendTo(mid, { type: 'ppl', examples: PRESETS.python.split('\n').filter(Boolean), tag: 'code' }); sendTo(mid, { type: 'ppl', examples: GENERAL_SET.split('\n').filter(Boolean), tag: 'general' }) }} disabled={pending.has(`ppl:${mid}`)} color="var(--accent)" style={{ padding: '2px 10px' }} title="PPL on code vs general text — selective damage shows here">{pending.has(`ppl:${mid}`) ? '⟳ ' : ''}Eval code｜general</Btn>
             </div>
             <div style={{ ...hint, fontSize: 11, marginBottom: 4 }}>saved % is the upper bound — reload as a knob and dial it down anytime, never up</div>
@@ -1442,11 +2803,11 @@ export default function App() {
 
   return (
     <div style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '5px 12px', borderBottom: '1px solid var(--line)', background: 'var(--bg-1)' }}>
-        <button onClick={() => setExplorerOpen((v) => !v)} title="explorer" style={{ background: 'transparent', border: 'none', color: 'var(--text-1)', cursor: 'pointer', padding: 0 }}>≡</button>
-        <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-          <img src="/logo.png" alt="" style={{ height: 16 }} onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = 'none' }} />
-          <strong>Parametic Studio</strong>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '9px 16px', borderBottom: '1px solid var(--line)', background: 'var(--bg-1)' }}>
+        <button onClick={() => setExplorerOpen((v) => !v)} title="explorer" style={{ background: 'transparent', border: 'none', color: 'var(--text-1)', cursor: 'pointer', padding: 0, fontSize: 16, display: 'flex', alignItems: 'center' }}>≡</button>
+        <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <img src="/logo.png" alt="" style={{ height: 18 }} onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = 'none' }} />
+          <strong style={{ fontSize: 14, fontWeight: 600, letterSpacing: '-0.01em' }}>Parametric Studio</strong>
         </span>
         <div style={{ display: 'flex', gap: 6 }}>
           {open.map((m) => {
@@ -1456,10 +2817,10 @@ export default function App() {
             const gb = (mb: number) => (mb / 1024).toFixed(1)
             const gpuIdx = gpus?.devices.find((d) => d.models.includes(m.id))?.index  // P16: which GPU this model landed on
             return (
-              <span key={m.id} title={loading ? `downloading/loading… ${elapsed}s` : undefined} style={{ position: 'relative', overflow: 'hidden', fontSize: 11, padding: '2px 8px', borderRadius: 4, background: 'var(--bg-2)', border: '1px solid var(--line)' }}>
+              <span key={m.id} title={loading ? `downloading/loading… ${elapsed}s` : undefined} style={{ position: 'relative', overflow: 'hidden', fontSize: 12, fontWeight: 500, padding: '3px 10px', borderRadius: 999, background: m.id === focused() ? 'var(--accent-soft)' : 'var(--bg-2)', border: `1px solid ${m.id === focused() ? 'transparent' : 'var(--line)'}`, color: m.id === focused() ? 'var(--accent)' : 'var(--text-1)' }}>
                 {loading ? <span style={{ color: 'var(--accent)' }}>⟳ </span> : data[m.id]?.busy ? <span style={{ color: 'var(--live)' }}>● </span> : ''}
-                <span className="mono">{m.label}</span>
-                {gpuIdx != null && <span className="mono" style={{ ...hint, marginLeft: 4 }}>GPU{gpuIdx}</span>}
+                <span>{m.label}</span>
+                {gpuIdx != null && <span className="mono" style={{ ...hint, marginLeft: 5, fontSize: 10 }}>GPU{gpuIdx}</span>}
                 {dl ? <span className="mono" style={hint}> {Math.round(dl.pct)}% · {gb(dl.done_mb)}/{gb(dl.total_mb)}GB</span> : loading && <span className="mono" style={hint}> loading… {elapsed}s</span>}
                 <span onClick={() => closeModel(m.id)} title="unload model" style={{ marginLeft: 6, cursor: 'pointer', color: 'var(--text-2)' }}>×</span>
                 {loading && (dl
@@ -1472,7 +2833,7 @@ export default function App() {
             if (e.target.value === '__hf') { setAsking('hf'); setAskValue(''); return }  // inline input below
             const c = catalog.find((x) => x.id === e.target.value)
             if (c) openModel(c.id, c.label, openDevice || undefined)
-          }} onFocus={() => sendTo(focused(), { type: 'gpus' })} style={{ fontSize: 11, background: 'var(--bg-2)', color: 'var(--text-1)', border: '1px solid var(--line-strong)', borderRadius: 4, padding: '2px 4px' }}>
+          }} onFocus={() => sendTo(focused(), { type: 'gpus' })} style={{ fontSize: 11, background: 'var(--bg-2)', color: 'var(--text-1)', border: '1px solid var(--line-strong)', borderRadius: 10, padding: '2px 4px' }}>
             <option value="">+ model</option>
             {closed.map((c) => {
               const gb = c.size_mb != null ? (c.size_mb / 1024).toFixed(1) : null
@@ -1483,7 +2844,7 @@ export default function App() {
           </select>
           {gpus && gpus.count > 1 && (
             <select value={openDevice} onChange={(e) => setOpenDevice(e.target.value)} title="GPU to load the next model onto"
-              style={{ fontSize: 11, background: 'var(--bg-2)', color: 'var(--text-1)', border: '1px solid var(--line-strong)', borderRadius: 4, padding: '2px 4px' }}>
+              style={{ fontSize: 11, background: 'var(--bg-2)', color: 'var(--text-1)', border: '1px solid var(--line-strong)', borderRadius: 10, padding: '2px 4px' }}>
               <option value="">Auto</option>
               {gpus.devices.map((d) => <option key={d.index} value={`cuda:${d.index}`}>GPU {d.index}</option>)}
             </select>
@@ -1494,7 +2855,7 @@ export default function App() {
                 if (e.key === 'Enter' && askValue.trim()) { const id = askValue.trim(); openModel(id, id.split('/').pop() ?? id, openDevice || undefined); setAsking(null) }
                 if (e.key === 'Escape') setAsking(null)
               }} onBlur={() => setAsking(null)}
-              style={{ fontSize: 11, width: 240, background: 'var(--bg-2)', color: 'var(--text-0)', border: '1px solid var(--accent)', borderRadius: 4, padding: '2px 6px', outline: 'none' }} />
+              style={{ fontSize: 11, width: 240, background: 'var(--bg-2)', color: 'var(--text-0)', border: '1px solid var(--accent)', borderRadius: 10, padding: '2px 6px', outline: 'none' }} />
           )}
         </div>
         <Btn onClick={() => setTheme((t) => (t === 'dark' ? 'light' : 'dark'))} title="toggle light/dark" color="var(--text-2)" style={{ marginLeft: 'auto', padding: '2px 8px' }}>{theme === 'dark' ? '☾' : '☀'}</Btn>
@@ -1558,10 +2919,10 @@ export default function App() {
           }
           // dataset context actions — reuse the editor-tab code paths (sample→spot, →train data)
           const useForSpot = (name: string) => computeSpotFor(focused(), name)  // pick → sample → compute (fetches if needed)
-          const useAsTrainData = (name: string) => {
+          const useAsTrainData = (name: string) => {  // select this dataset as the Train-tab benchmark (fetch content if needed)
             const dset = datasets.find((x) => x.name === name); if (!dset) return
-            if (dset.content == null) { sendTo(focused(), { type: 'read_dataset', name }); return }
-            setTrainDs(toExamples(dset.content, dset.fields).join('\n'))
+            setTrainDsName(name)
+            if (dset.content == null) sendTo(focused(), { type: 'read_dataset', name })
           }
           // open a context menu at the event position, targeting `target` (items rebuilt each render)
           const openMenu = (e: React.MouseEvent, target: string) => { e.preventDefault(); e.stopPropagation(); setMenu({ x: e.clientX, y: e.clientY, target }) }
@@ -1609,16 +2970,16 @@ export default function App() {
               reader.readAsText(f)
             }
           }
-          const addBtn = { ...hint, fontSize: 11, cursor: 'pointer', border: '1px solid var(--line-strong)', borderRadius: 4, padding: '1px 8px', background: 'transparent' } as const
+          const addBtn = { ...hint, fontSize: 11, cursor: 'pointer', border: '1px solid var(--line-strong)', borderRadius: 10, padding: '1px 8px', background: 'transparent' } as const
           return (
-          <div style={{ width: explorerW, flexShrink: 0, padding: '8px 10px', overflow: 'auto', background: 'var(--bg-1)' }}>
-            <div className="section-h" style={{ marginBottom: 6 }}>Models</div>
+          <div style={{ width: explorerW, flexShrink: 0, padding: '14px 12px', overflow: 'auto', background: 'var(--bg-1)' }}>
+            <div className="section-h" style={{ marginBottom: 10 }}>Models</div>
             {open.map((m) => {
               const tree = expModels.has(m.id) ? buildTree(m.id) : null
               const isSel = selected === `model:${m.id}`
               return (
                 <Fragment key={m.id}>
-                  <div className={`tree-row mono${isSel ? ' sel' : ''}`} onClick={() => { setSelected(`model:${m.id}`); setFocusModel(m.id) }} onContextMenu={(e) => { setSelected(`model:${m.id}`); openMenu(e, `model:${m.id}`) }} title={m.id}>
+                  <div className={`tree-row${isSel ? ' sel' : ''}`} onClick={() => { setSelected(`model:${m.id}`); setFocusModel(m.id) }} onContextMenu={(e) => { setSelected(`model:${m.id}`); openMenu(e, `model:${m.id}`) }} title={m.id}>
                     <span onClick={(e) => { e.stopPropagation(); toggleModel(m.id) }}><Chevron open={expModels.has(m.id)} /></span>
                     <Icon name="cube" />
                     <span className="tree-label" style={{ color: m.id === focused() && !isSel ? 'var(--accent)' : 'var(--text-1)' }}>{m.label}</span>
@@ -1629,12 +2990,12 @@ export default function App() {
               )
             })}
 
-            <div className="section-h" style={{ margin: '10px 0 4px' }}>Data</div>
+            <div className="section-h" style={{ margin: '20px 0 8px' }}>Data</div>
             {datasets.map((dset) => {
               const isSel = selected === `data:${dset.name}`
               const isArmed = armed === `data:${dset.name}`
               return (
-              <div key={dset.name} className={`tree-row mono${isSel ? ' sel' : ''}`} onClick={() => { setSelected(`data:${dset.name}`); openDataTab(dset.name) }} onContextMenu={(e) => { setSelected(`data:${dset.name}`); openMenu(e, `data:${dset.name}`) }}
+              <div key={dset.name} className={`tree-row${isSel ? ' sel' : ''}`} onClick={() => { setSelected(`data:${dset.name}`); openDataTab(dset.name) }} onContextMenu={(e) => { setSelected(`data:${dset.name}`); openMenu(e, `data:${dset.name}`) }}
                 title={dset.link ? `linked from outside the store (${dset.link}) · open in an editor tab` : dset.server ? 'on disk · open in an editor tab' : 'session-only · open in an editor tab'} style={{ fontSize: 11 }}>
                 <Icon name={dset.link ? 'link' : dset.server ? 'database' : 'file'} />
                 <span className="tree-label" style={{ color: 'var(--text-1)' }}>{dset.name} <span style={hint}>({dsMeta[dset.name]?.count ?? `${((dset.size ?? 0) / 1024).toFixed(1)}k`})</span></span>
@@ -1661,7 +3022,7 @@ export default function App() {
                   }
                   if (e.key === 'Escape') setAsking(null)
                 }} onBlur={() => setAsking(null)}
-                style={{ fontSize: 11, width: '100%', marginTop: 4, background: 'var(--bg-2)', color: 'var(--text-0)', border: '1px solid var(--accent)', borderRadius: 4, padding: '2px 6px', outline: 'none' }} />
+                style={{ fontSize: 11, width: '100%', marginTop: 4, background: 'var(--bg-2)', color: 'var(--text-0)', border: '1px solid var(--accent)', borderRadius: 10, padding: '2px 6px', outline: 'none' }} />
             )}
             {asking === 'hf-dataset' && (() => {
               const submitHfDataset = () => {
@@ -1681,7 +3042,7 @@ export default function App() {
                 if (e.key === 'Escape') setAsking(null)
               }
               const onBlur = (e: React.FocusEvent) => { if (!e.relatedTarget) setAsking(null) }
-              const fieldStyle = { fontSize: 11, minWidth: 0, background: 'var(--bg-2)', color: 'var(--text-0)', border: '1px solid var(--accent)', borderRadius: 4, padding: '2px 6px', outline: 'none' } as const
+              const fieldStyle = { fontSize: 11, minWidth: 0, background: 'var(--bg-2)', color: 'var(--text-0)', border: '1px solid var(--accent)', borderRadius: 10, padding: '2px 6px', outline: 'none' } as const
               return (
                 <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginTop: 4 }}>
                   <input autoFocus value={askValue} onChange={(e) => setAskValue(e.target.value)} placeholder="openai/gsm8k · Enter"
@@ -1701,11 +3062,33 @@ export default function App() {
             {hfLoading && <div style={{ ...hint, fontSize: 11, marginTop: 4 }}>loading {hfLoading}…</div>}
             {uploading.length > 0 && <div style={{ ...hint, fontSize: 11, marginTop: 4 }}>⟳ uploading {uploading.length === 1 ? uploading[0] : `${uploading.length} files`}…</div>}
 
-            <div style={{ display: 'flex', alignItems: 'center', margin: '10px 0 4px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', margin: '20px 0 8px' }}>
               <span className="section-h">Regions</span>
               {(fd?.regions ?? []).length >= 2 && <button onClick={() => openTabId('compare')} title="compare saved regions (per-dataset spots)" style={{ ...iconBtn, marginLeft: 'auto', color: 'var(--accent)', padding: 0 }}>Compare</button>}
             </div>
             {(fd?.regions ?? []).length === 0 && <div style={{ ...hint, fontSize: 11 }}>save one in the spot view</div>}
+            <button onClick={() => { setAsking('import-region'); setAskValue(''); setAskRegionPath('') }} disabled={pending.has(`import_region:${focused()}`)}
+              title="import a research-pipeline mask directory (one bool .pt per parameter, filename = param name) as a region — no recompute" style={{ ...addBtn, marginBottom: 4 }}>{pending.has(`import_region:${focused()}`) ? '⟳ ' : ''}+ Import</button>
+            {asking === 'import-region' && (() => {
+              const submitImport = () => {
+                if (!askValue.trim() || !askRegionPath.trim()) return
+                sendTo(focused(), { type: 'import_region', name: askValue.trim(), path: askRegionPath.trim() })
+                setAsking(null)
+              }
+              const onKey = (e: React.KeyboardEvent) => { if (e.key === 'Enter') submitImport(); if (e.key === 'Escape') setAsking(null) }
+              const onBlur = (e: React.FocusEvent) => { if (!e.relatedTarget) setAsking(null) }
+              const fieldStyle = { fontSize: 11, minWidth: 0, background: 'var(--bg-2)', color: 'var(--text-0)', border: '1px solid var(--accent)', borderRadius: 10, padding: '2px 6px', outline: 'none' } as const
+              return (
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginBottom: 6 }}>
+                  <input autoFocus value={askValue} onChange={(e) => setAskValue(e.target.value)} placeholder="region name (e.g. java)"
+                    onKeyDown={onKey} onBlur={onBlur} style={{ ...fieldStyle, flex: 1 }} />
+                  <input value={askRegionPath} onChange={(e) => setAskRegionPath(e.target.value)} placeholder="folder of <param>.pt masks"
+                    onKeyDown={onKey} onBlur={onBlur} style={{ ...fieldStyle, flex: 2 }} />
+                  <button onMouseDown={(e) => e.preventDefault()} onClick={submitImport} disabled={!askValue.trim() || !askRegionPath.trim()}
+                    title="combine the folder's per-param masks into one region" style={{ ...addBtn, flexShrink: 0, borderColor: 'var(--accent)', color: 'var(--accent)', opacity: askValue.trim() && askRegionPath.trim() ? 1 : 0.5 }}>Import</button>
+                </div>
+              )
+            })()}
             {(fd?.regions ?? []).map((r) => {
               const isSel = selected === `region:${r.name}`
               const isArmed = armed === `region:${r.name}`
@@ -1732,31 +3115,32 @@ export default function App() {
         <div ref={rowRef} style={{ flex: 1, display: 'flex', minWidth: 0 }}>
         {cols.map((col, ci) => (
           <Fragment key={col.id}>
-            <div style={{ flexGrow: col.w, flexBasis: 0, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
+            <div style={{ flexGrow: maxTile != null ? (col.tiles.some((t) => t.id === maxTile) ? 1 : 0) : col.w, flexBasis: 0, minWidth: 0, display: maxTile != null && !col.tiles.some((t) => t.id === maxTile) ? 'none' : 'flex', flexDirection: 'column' }}>
               {col.tiles.map((tile, ti) => (
                 <Fragment key={tile.id}>
                   <div onMouseDown={() => setFocusModel(tile.model)} onDragOver={(e) => { e.preventDefault(); setOverTile(tile.id) }} onDrop={() => moveTab(tile.id)}
-                    style={{ position: 'relative', flexGrow: tile.h, flexBasis: 0, minHeight: 0, display: 'flex', flexDirection: 'column', borderTop: ti > 0 ? '1px solid var(--line)' : 'none' }}>
-                    <div style={{ display: 'flex', alignItems: 'center', borderBottom: '1px solid var(--line-strong)', background: 'var(--bg-1)', overflow: 'hidden' }}>
-                      <select value={tile.model} onChange={(e) => setTileModel(tile.id, e.target.value)} style={{ fontSize: 11, background: 'var(--bg-2)', color: 'var(--accent)', border: 'none', borderRight: '1px solid var(--line)', padding: '4px 2px', maxWidth: 96 }}>
+                    style={{ position: 'relative', flexGrow: maxTile != null ? (tile.id === maxTile ? 1 : 0) : tile.h, flexBasis: 0, minHeight: 0, display: maxTile != null && tile.id !== maxTile ? 'none' : 'flex', flexDirection: 'column', borderTop: ti > 0 ? '1px solid var(--line)' : 'none' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', borderBottom: '1px solid var(--line)', background: 'var(--bg-1)', overflow: 'hidden' }}>
+                      <select value={tile.model} onChange={(e) => setTileModel(tile.id, e.target.value)} style={{ fontSize: 11, fontWeight: 500, background: 'transparent', color: 'var(--accent)', border: 'none', borderRight: '1px solid var(--line)', padding: '6px 6px', maxWidth: 110 }}>
                         {open.map((m) => <option key={m.id} value={m.id}>{m.label}</option>)}
                       </select>
                       <div style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
                         {tile.tabs.map((v, idx) => (
                           <span key={v} draggable onDragStart={() => { drag.current = { tid: tile.id, idx }; setDragging(true) }} onDragEnd={() => { drag.current = null; setDragging(false); setOverTile(null) }}
                             onDragOver={(e) => { e.preventDefault(); e.stopPropagation() }} onDrop={(e) => { e.stopPropagation(); moveTab(tile.id, idx) }} onClick={() => setActive(tile.id, idx)}
-                            style={{ display: 'flex', alignItems: 'center', gap: 3, padding: '5px 7px', cursor: 'grab', fontSize: 11, whiteSpace: 'nowrap', color: idx === tile.active ? 'var(--text-0)' : 'var(--text-2)', background: idx === tile.active ? 'var(--bg-2)' : 'transparent', borderTop: idx === tile.active ? '2px solid var(--accent)' : '2px solid transparent', borderRight: '1px solid var(--line)' }}>
-                            {v.startsWith('data:') ? `▤ ${v.slice(5)}` : v.startsWith('region:') ? `◈ ${v.slice(7)}` : v}<span onClick={(e) => { e.stopPropagation(); closeTab(tile.id, idx) }} style={hint}>×</span>
+                            style={{ display: 'flex', alignItems: 'center', gap: 5, padding: '7px 12px', cursor: 'grab', fontSize: 12, fontWeight: idx === tile.active ? 600 : 500, whiteSpace: 'nowrap', color: idx === tile.active ? 'var(--text-0)' : 'var(--text-2)', background: 'transparent', boxShadow: idx === tile.active ? 'inset 0 -2px 0 var(--accent)' : 'none', transition: 'color var(--ease)' }}>
+                            {v.startsWith('data:') ? `▤ ${v.slice(5)}` : v.startsWith('region:') ? `◈ ${v.slice(7)}` : viewLabel(v)}<span onClick={(e) => { e.stopPropagation(); closeTab(tile.id, idx) }} style={hint}>×</span>
                           </span>
                         ))}
                         {tile.tabs.filter((t) => (VIEWS as readonly string[]).includes(t)).length < VIEWS.length && (
                           <select value="" onChange={(e) => { if (e.target.value) addTab(tile.id, e.target.value as View) }} title="add view" style={{ ...iconBtn, appearance: 'none', background: 'transparent' }}>
                             <option value="">+</option>
-                            {VIEWS.filter((v) => !tile.tabs.includes(v)).map((v) => <option key={v} value={v}>{v}</option>)}
+                            {VIEWS.filter((v) => !tile.tabs.includes(v)).map((v) => <option key={v} value={v}>{viewLabel(v)}</option>)}
                           </select>
                         )}
                       </div>
                       <div style={{ display: 'flex', flexShrink: 0 }}>
+                        <button onClick={() => setMaxTile((m) => m === tile.id ? null : tile.id)} title={maxTile === tile.id ? 'restore size' : 'maximize this pane'} style={{ ...iconBtn, color: maxTile === tile.id ? 'var(--accent)' : undefined }}>{maxTile === tile.id ? '⤡' : '⤢'}</button>
                         <button onClick={() => splitRight(tile.id)} title="split right" style={iconBtn}>⊟</button>
                         <button onClick={() => splitDown(tile.id)} title="split down" style={iconBtn}>⊞</button>
                         {multi && <button onClick={() => pruneClose(tile.id)} title="close pane" style={iconBtn}>×</button>}
@@ -1765,31 +3149,33 @@ export default function App() {
                     <div style={{ flex: 1, overflow: 'auto', padding: '12px 14px' }}>{viewBody(tile.model, tile.tabs[tile.active])}</div>
                     {dragging && overTile === tile.id && <div style={{ position: 'absolute', inset: 0, background: 'rgba(0,122,255,0.16)', border: '1px solid var(--accent)', pointerEvents: 'none' }} />}
                   </div>
-                  {ti < col.tiles.length - 1 && <div onMouseDown={(e) => resizeTiles(ci, ti, e)} style={{ height: 5, flexShrink: 0, cursor: 'row-resize', background: 'var(--line)' }} />}
+                  {maxTile == null && ti < col.tiles.length - 1 && <div onMouseDown={(e) => resizeTiles(ci, ti, e)} style={{ height: 5, flexShrink: 0, cursor: 'row-resize', background: 'var(--line)' }} />}
                 </Fragment>
               ))}
             </div>
-            {ci < cols.length - 1 && <div onMouseDown={(e) => resizeCols(ci, e)} style={{ width: 5, flexShrink: 0, cursor: 'col-resize', background: 'var(--line)' }} />}
+            {maxTile == null && ci < cols.length - 1 && <div onMouseDown={(e) => resizeCols(ci, e)} style={{ width: 5, flexShrink: 0, cursor: 'col-resize', background: 'var(--line)' }} />}
           </Fragment>
         ))}
         </div>
         )}
-        {/* chat dock — bound to the focused model */}
-        <div onMouseDown={(e) => dragSidebar(e, 'right')} style={{ width: 5, flexShrink: 0, cursor: 'col-resize', background: 'var(--line)' }} />
-        <div style={{ width: chatW, flexShrink: 0, display: 'flex', flexDirection: 'column', background: 'var(--bg-1)' }}>
-          <div style={{ display: 'flex', alignItems: 'center', padding: '6px 12px', color: 'var(--text-2)', fontWeight: 500, borderBottom: '1px solid var(--line)' }}>
-            <span className="section-h">Chat · <span className="mono" style={{ textTransform: 'none', letterSpacing: 0 }}>{open.find((m) => m.id === focused())?.label ?? ''}</span>{sync && <span style={{ ...hint, textTransform: 'none', letterSpacing: 0 }}> · broadcast</span>}</span>
+        {/* chat dock — bound to the focused model. flush with the window edge (no floating/shadow). hidden while a pane is maximized. */}
+        {maxTile == null && <div onMouseDown={(e) => dragSidebar(e, 'right')} style={{ width: 5, flexShrink: 0, cursor: 'col-resize', background: 'var(--line)' }} />}
+        <div style={{ width: chatW, flexShrink: 0, display: maxTile != null ? 'none' : 'flex', flexDirection: 'column', background: 'var(--bg-1)' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '10px 14px', color: 'var(--text-1)', fontWeight: 500, borderBottom: '1px solid var(--line)' }}>
+            <span style={{ width: 20, height: 20, borderRadius: '50%', background: 'var(--accent-soft)', color: 'var(--accent)', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', fontSize: 11, flexShrink: 0 }}>◆</span>
+            <span style={{ fontSize: 13 }}>Chat{sync && <span style={{ ...hint, fontSize: 12 }}> · broadcast</span>}</span>
+            <span className="mono" style={{ fontSize: 11, color: 'var(--text-1)', background: 'var(--bg-2)', border: '1px solid var(--line-strong)', borderRadius: 999, padding: '2px 8px' }}>{open.find((m) => m.id === focused())?.label ?? ''}</span>
             <button onClick={() => setGenOpen((v) => !v)} title="generation options" style={{ ...iconBtn, marginLeft: 'auto', color: genOpen ? 'var(--accent)' : 'var(--text-2)' }}>⚙</button>
           </div>
           {genOpen && (
             <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', padding: '6px 12px', borderBottom: '1px solid var(--line)', fontSize: 11 }}>
               <span style={hint}>max_tokens</span>
-              <input type="number" min={1} value={maxTokens} onChange={(e) => setMaxTokens(Math.max(1, Number(e.target.value)))} style={{ width: 60, background: 'var(--bg-2)', color: 'var(--text-1)', border: '1px solid var(--line-strong)', borderRadius: 4, padding: '1px 4px', fontSize: 11 }} />
+              <input type="number" min={1} value={maxTokens} onChange={(e) => setMaxTokens(Math.max(1, Number(e.target.value)))} style={{ width: 60, background: 'var(--bg-2)', color: 'var(--text-1)', border: '1px solid var(--line-strong)', borderRadius: 10, padding: '1px 4px', fontSize: 11 }} />
               <span style={hint} title="0 = greedy (deterministic) · >0 = sampling">temp</span>
-              <input type="number" min={0} step={0.1} value={temperature} onChange={(e) => setTemperature(Math.max(0, Number(e.target.value)))} style={{ width: 48, background: 'var(--bg-2)', color: 'var(--text-1)', border: '1px solid var(--line-strong)', borderRadius: 4, padding: '1px 4px', fontSize: 11 }} />
+              <input type="number" min={0} step={0.1} value={temperature} onChange={(e) => setTemperature(Math.max(0, Number(e.target.value)))} style={{ width: 48, background: 'var(--bg-2)', color: 'var(--text-1)', border: '1px solid var(--line-strong)', borderRadius: 10, padding: '1px 4px', fontSize: 11 }} />
               <span style={hint} title="fewer probes = faster generation">probes</span>
-              {(['attention', 'activation', 'logitlens'] as const).map((p) => (
-                <span key={p} onClick={() => setProbesOn((o) => ({ ...o, [p]: !o[p] }))} style={{ cursor: 'pointer', padding: '0 6px', borderRadius: 4, border: '1px solid var(--line-strong)', color: probesOn[p] ? 'var(--accent)' : 'var(--text-2)' }}>{probesOn[p] ? '●' : '○'} {p.slice(0, 4)}</span>
+              {(['attention', 'activation', 'logitlens', 'spot_activation'] as const).map((p) => (
+                <span key={p} onClick={() => setProbesOn((o) => ({ ...o, [p]: !o[p] }))} className={`chip${probesOn[p] ? ' on' : ''}`}>{probesOn[p] ? '●' : '○'} {p === 'spot_activation' ? 'spot-act' : p.slice(0, 4)}</span>
               ))}
             </div>
           )}
@@ -1797,9 +3183,14 @@ export default function App() {
             {(data[focused()]?.output) || <span style={hint} className="mono">ask below</span>}
             {data[focused()]?.busy && <span style={{ color: 'var(--accent)' }}>▌</span>}
           </div>
-          <div style={{ display: 'flex', gap: 8, padding: 10, borderTop: '1px solid var(--line)' }}>
-            <input value={prompt} onChange={(e) => setPrompt(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && send()} placeholder={sync ? 'ask all open models…' : 'ask focused…'} style={{ flex: 1, background: 'var(--bg-2)', border: '1px solid var(--line-strong)', borderRadius: 4, padding: '6px 10px', outline: 'none' }} />
-            <Btn onClick={anyBusy ? stop : send} title={anyBusy ? 'stop generation' : 'send'} color={anyBusy ? 'var(--danger)' : 'var(--text-0)'} style={{ border: `1px solid ${anyBusy ? 'var(--danger)' : 'var(--line-strong)'}`, padding: '6px 12px', whiteSpace: 'nowrap' }}>{anyBusy ? '■ stop' : '↑'}</Btn>
+          <div style={{ padding: 12, borderTop: '1px solid var(--line)' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, background: 'var(--bg-2)', border: '1px solid var(--line-strong)', borderRadius: 16, padding: '6px 6px 6px 14px', transition: 'border-color var(--ease)' }}>
+              <input value={prompt} onChange={(e) => setPrompt(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && send()} placeholder={sync ? 'ask all open models…' : 'ask focused…'}
+                style={{ flex: 1, background: 'transparent', border: 'none', outline: 'none', padding: '6px 0', fontSize: 13, color: 'var(--text-0)' }} />
+              <button onClick={anyBusy ? stop : send} title={anyBusy ? 'stop generation' : 'send'}
+                style={{ flexShrink: 0, width: 30, height: 30, borderRadius: '50%', border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 13, color: '#fff', background: anyBusy ? 'var(--danger)' : 'var(--accent)', transition: 'opacity var(--ease)' }}
+                onMouseEnter={(e) => { e.currentTarget.style.opacity = '0.85' }} onMouseLeave={(e) => { e.currentTarget.style.opacity = '1' }}>{anyBusy ? '■' : '↑'}</button>
+            </div>
           </div>
         </div>
       </div>
@@ -1818,11 +3209,11 @@ export default function App() {
         </span>
       </div>
       {settingsOpen && (() => {
-        const inp = { width: '100%', background: 'var(--bg-2)', color: 'var(--text-0)', border: '1px solid var(--line-strong)', borderRadius: 4, padding: '3px 8px', outline: 'none', fontSize: 12 } as const
+        const inp = { width: '100%', background: 'var(--bg-2)', color: 'var(--text-0)', border: '1px solid var(--line-strong)', borderRadius: 10, padding: '3px 8px', outline: 'none', fontSize: 12 } as const
         const setC = (k: string, v: string) => setConfig((c) => ({ ...c, [k]: v }))
         const gb = (mb: number | null) => (mb != null ? (mb / 1024).toFixed(1) : '?')
         return (
-          <div style={{ position: 'fixed', top: 44, right: 12, width: 360, maxHeight: 'calc(100vh - 60px)', overflow: 'auto', background: 'var(--bg-1)', border: '1px solid var(--line-strong)', borderRadius: 8, boxShadow: '0 8px 32px rgba(0,0,0,0.45)', padding: 14, zIndex: 50 }}>
+          <div style={{ position: 'fixed', top: 44, right: 12, width: 360, maxHeight: 'calc(100vh - 60px)', overflow: 'auto', background: 'var(--bg-1)', border: '1px solid var(--line-strong)', borderRadius: 14, boxShadow: '0 8px 32px rgba(0,0,0,0.45)', padding: 14, zIndex: 50 }}>
             <div style={{ display: 'flex', alignItems: 'center', marginBottom: 12 }}>
               <strong style={{ color: 'var(--text-0)' }}>Settings</strong>
               <button onClick={() => setSettingsOpen(false)} style={{ ...iconBtn, marginLeft: 'auto', fontSize: 14 }}>×</button>
@@ -1834,7 +3225,7 @@ export default function App() {
                 <button key={mode} onClick={() => { if (mode === 'remote' && !inTauri()) return; setKernelMode(mode) }}
                   disabled={mode === 'remote' && !inTauri()}
                   title={mode === 'remote' && !inTauri() ? 'Remote (SSH) is only available in the desktop app' : undefined}
-                  style={{ flex: 1, padding: '4px 8px', fontSize: 11, borderRadius: 4, cursor: mode === 'remote' && !inTauri() ? 'default' : 'pointer',
+                  style={{ flex: 1, padding: '4px 8px', fontSize: 11, borderRadius: 10, cursor: mode === 'remote' && !inTauri() ? 'default' : 'pointer',
                     border: `1px solid ${kernelMode === mode ? 'var(--accent)' : 'var(--line-strong)'}`,
                     color: mode === 'remote' && !inTauri() ? 'var(--text-2)' : kernelMode === mode ? 'var(--accent)' : 'var(--text-1)',
                     background: 'var(--bg-2)', opacity: mode === 'remote' && !inTauri() ? 0.5 : 1 }}>
@@ -1888,7 +3279,7 @@ export default function App() {
                   <div style={{ display: 'flex', gap: 6, margin: '2px 0' }}>
                     {(['password', 'key'] as const).map((auth) => (
                       <button key={auth} onClick={() => setSshAuth(auth)} disabled={isTunnelLive()}
-                        style={{ flex: 1, padding: '4px 8px', fontSize: 11, borderRadius: 4, cursor: isTunnelLive() ? 'default' : 'pointer',
+                        style={{ flex: 1, padding: '4px 8px', fontSize: 11, borderRadius: 10, cursor: isTunnelLive() ? 'default' : 'pointer',
                           border: `1px solid ${sshAuth === auth ? 'var(--accent)' : 'var(--line-strong)'}`,
                           color: sshAuth === auth ? 'var(--accent)' : 'var(--text-1)',
                           background: 'var(--bg-2)', opacity: isTunnelLive() ? 0.5 : 1 }}>

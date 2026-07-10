@@ -134,7 +134,7 @@ fn close_splash(app: tauri::AppHandle) {
 fn build_menu(app: &tauri::AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
     let app_menu = Submenu::with_items(
         app,
-        "Parametic Studio",
+        "Parametric Studio",
         true,
         &[
             &PredefinedMenuItem::about(app, None, None)?,

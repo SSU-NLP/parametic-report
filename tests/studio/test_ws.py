@@ -67,6 +67,182 @@ def test_ws_streams_activation_when_subscribed():
     assert len(acts[0]["data"]) == 2
 
 
+def test_ws_streams_spot_activation_when_subscribed_and_spot_computed():
+    api.SESSION = _tiny_session()
+    with TestClient(api.app).websocket_connect("/ws") as ws:
+        ws.send_json({"type": "spot", "examples": ["alpha", "beta"]})  # populate _imp_cache first
+        while ws.receive_json()["type"] != "spotmap":
+            pass
+        ws.send_json({"type": "generate", "prompt": "hi", "max_tokens": 3, "probes": ["spot_activation"]})
+        acts = []
+        while True:
+            msg = ws.receive_json()
+            if msg["type"] == "done":
+                break
+            if msg["type"] == "spot_activation":
+                acts.append(msg)
+    assert [a["step"] for a in acts] == [0, 1, 2]
+    assert acts[0]["layers"] == 2
+    assert len(acts[0]["grid"]) == 2 and all(len(row) == len(acts[0]["modules"]) for row in acts[0]["grid"])
+    assert all(v >= 0.0 for row in acts[0]["grid"] for v in row)
+
+
+def test_ws_spot_activation_uses_named_saved_region_without_recompute():
+    # a region saved in an earlier session (e.g. "java") — generate must drive the probe from it via
+    # spot_region, with no "spot" op sent this run (mirrors reopening a model with an existing region).
+    api.SESSION = _tiny_session()
+    with TestClient(api.app).websocket_connect("/ws") as ws:
+        ws.send_json({"type": "save_region", "name": "java", "region": {"kind": "cell", "layer": 0, "module": "mlp.gate_proj.weight"}})
+        saved = ws.receive_json()
+        assert saved["type"] == "region_saved" and saved["name"] == "java"
+        ws.send_json({"type": "generate", "prompt": "hi", "max_tokens": 2, "probes": ["spot_activation"], "spot_region": "java"})
+        acts = []
+        while True:
+            msg = ws.receive_json()
+            if msg["type"] == "done":
+                break
+            if msg["type"] == "spot_activation":
+                acts.append(msg)
+    assert len(acts) == 2  # no spot computed this run — still worked from the saved region
+
+
+def test_ws_region_usage_returns_per_token():
+    api.SESSION = _tiny_session()
+    with TestClient(api.app).websocket_connect("/ws") as ws:
+        ws.send_json({"type": "spot", "examples": ["alpha", "beta"]})
+        while ws.receive_json()["type"] != "spotmap":
+            pass
+        ws.send_json({"type": "region_usage", "topk": 0.1, "prompt": "hi there"})
+        m = ws.receive_json()
+    assert m["type"] == "region_usage" and m["prompt"] == "hi there"
+    assert 0.0 <= m["overall"] <= 1.0 and m["tokens"] and all("text" in t and "usage" in t for t in m["tokens"])
+
+
+def test_ws_region_usage_batch_streams_rows():
+    api.SESSION = _tiny_session()
+    with TestClient(api.app).websocket_connect("/ws") as ws:
+        ws.send_json({"type": "spot", "examples": ["alpha", "beta"]})
+        while ws.receive_json()["type"] != "spotmap":
+            pass
+        ws.send_json({"type": "region_usage_batch", "topk": 0.1, "prompts": ["write code", "explain photosynthesis"]})
+        rows, done = [], False
+        while True:
+            m = ws.receive_json()
+            if m["type"] == "usage_batch_done":
+                done = True
+                break
+            if m["type"] == "usage_row":
+                rows.append(m)
+    assert done and [r["i"] for r in rows] == [0, 1]
+    assert all(0.0 <= r["overall"] <= 1.0 and "prompt" in r for r in rows)
+
+
+def test_ws_region_usage_errors_without_spot():
+    api.SESSION = _tiny_session()
+    with TestClient(api.app).websocket_connect("/ws") as ws:
+        ws.send_json({"type": "region_usage", "prompt": "hi"})
+        m = ws.receive_json()
+    assert m["type"] == "error" and m["op"] == "region_usage"
+
+
+def test_ws_causal_contrast_streams_all_conditions():
+    api.SESSION = _tiny_session()
+    with TestClient(api.app).websocket_connect("/ws") as ws:
+        ws.send_json({"type": "spot", "examples": ["alpha", "beta"]})       # populate importance cache
+        while ws.receive_json()["type"] != "spotmap":
+            pass
+        ws.send_json({"type": "causal_contrast", "topk": 0.1,
+                      "code_examples": ["alpha", "beta"], "general_examples": ["gamma"]})
+        stages, result = [], None
+        while True:
+            m = ws.receive_json()
+            if m["type"] == "contrast_result":
+                result = m
+                break
+            if m["type"] == "contrast_progress":
+                stages.append(m["stage"])
+    assert stages == ["clean", "spot", "random", "bottom"]
+    for tag in ("clean", "spot", "random", "bottom"):
+        assert result[tag]["code_ppl"] > 0 and result[tag]["general_ppl"] > 0
+
+
+def test_ws_causal_contrast_errors_without_spot():
+    api.SESSION = _tiny_session()
+    with TestClient(api.app).websocket_connect("/ws") as ws:
+        ws.send_json({"type": "causal_contrast", "topk": 0.1, "code_examples": ["alpha"]})
+        m = ws.receive_json()
+    assert m["type"] == "error" and m["op"] == "causal_contrast"
+
+
+def test_ws_concentration_returns_curve_after_spot():
+    api.SESSION = _tiny_session()
+    with TestClient(api.app).websocket_connect("/ws") as ws:
+        ws.send_json({"type": "spot", "examples": ["alpha", "beta"]})
+        while ws.receive_json()["type"] != "spotmap":
+            pass
+        ws.send_json({"type": "concentration", "points": 30})
+        m = ws.receive_json()
+    assert m["type"] == "concentration" and m["curve"][0] == [0.0, 0.0]
+    assert m["curve"][-1][1] == pytest.approx(1.0, abs=1e-4) and m["total_params"] > 0
+
+
+def test_ws_concentration_null_without_spot():
+    api.SESSION = _tiny_session()
+    with TestClient(api.app).websocket_connect("/ws") as ws:
+        ws.send_json({"type": "concentration"})
+        m = ws.receive_json()
+    assert m["type"] == "concentration" and m["curve"] is None
+
+
+def test_ws_import_region_then_used_by_spot_activation(tmp_path):
+    # mirrors importing a research-pipeline mask directory: one bool .pt per param, filename = param name
+    session = _tiny_session()
+    api.SESSION = session
+    pname = "model.layers.0.mlp.gate_proj.weight"
+    p = dict(session.model.named_parameters())[pname]
+    mask = torch.zeros_like(p, dtype=torch.bool)
+    mask[0, 0] = True
+    torch.save(mask, tmp_path / f"{pname}.pt")
+    with TestClient(api.app).websocket_connect("/ws") as ws:
+        ws.send_json({"type": "import_region", "name": "java", "path": str(tmp_path)})
+        saved = ws.receive_json()
+        assert saved["type"] == "region_saved" and saved["name"] == "java" and saved["imported"] == 1
+        ws.send_json({"type": "regions"})
+        assert {r["name"] for r in ws.receive_json()["regions"]} == {"java"}
+        ws.send_json({"type": "generate", "prompt": "hi", "max_tokens": 2, "probes": ["spot_activation"], "spot_region": "java"})
+        acts = []
+        while True:
+            msg = ws.receive_json()
+            if msg["type"] == "done":
+                break
+            if msg["type"] == "spot_activation":
+                acts.append(msg)
+    assert len(acts) == 2
+
+
+def test_ws_import_region_errors_on_no_matching_masks(tmp_path):
+    api.SESSION = _tiny_session()
+    torch.save(torch.zeros(3, dtype=torch.bool), tmp_path / "not.a.real.param.pt")
+    with TestClient(api.app).websocket_connect("/ws") as ws:
+        ws.send_json({"type": "import_region", "name": "java", "path": str(tmp_path)})
+        msg = ws.receive_json()
+    assert msg["type"] == "error" and msg["op"] == "import_region"
+
+
+def test_ws_omits_spot_activation_when_no_spot_computed():
+    # no prior "spot" call → no cached importance → probe silently yields nothing (not an error)
+    api.SESSION = _tiny_session()
+    with TestClient(api.app).websocket_connect("/ws") as ws:
+        ws.send_json({"type": "generate", "prompt": "hi", "max_tokens": 2, "probes": ["spot_activation"]})
+        msgs = []
+        while True:
+            msg = ws.receive_json()
+            if msg["type"] == "done":
+                break
+            msgs.append(msg)
+    assert all(m["type"] != "spot_activation" for m in msgs)
+
+
 def test_ws_streams_logitlens_when_subscribed():
     api.SESSION = _tiny_session()
     with TestClient(api.app).websocket_connect("/ws") as ws:

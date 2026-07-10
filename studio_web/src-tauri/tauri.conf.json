@@ -1,6 +1,6 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
-  "productName": "Parametic Studio",
+  "productName": "Parametric Studio",
   "version": "0.1.0",
   "identifier": "com.parametic.studio",
   "build": {
@@ -12,7 +12,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "Parametic Studio",
+        "title": "Parametric Studio",
         "width": 1440,
         "height": 900,
         "resizable": true,

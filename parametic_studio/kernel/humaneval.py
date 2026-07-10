@@ -63,6 +63,24 @@ def check_correctness(program, timeout=10.0):
         return False, detail[-500:] if detail else f"exit {proc.returncode}"
 
 
+def run_program(program, timeout=10.0):
+    """Run `program` in a fresh python subprocess, capturing stdout/stderr/exit — for the interactive
+    Code tab (show what happened, not a pass/fail verdict). Same process isolation + timeout as
+    check_correctness. Returns {exit, stdout, stderr, timed_out, duration_ms}."""
+    import time
+    with tempfile.TemporaryDirectory() as d:
+        path = Path(d) / "prog.py"
+        path.write_text(program)
+        t0 = time.time()
+        try:
+            proc = subprocess.run([sys.executable, str(path)], capture_output=True, text=True, timeout=timeout)
+        except subprocess.TimeoutExpired as e:
+            return {"exit": None, "stdout": e.stdout or "", "stderr": e.stderr or "",
+                    "timed_out": True, "duration_ms": int((time.time() - t0) * 1000)}
+        return {"exit": proc.returncode, "stdout": proc.stdout, "stderr": proc.stderr,
+                "timed_out": False, "duration_ms": int((time.time() - t0) * 1000)}
+
+
 def estimate_pass_at_k(n, c, k):
     """Standard unbiased pass@k estimator: 1 - C(n-c, k)/C(n, k).
     n samples, c correct → probability at least one of k drawn passes.

@@ -70,6 +70,7 @@ class ModelSession:
                     self._migrate_meta(f, meta)  # one-time: legacy .pt with no sidecar → compute + write, then free
                 self._region_meta[f.stem] = json.loads(meta.read_text())
                 self.region_grids[f.stem] = self._region_meta[f.stem].get("grid")
+        self.leaf_modules_probed = self._leaf_modules()
         self.modules_probed = self._register_activation_hooks()
 
     def _migrate_meta(self, pt_path, meta_path):
@@ -104,7 +105,24 @@ class ModelSession:
         for i, layer in enumerate(self.model.model.layers):
             for name in names:
                 self._hook_handles.append(getattr(layer, name).register_forward_hook(self._act_hook(i, name)))
+        self._leaf_out = {}  # (layer, submodule path) -> full-sequence output tensor, for activation/spot grids
+        seen = set()
+        for i, layer in enumerate(self.model.model.layers):
+            for path in self.leaf_modules_probed:  # weight+bias of the same leaf share one output
+                if (i, path) in seen:
+                    continue
+                seen.add((i, path))
+                target = layer
+                for part in path.split("."):
+                    target = getattr(target, part)
+                self._hook_handles.append(target.register_forward_hook(self._leaf_hook(i, path)))
         return names
+
+    def _leaf_hook(self, i, path):
+        def hook(_module, _inp, out):
+            h = out[0] if isinstance(out, tuple) else out  # [b, seq, hidden|out_features]
+            self._leaf_out[(i, path)] = h[0].detach()
+        return hook
 
     def close(self):
         # remove hooks so the model (and this session) can be GC'd / freed.
@@ -115,12 +133,39 @@ class ModelSession:
     def _act_hook(self, i, name):
         def hook(_module, _inp, out):
             h = out[0] if isinstance(out, tuple) else out  # [b, seq, hidden]
-            self._acts[(i, name)] = float(h[0, -1].detach().norm())
+            self._acts[(i, name)] = float(h[0].detach().float().norm(dim=-1).sum())
         return hook
 
     def _modules(self):
         return [m.group(2) for name, _ in self.model.named_parameters()
                 if (m := _LAYER_RE.match(name)) and int(m.group(1)) == 0]
+
+    def _leaf_modules(self):
+        modules = []
+        seen = set()
+        for mod in self._modules():
+            path = re.sub(r"\.(weight|bias)$", "", mod)
+            if path not in seen:
+                seen.add(path)
+                modules.append(path)
+        return modules
+
+    def activation_detail_grid(self):
+        """Fine activation grid for the latest forward pass: [layer, leaf module].
+
+        Coarse activation shows only self_attn/mlp. This view exposes parameter-adjacent
+        leaf modules such as q_proj, k_proj, gate_proj, and layer norms so the UI can
+        drill into a clicked layer without another model pass.
+        """
+        L = len(self.model.model.layers)
+        modules = self.leaf_modules_probed
+        grid = [[0.0] * len(modules) for _ in range(L)]
+        for l in range(L):
+            for c, path in enumerate(modules):
+                out = self._leaf_out.get((l, path))
+                if out is not None:
+                    grid[l][c] = float(out.detach().float().norm(dim=-1).sum())
+        return {"layers": L, "modules": modules, "grid": grid}
 
     def spot_step(self, example, acc, n):
         """Accumulate |grad×param| for one example into acc (mutated); return running grid normalized by n.
@@ -140,18 +185,34 @@ class ModelSession:
         grid = [[acc.get((l, mod), 0.0) / n for mod in modules] for l in range(L)]
         return {"layers": L, "modules": modules, "grid": grid}
 
-    def _get_importance(self, examples, progress=None, should_stop=None):
+    def _get_importance(self, examples, progress=None, should_stop=None, extra_devices=None):
         """Per-param accumulated |grad×param| (CPU tensors), cached per examples set.
 
         The importance is always relative to the *current* weights. A cache hit (same examples,
         weights unchanged since — train_steps/reset_training invalidate) returns without any backward.
         Miss: run one backward per example, accumulate on CPU, cache, return. should_stop() → cancel
-        (caches what was accumulated so far so a resumed/repeat call still reuses it)."""
+        (caches what was accumulated so far so a resumed/repeat call still reuses it).
+
+        extra_devices: additional CUDA devices ("cuda:1", ...) to help — examples are split across
+        self.device + extra_devices and run concurrently on transient full-model replicas (freed
+        when done). Multi-device runs skip the live per-cell heatmap (progress grid is None mid-run
+        — safely merging partial cell sums across threads isn't worth it for a one-shot compute);
+        the final grid (compute_spot's own reduce over the complete acc) is unaffected either way."""
         key = hash(tuple(examples))
         if self._imp_cache is not None and self._imp_cache["key"] == key:
             if progress:
                 progress(len(examples), len(examples), None)  # UI: instant "done" without recomputing
             return self._imp_cache["acc"]
+        devs = [str(self.device)] + [str(d) for d in (extra_devices or []) if str(d) != str(self.device)]
+        if len(devs) <= 1:
+            acc, done = self._importance_single(examples, progress, should_stop)
+        else:
+            acc, done = self._importance_parallel(examples, devs, progress, should_stop)
+        if done:  # don't cache an empty (fully-cancelled) pass
+            self._imp_cache = {"key": key, "acc": acc, "n": done}  # one set at a time — new examples replace the old
+        return acc
+
+    def _importance_single(self, examples, progress, should_stop):
         acc = {}
         total = len(examples)
         done = 0
@@ -176,17 +237,74 @@ class ModelSession:
                 grid = [[cell.get((l, mod), 0.0) / done for mod in modules] for l in range(L)]
                 progress(done, total, {"layers": L, "modules": modules, "grid": grid})
         self.model.zero_grad(set_to_none=True)
-        if done:  # don't cache an empty (fully-cancelled) pass
-            self._imp_cache = {"key": key, "acc": acc, "n": done}  # one set at a time — new examples replace the old
-        return acc
+        return acc, done
 
-    def compute_spot(self, examples, progress=None, should_stop=None):
+    def _importance_parallel(self, examples, devs, progress, should_stop):
+        """Split examples round-robin across devs; every device other than self.device gets a
+        transient full-model replica (freed right after). torch releases the GIL during CUDA
+        kernels, so these threads genuinely overlap compute across GPUs, not just interleave on one."""
+        import copy
+        import threading
+        chunks = {d: examples[i::len(devs)] for i, d in enumerate(devs)}
+        replicas = {d: (self.model if d == str(self.device) else copy.deepcopy(self.model).to(d)) for d in devs}
+        lock = threading.Lock()
+        counter = [0]
+        total = len(examples)
+
+        def report():
+            with lock:
+                counter[0] += 1
+                n = counter[0]
+            if progress:
+                progress(n, total, None)  # no live grid in multi-device mode — see docstring above
+
+        results = {}
+
+        def run(d):
+            acc, done = {}, 0
+            for text in chunks[d]:
+                if should_stop and should_stop():
+                    break
+                ids = torch.tensor([self.tok.encode(text)], device=d)
+                model = replicas[d]
+                model.zero_grad(set_to_none=True)
+                model(ids, labels=ids).loss.backward()
+                for name, p in model.named_parameters():
+                    m = _LAYER_RE.match(name)
+                    if m and p.grad is not None:
+                        a = (p.grad * p.data).abs().cpu()
+                        acc[name] = a if name not in acc else acc[name] + a
+                model.zero_grad(set_to_none=True)
+                done += 1
+                report()
+            results[d] = (acc, done)
+
+        threads = [threading.Thread(target=run, args=(d,)) for d in devs if chunks[d]]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+        for d, replica in replicas.items():
+            if replica is not self.model:
+                del replica
+                with torch.cuda.device(d):
+                    torch.cuda.empty_cache()
+        acc, done = {}, 0
+        for d in devs:
+            partial, n = results.get(d, ({}, 0))
+            done += n
+            for name, val in partial.items():
+                acc[name] = val if name not in acc else acc[name] + val
+        return acc, done
+
+    def compute_spot(self, examples, progress=None, should_stop=None, extra_devices=None):
         """Coding-Spot importance: accumulate |grad×param| over examples, reduced to [layer, module].
-        Populates the per-param importance cache so a following save/knob reuses it (no recompute)."""
+        Populates the per-param importance cache so a following save/knob reuses it (no recompute).
+        extra_devices: additional GPUs to help — see _get_importance."""
         L, modules = len(self.model.model.layers), self._modules()
         if not examples:  # no examples → all-zero grid
             return {"layers": L, "modules": modules, "grid": [[0.0] * len(modules) for _ in range(L)]}
-        acc = self._get_importance(examples, progress=progress, should_stop=should_stop)
+        acc = self._get_importance(examples, progress=progress, should_stop=should_stop, extra_devices=extra_devices)
         n = self._imp_cache["n"] if self._imp_cache else len(examples)
         cell = {}
         for name, score in acc.items():
@@ -194,6 +312,99 @@ class ModelSession:
             cell[(int(m.group(1)), m.group(2))] = cell.get((int(m.group(1)), m.group(2)), 0.0) + float(score.sum()) / n
         grid = [[cell.get((l, mod), 0.0) for mod in modules] for l in range(L)]
         return {"layers": L, "modules": modules, "grid": grid}
+
+    def spot_activation_grid(self, region):
+        """[L, M] grid: mean |output value| over all current sequence tokens at neurons touched by an already-identified
+        spot region — NOT the whole module (that's the coarse 'activation' probe). 2D weight masks
+        reduce to output rows (any selected input in that row); 1D weight/bias masks index the output
+        directly. 0.0 where a module has no selected weights or hasn't produced output yet this run."""
+        L, modules = len(self.model.model.layers), self._modules()
+        grid = [[0.0] * len(modules) for _ in range(L)]
+        for name, mask in region.items():
+            m = _LAYER_RE.match(name)
+            if not m or not mask.any():
+                continue
+            l, mod = int(m.group(1)), m.group(2)
+            if mod not in modules:
+                continue
+            path = re.sub(r"\.(weight|bias)$", "", mod)
+            out = self._leaf_out.get((l, path))
+            if out is None:
+                continue
+            sel = mask.any(dim=1) if mask.dim() == 2 else mask  # 2D: row touched by any selected weight
+            vals = out[:, sel.to(out.device)]
+            if vals.numel():
+                grid[l][modules.index(mod)] = float(vals.abs().mean())
+        return {"layers": L, "modules": modules, "grid": grid}
+
+    def _spot_rows(self, region):
+        """(layer, module) -> bool row mask over output features (Definition A helper). 2D weight →
+        rows any selected weight touches; 1D weight/bias → the mask itself. Skips empty/foreign params."""
+        modules = self._modules()
+        rows = {}
+        for name, mask in region.items():
+            m = _LAYER_RE.match(name)
+            if not m or not mask.any():
+                continue
+            l, mod = int(m.group(1)), m.group(2)
+            if mod in modules:
+                rows[(l, mod)] = mask.any(dim=1) if mask.dim() == 2 else mask
+        return rows
+
+    def region_usage(self, region, prompt, spot_rows=None):
+        """Activation share (Definition A) of `region` while processing `prompt`, per token:
+        usage_t = Σ|act| over the spot's output rows / Σ|act| over ALL rows in those modules, at token t.
+        One forward pass; temporary hooks capture every position (not just the last). Returns
+        {overall, per_layer: [L], tokens: [{text, usage}]}. A code-bearing prompt lights the coding
+        spot (high share); unrelated prose barely uses it (low share).
+
+        spot_rows (optional): precomputed {(layer,module): row mask} to reuse across many prompts —
+        deriving it from a full-model mask is the expensive part, so a batch computes it once."""
+        L = len(self.model.model.layers)
+        if spot_rows is None:
+            spot_rows = self._spot_rows(region)
+        if not spot_rows:
+            return {"overall": 0.0, "per_layer": [0.0] * L, "tokens": []}
+        needed = {(l, re.sub(r"\.(weight|bias)$", "", mod)) for (l, mod) in spot_rows}
+        captured, handles = {}, []
+
+        def mk(l, path):
+            def hook(_m, _i, out):
+                h = out[0] if isinstance(out, tuple) else out
+                captured[(l, path)] = h[0].detach()  # [seq, features] — all positions this time
+            return hook
+        for (l, path) in needed:
+            target = self.model.model.layers[l]
+            for part in path.split("."):
+                target = getattr(target, part)
+            handles.append(target.register_forward_hook(mk(l, path)))
+        ids = torch.tensor([self.tok.encode(prompt)], device=self.device)
+        try:
+            with torch.no_grad():
+                self.model(ids)
+        finally:
+            for h in handles:
+                h.remove()
+        seq = ids.shape[1]
+        num, den = torch.zeros(seq), torch.zeros(seq)
+        lnum, lden = {}, {}
+        for (l, mod), rows in spot_rows.items():
+            out = captured.get((l, re.sub(r"\.(weight|bias)$", "", mod)))
+            if out is None:
+                continue
+            a = out.abs().float().cpu()                # [seq, features]
+            spot_sum = a[:, rows.to(a.device)].sum(dim=1)  # [seq]
+            all_sum = a.sum(dim=1)                      # [seq]
+            num += spot_sum
+            den += all_sum
+            lnum[l] = lnum.get(l, 0.0) + float(spot_sum.sum())
+            lden[l] = lden.get(l, 0.0) + float(all_sum.sum())
+        usage = (num / den.clamp(min=1e-9)).tolist()
+        toks = [self.tok.decode([t]) for t in ids[0].tolist()]
+        tokens = [{"text": toks[i], "usage": usage[i]} for i in range(seq)]
+        per_layer = [(lnum.get(l, 0.0) / lden[l]) if lden.get(l) else 0.0 for l in range(L)]
+        overall = float(num.sum() / den.sum().clamp(min=1e-9))
+        return {"overall": overall, "per_layer": per_layer, "tokens": tokens}
 
     # ---- knob (B1): Locate × Edit × Evaluate. A Region is {param_name: bool mask}. ----
 
@@ -228,7 +439,7 @@ class ModelSession:
         grid = [[cell.get((l, mod), 0.0) for mod in modules] for l in range(L)]
         return region, grid
 
-    def locate_cached(self, topk=0.05, return_grid=False):
+    def locate_cached(self, topk=0.01, return_grid=False):
         """Threshold the LAST computed importance (the displayed spot) — no examples, no backward.
         Returns None if nothing is cached. This is what save/knob use so they never recompute the
         spot just because the caller's example list didn't hash-match the compute call."""
@@ -236,14 +447,59 @@ class ModelSession:
             return None
         return self._region_from_acc(self._imp_cache["acc"], topk, self._imp_cache.get("n", 1), return_grid)
 
-    def locate_spot(self, examples, topk=0.05, return_grid=False, progress=None):
+    def control_region(self, kind, topk=0.01, seed=0):
+        """Matched control mask from the cached importance: same per-param count as the top-k% spot,
+        but positions chosen by `kind` — 'random' (seeded uniform) or 'bottom' (lowest importance).
+        This is the causal control from the paper: damage an equal-size region that is NOT the spot.
+        Returns None if no spot was computed this session."""
+        if self._imp_cache is None:
+            return None
+        acc = self._imp_cache["acc"]
+        gen = torch.Generator().manual_seed(seed)
+        region = {}
+        for name, score in acc.items():
+            flat = score.flatten()
+            count = int(topk * flat.numel())
+            if count <= 0:
+                continue
+            mask = torch.zeros(flat.numel(), dtype=torch.bool)
+            if kind == "random":
+                idx = torch.randperm(flat.numel(), generator=gen)[:count]
+            elif kind == "bottom":
+                idx = torch.topk(flat, count, largest=False).indices  # least-important positions
+            else:
+                raise ValueError(f"unknown control kind: {kind}")
+            mask[idx] = True
+            region[name] = mask.reshape(score.shape)
+        return region
+
+    def concentration_curve(self, points=200):
+        """Lorenz/CDF of the cached per-param importance over ALL parameters: how concentrated is the
+        signal. Returns {points: [[frac_params, frac_importance], ...], total_params}. frac_params is
+        the top X fraction (by importance, descending); frac_importance is the cumulative share they
+        hold. A steep early rise = a few weights carry most of the importance. None if no spot cached."""
+        if self._imp_cache is None:
+            return None
+        acc = self._imp_cache["acc"]
+        vals = torch.cat([score.flatten().float() for score in acc.values()])
+        n = vals.numel()
+        total = float(vals.sum()) or 1.0
+        sorted_desc, _ = torch.sort(vals, descending=True)
+        csum = torch.cumsum(sorted_desc, dim=0)
+        # downsample to `points` log-ish steps so the steep head is well resolved without shipping n values
+        xs = sorted(set(int(round(n * (i / points) ** 0.5)) for i in range(1, points + 1)) | {n})
+        curve = [[k / n, float(csum[min(k, n) - 1]) / total] for k in xs if k >= 1]
+        return {"points": [[0.0, 0.0]] + curve, "total_params": n}
+
+    def locate_spot(self, examples, topk=0.01, return_grid=False, progress=None, extra_devices=None):
         """Locate: top-k% mask *within each layer param* by accumulated |grad×param|
         (matches scripts/create_approx_spot_masks.py — per-param, not a global threshold).
         return_grid=True also returns the [L][M] importance cell grid (what the spot view shows).
-        progress(i, total): called after each example's backward+accumulate (i is 1-based)."""
+        progress(i, total): called after each example's backward+accumulate (i is 1-based).
+        extra_devices: additional GPUs to help — see _get_importance."""
         if not examples:
             return ({}, []) if return_grid else {}
-        acc = self._get_importance(examples, progress=progress)  # cached: no backward on a repeat examples set
+        acc = self._get_importance(examples, progress=progress, extra_devices=extra_devices)  # cached: no backward on a repeat examples set
         result = self._region_from_acc(acc, topk, len(examples), return_grid)
         # acc is the CPU-resident cache — keep it so a %-only change re-thresholds without another backward.
         self.free_memory()  # release backward leftovers on the device (cache stays on CPU)
@@ -253,6 +509,68 @@ class ModelSession:
         """Metadata of every parameter (HF safetensors-viewer style): name, shape, dtype."""
         return [{"name": n, "shape": list(p.shape), "dtype": str(p.dtype).removeprefix("torch.")}
                 for n, p in self.model.named_parameters()]
+
+    def _region_dense(self, region_name, param_name):
+        """Dense param-shaped grid of a saved region: the stored |g×w| importance at each selected
+        position, 0 everywhere else (legacy regions with no importance → 1.0 at selected positions =
+        a plain mask). Lets the tensor inspector show WHERE the spot sits inside a weight. Raises if
+        the region or the tensor-within-region is missing."""
+        if not region_name or region_name not in self._region_files:
+            raise ValueError(f"region not found: {region_name}")
+        blob = torch.load(self._region_files[region_name], map_location="cpu")
+        masks = blob["masks"] if isinstance(blob, dict) and "masks" in blob else blob
+        if param_name not in masks:
+            raise ValueError(f"'{param_name}' is not selected in region '{region_name}'")
+        mask = masks[param_name].to(torch.bool)
+        idx = mask.reshape(-1).nonzero(as_tuple=True)[0]  # True positions, flattened row-major
+        imp = blob.get("importance", {}).get(param_name) if isinstance(blob, dict) else None
+        dense = torch.zeros(mask.numel(), dtype=torch.float32)
+        dense[idx] = imp.float() if imp is not None else 1.0  # importance aligns to mask.nonzero() order
+        return dense.reshape(mask.shape)
+
+    def tensor_values(self, name, r0=0, c0=0, rows=48, cols=48, source="weights", region=None):
+        """A windowed slice of one parameter as a 2D grid, for the interactive tensor inspector. A single
+        weight is millions of values — never ship the whole thing: return at most rows×cols (hard-capped)
+        from offset (r0, c0). 1D params (norms/biases) render as one row; >2D params are flattened to
+        [dim0, -1]. Stats are over the FULL tensor so the view shows the real distribution, not just the
+        window.
+
+        source selects WHICH values to show at each position of the same tensor:
+          - "weights"    : the model's actual parameter values θ (signed). Reflects applied knob/damage.
+          - "importance" : the live cached |grad×weight| from the last spot / prompt-importance (≥0).
+          - "region"     : a saved region's stored importance, 0 outside the spot (≥0) — see _region_dense.
+        """
+        params = dict(self.model.named_parameters())
+        if name not in params:
+            raise ValueError(f"unknown tensor: {name}")
+        p = params[name]
+        shape = list(p.shape)
+        signed = source == "weights"
+        if source == "weights":
+            t = p.detach().float().cpu()
+        elif source == "importance":
+            if self._imp_cache is None:
+                raise ValueError("no importance yet — compute a spot or run prompt importance first")
+            acc = self._imp_cache["acc"]
+            if name not in acc:
+                raise ValueError(f"'{name}' has no importance (only transformer-layer weights are scored)")
+            t = acc[name].float().cpu()
+        elif source == "region":
+            t = self._region_dense(region, name)
+        else:
+            raise ValueError(f"unknown source: {source}")
+        flat2d = t.reshape(1, -1) if t.dim() <= 1 else (t if t.dim() == 2 else t.reshape(shape[0], -1))
+        R, C = flat2d.shape
+        rows, cols = min(int(rows), 128), min(int(cols), 128)  # hard cap on payload
+        r0 = max(0, min(int(r0), max(0, R - 1)))
+        c0 = max(0, min(int(c0), max(0, C - 1)))
+        window = flat2d[r0:r0 + rows, c0:c0 + cols]
+        return {"name": name, "shape": shape, "dtype": str(p.dtype).removeprefix("torch."),
+                "source": source, "signed": signed,
+                "rows_total": R, "cols_total": C, "r0": r0, "c0": c0,
+                "values": window.tolist(), "flattened": t.dim() > 2,
+                "stats": {"min": float(t.min()), "max": float(t.max()), "mean": float(t.mean()),
+                          "std": float(t.std()), "absmax": float(t.abs().max())}}
 
     def _cache_region(self, name, region):
         """Insert into the LRU mask cache (cap 2) — evict the oldest *reloadable* region past the cap.
@@ -303,6 +621,33 @@ class ModelSession:
             out[pname] = new_flat.reshape(mask.shape)
         return out
 
+    def import_region(self, name, dir_path):
+        """Import a research-pipeline mask directory (one bool-tensor .pt per parameter, filename =
+        param name — the format scripts/create_approx_spot_masks.py and damage/damage_model.py use)
+        as a Studio region under `name`. No grid/importance (research masks don't carry them) — the
+        region still works for intervene/activations-spot, just without the spot-view heatmap or
+        re-threshold-by-%. Raises ValueError if the directory has no .pt matching this model's params
+        (e.g. wrong model loaded, or an empty/bad path) so the caller sees a clear error, not a silent no-op."""
+        d = Path(os.path.expanduser(str(dir_path)))
+        if not d.is_dir():
+            raise ValueError(f"not a directory: {d}")
+        params = dict(self.model.named_parameters())
+        region, skipped = {}, []
+        for f in sorted(d.glob("*.pt")):
+            pname = f.stem
+            if pname not in params:
+                skipped.append(f.name)
+                continue
+            mask = torch.load(f, map_location="cpu")
+            if mask.shape != params[pname].shape:
+                skipped.append(f.name)  # shape mismatch — almost certainly the wrong model
+                continue
+            region[pname] = mask.to(torch.bool)
+        if not region:
+            raise ValueError(f"no matching parameter masks found in {d} for this model")
+        self.save_region(name, region)
+        return {"count": sum(int(m.sum()) for m in region.values()), "imported": len(region), "skipped": skipped}
+
     def region_meta(self):
         """Saved-region list without loading masks: [{name, count, base_topk?}] from the meta sidecars.
         base_topk (v3) is the upper bound for re-thresholding a saved spot to a smaller %."""
@@ -350,13 +695,39 @@ class ModelSession:
             (d / f"{safe}.pt").unlink(missing_ok=True)
             (d / f"{safe}.meta.json").unlink(missing_ok=True)
 
-    def region_grid(self, name):
+    def _saved_importance_grid(self, masks, importance, topk=None):
+        L, modules = len(self.model.model.layers), self._modules()
+        cell = {}
+        for pname, mask in masks.items():
+            imp = importance.get(pname) if isinstance(importance, dict) else None
+            if imp is None:
+                continue
+            vals = imp
+            if topk is not None:
+                count = min(max(1, round(mask.numel() * topk)), vals.numel())
+                vals = torch.topk(vals, count, largest=True).values
+            m = _LAYER_RE.match(pname)
+            if m:
+                key = (int(m.group(1)), m.group(2))
+                cell[key] = cell.get(key, 0.0) + float(vals.sum())
+        return [[cell.get((l, mod), 0.0) for mod in modules] for l in range(L)]
+
+    def region_grid(self, name, topk=None):
         """Visualize a saved region: selection-fraction grid + the importance grid captured at save time."""
-        region = self.get_region(name)
+        blob = torch.load(self._region_files[name], map_location="cpu") if name in self._region_files else None
+        effective_topk = topk
+        importance_grid = self.region_grids.get(name)
+        if isinstance(blob, dict) and "masks" in blob and "importance" in blob:
+            base = blob.get("base_topk")
+            if effective_topk is not None and (base is None or effective_topk > base):
+                effective_topk = None
+            importance_grid = self._saved_importance_grid(blob["masks"], blob["importance"], effective_topk)
+        region = self.get_region(name, effective_topk)
         L, modules = len(self.model.model.layers), self._modules()
         return {"layers": L, "modules": modules, "grid": self._cell_grid(region, L, modules),
-                "importance": self.region_grids.get(name),
+                "importance": importance_grid,
                 "base_topk": self._region_meta.get(name, {}).get("base_topk"),
+                "view_topk": effective_topk,
                 "count": sum(int(v.sum()) for v in region.values())}
 
     def _cell_grid(self, region, L, modules):
@@ -475,7 +846,7 @@ class ModelSession:
         spot-only   = only region weights train (element-masked). lora = base frozen, adapters train.
         """
         if getattr(self, "_trained", None) is not None:
-            raise RuntimeError("reset_training first")  # ponytail: no stacked trainings in v1
+            self.reset_training()  # a previous training is still applied → restore the clean base and start fresh
         self.clear()  # invariant: knob backups are always relative to the current base weights
         self._stop = False
         params = dict(self.model.named_parameters())
@@ -548,6 +919,44 @@ class ModelSession:
                     p.data.copy_(payload[n].to(self.device))
         self._trained = None
 
+    def training_delta(self, region=None):
+        """How far the weights moved during the last training, split by the trained region vs the rest —
+        shows what actually changed (and confirms a freeze held: a frozen side reports ~0). RMS of
+        (current − pre-train) per side, plus the max abs move. region: {param: bool mask} to split by
+        (the region that was trained/frozen). Returns None if nothing was trained (or lora — base frozen)."""
+        trained = getattr(self, "_trained", None)
+        if trained is None:
+            return None
+        mode, payload = trained
+        params = dict(self.model.named_parameters())
+        rs = rn = os_ = on = 0.0
+        rmax = omax = 0.0
+        if mode in ("full", "spot-freeze"):
+            for name, base in payload.items():
+                p = params.get(name)
+                if p is None:
+                    continue
+                d = (p.detach().cpu() - base).flatten()
+                if region and name in region:
+                    m = region[name].reshape(-1)
+                    din, dout = d[m], d[~m]
+                    rs += float((din.double() ** 2).sum()); rn += din.numel(); rmax = max(rmax, float(din.abs().max()) if din.numel() else 0)
+                    os_ += float((dout.double() ** 2).sum()); on += dout.numel(); omax = max(omax, float(dout.abs().max()) if dout.numel() else 0)
+                else:
+                    os_ += float((d.double() ** 2).sum()); on += d.numel(); omax = max(omax, float(d.abs().max()) if d.numel() else 0)
+        elif mode == "spot-only":
+            reg, backup = payload
+            for name, m in reg.items():
+                cur = params[name].detach().cpu()[m.cpu()]  # only the trained (selected) values
+                d = (cur - backup[name].cpu()).flatten()
+                rs += float((d.double() ** 2).sum()); rn += d.numel(); rmax = max(rmax, float(d.abs().max()) if d.numel() else 0)
+        else:  # lora — base weights never moved
+            return {"mode": mode, "region_rms": None, "other_rms": None}
+        import math
+        return {"mode": mode,
+                "region_rms": math.sqrt(rs / rn) if rn else None, "region_max": rmax if rn else None, "region_params": int(rn),
+                "other_rms": math.sqrt(os_ / on) if on else None, "other_max": omax if on else None, "other_params": int(on)}
+
     def ppl(self, examples):
         """Evaluate: mean-loss perplexity over examples (quantifies an intervention's damage)."""
         losses = []
@@ -556,6 +965,97 @@ class ModelSession:
                 ids = torch.tensor([self.tok.encode(text)], device=self.device)
                 losses.append(float(self.model(ids, labels=ids).loss))
         return math.exp(sum(losses) / max(1, len(losses)))
+
+    def _greedy_complete(self, model, device, prompt, max_tokens, temperature):
+        """Minimal greedy/temperature decode of a raw code prompt on a given (model, device), cut at the
+        first HumanEval stop. Self-contained (no probes/hooks read) so it's safe to run on a replica in a
+        worker thread. Uses the shared tokenizer (encode/decode are thread-safe)."""
+        from parametic_studio.kernel.humaneval import STOP_SEQUENCES, truncate_completion
+        ids = torch.tensor([self.tok.encode(prompt)], device=device)
+        eos = self.tok.eos_token_id
+        out, text = [], ""
+        # KV cache: decode is O(n), not O(n^2). This matters most for a DAMAGED model — with its coding
+        # ability zeroed it rarely emits EOS or a clean function boundary, so it runs to the full max_tokens
+        # every problem; without the cache that tail made eval-after-delete pathologically slow. The eager
+        # attention the model is loaded with supports use_cache, and eval needs no attention-matrix probe.
+        past, step = None, ids
+        for _ in range(max_tokens):
+            with torch.no_grad():
+                o = model(step, past_key_values=past, use_cache=True)
+            past = o.past_key_values
+            logits = o.logits[0, -1]
+            nxt = (int(torch.multinomial(torch.softmax(logits.float() / temperature, -1), 1))
+                   if temperature and temperature > 0 else int(logits.argmax()))
+            if nxt == eos:
+                break
+            out.append(nxt)
+            # early stop the moment the completion runs past the target function (next def/class/comment/
+            # main-guard/print) — cuts a healthy model to a short function.
+            text = self._decode(out)
+            if any(s in text for s in STOP_SEQUENCES):
+                break
+            step = torch.tensor([[nxt]], device=device)  # feed only the new token; cache holds the prefix
+        return truncate_completion(text, STOP_SEQUENCES)
+
+    def eval_pass_at_1(self, rows, max_tokens=512, temperature=0.0, extra_devices=None, progress=None, should_stop=None):
+        """HumanEvalPack pass@1 over `rows` under the CURRENT weights (an applied knob/damage counts —
+        replicas are deep-copied AFTER damage, so extra GPUs evaluate the same damaged model). Each row:
+        generate a completion, run its unit tests in a subprocess, count pass. progress(done, total,
+        passed) fires as problems finish. extra_devices: extra CUDA cards to split the problems across
+        (transient replicas, freed after) — same 'help GPUs' idea as compute_spot. should_stop(): checked
+        before each problem — return True to bail early (e.g. the client socket closed). Returns (passed, total)."""
+        from parametic_studio.kernel.humaneval import build_program, check_correctness
+        total = len(rows)
+        devs = [str(self.device)] + [str(d) for d in (extra_devices or []) if str(d) != str(self.device)]
+
+        if len(devs) <= 1:
+            passed = 0
+            for i, row in enumerate(rows):
+                if should_stop and should_stop():
+                    break
+                comp = self._greedy_complete(self.model, self.device, row["prompt"], max_tokens, temperature)
+                ok, _ = check_correctness(build_program(row, comp))
+                passed += int(ok)
+                if progress:
+                    progress(i + 1, total, passed)
+            return passed, total
+
+        import copy
+        import threading
+        # replicas capture the current (damaged) weights; problems split round-robin across the cards
+        replicas = {d: (self.model if d == str(self.device) else copy.deepcopy(self.model).to(d).eval()) for d in devs}
+        chunks = {d: rows[i::len(devs)] for i, d in enumerate(devs)}
+        lock = threading.Lock()
+        state = {"done": 0, "passed": 0}
+        results = {}
+
+        def run(d):
+            p = 0
+            for row in chunks[d]:
+                if should_stop and should_stop():
+                    break
+                comp = self._greedy_complete(replicas[d], torch.device(d), row["prompt"], max_tokens, temperature)
+                ok, _ = check_correctness(build_program(row, comp))
+                p += int(ok)
+                with lock:  # update shared counters, then report OUTSIDE the lock so sends don't serialize compute
+                    state["done"] += 1
+                    state["passed"] += int(ok)
+                    done, passed = state["done"], state["passed"]
+                if progress:
+                    progress(done, total, passed)
+            results[d] = p
+
+        threads = [threading.Thread(target=run, args=(d,)) for d in devs if chunks[d]]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+        for d, r in replicas.items():
+            if r is not self.model:
+                del r
+                with torch.cuda.device(d):
+                    torch.cuda.empty_cache()
+        return sum(results.values()), total
 
     def stop(self):
         self._stop = True
@@ -575,12 +1075,16 @@ class ModelSession:
                 return text  # not pure byte-level (mixed alphabet) → leave as-is
         return text
 
-    def generate_text(self, prompt, max_tokens, probes=("attention",), temperature=0.0):
+    def format_prompt(self, prompt):
         tmpl = getattr(self.tok, "apply_chat_template", None)
         if tmpl and getattr(self.tok, "chat_template", None):
-            prompt = tmpl([{"role": "user", "content": prompt}], tokenize=False, add_generation_prompt=True)
+            return tmpl([{"role": "user", "content": prompt}], tokenize=False, add_generation_prompt=True)
+        return prompt
+
+    def generate_text(self, prompt, max_tokens, probes=("attention",), temperature=0.0, spot_topk=0.01, spot_region_name=None):
+        prompt = self.format_prompt(prompt)
         ids = torch.tensor([self.tok.encode(prompt)])
-        yield from self.generate(ids, max_tokens, probes, temperature=temperature)
+        yield from self.generate(ids, max_tokens, probes, temperature=temperature, spot_topk=spot_topk, spot_region_name=spot_region_name)
 
     def complete_code(self, prompt, max_tokens=512, temperature=0.0, stops=None):
         """Continue a raw code `prompt` (no chat template) and return the completion text,
@@ -592,12 +1096,20 @@ class ModelSession:
         out = "".join(ev["text"] for ev in self.generate(ids, max_tokens, probes=(), temperature=temperature))
         return truncate_completion(out, stops)
 
-    def generate(self, input_ids, max_tokens, probes=("attention",), temperature=0.0):
+    def generate(self, input_ids, max_tokens, probes=("attention",), temperature=0.0, spot_topk=0.01, spot_region_name=None):
         self._stop = False
         ids = input_ids.to(self.device)
         eos = self.tok.eos_token_id
         want_attn = "attention" in probes
         want_logit = "logitlens" in probes
+        want_spot_act = "spot_activation" in probes
+        # region is invariant across the whole run (weights/cache don't change mid-generation) —
+        # resolve once, not per token: both paths below do model-wide work (topk / disk load).
+        # spot_region_name (a saved region) → its full saved mask, exactly as saved (no re-threshold);
+        # else the just-computed spot (_imp_cache), thresholded at spot_topk.
+        spot_region = None
+        if want_spot_act:
+            spot_region = self.get_region(spot_region_name) if spot_region_name else self.locate_cached(spot_topk)
         gen_ids, prev_text = [], ""  # decode the running sequence, emit the delta — byte-level BPE
         # (Ġ/Ċ markers) only reconstructs correctly across whole tokens, not one id at a time.
         for step in range(max_tokens):
@@ -641,5 +1153,8 @@ class ModelSession:
                 event["act"] = torch.tensor(
                     [[self._acts[(l, m)] for m in self.modules_probed] for l in range(L)]
                 )  # [L, M]
+                event["act_detail"] = self.activation_detail_grid()
+            if spot_region:
+                event["spot_act"] = self.spot_activation_grid(spot_region)
             ids = torch.cat([ids, torch.tensor([[nxt]], device=self.device)], dim=1)
             yield event

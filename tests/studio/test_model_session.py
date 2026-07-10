@@ -1,9 +1,15 @@
+import copy
 import math
 
+import pytest
 import torch
 from transformers import LlamaConfig, LlamaForCausalLM
 
-from parametic_studio.kernel.model_session import ModelSession, _BYTE_DECODER
+from parametic_studio.kernel.model_session import ModelSession, _BYTE_DECODER, _LAYER_RE
+
+
+def _match(name):
+    return _LAYER_RE.match(name) is not None
 
 
 def test_locate_cached_reuses_last_spot_without_recompute():
@@ -142,6 +148,235 @@ def test_generate_yields_activation_frame():
         assert "attn" not in e            # not subscribed
         assert e["act"].shape == (L, 2)   # [L, modules: self_attn, mlp]
         assert (e["act"] >= 0).all()      # norms are non-negative
+
+
+def test_import_region_combines_per_param_files_into_one_region(tmp_path):
+    # mirrors scripts/create_approx_spot_masks.py's output: one bool-tensor .pt per param, filename = param name
+    s = ModelSession(_tiny(), _Tok(eos=-1), torch.device("cpu"))
+    name = f"model.layers.0.{CELL}"
+    p = dict(s.model.named_parameters())[name]
+    mask = torch.zeros_like(p, dtype=torch.bool)
+    mask[0, 0] = True
+    torch.save(mask, tmp_path / f"{name}.pt")
+    result = s.import_region("java", tmp_path)
+    assert result["imported"] == 1 and result["skipped"] == [] and result["count"] == 1
+    region = s.get_region("java")
+    assert set(region) == {name} and bool(region[name][0, 0]) is True
+    assert {r["name"] for r in s.region_meta()} == {"java"}
+
+
+def test_import_region_skips_unmatched_and_shape_mismatched_files(tmp_path):
+    s = ModelSession(_tiny(), _Tok(eos=-1), torch.device("cpu"))
+    name = f"model.layers.0.{CELL}"
+    p = dict(s.model.named_parameters())[name]
+    good = torch.zeros_like(p, dtype=torch.bool)
+    good[1, 1] = True
+    torch.save(good, tmp_path / f"{name}.pt")
+    torch.save(torch.zeros(3, dtype=torch.bool), tmp_path / "not.a.real.param.pt")     # unknown name
+    torch.save(torch.zeros(2, 2, dtype=torch.bool), tmp_path / f"model.layers.1.{CELL}.pt")  # wrong shape for layer 1
+    result = s.import_region("java", tmp_path)
+    assert result["imported"] == 1
+    assert set(result["skipped"]) == {"not.a.real.param.pt", f"model.layers.1.{CELL}.pt"}
+
+
+def test_import_region_raises_when_nothing_matches(tmp_path):
+    s = ModelSession(_tiny(), _Tok(eos=-1), torch.device("cpu"))
+    torch.save(torch.zeros(3, dtype=torch.bool), tmp_path / "not.a.real.param.pt")
+    with pytest.raises(ValueError):
+        s.import_region("java", tmp_path)
+
+
+def test_import_region_raises_on_missing_directory(tmp_path):
+    s = ModelSession(_tiny(), _Tok(eos=-1), torch.device("cpu"))
+    with pytest.raises(ValueError):
+        s.import_region("java", tmp_path / "does-not-exist")
+
+
+def test_region_usage_shape_and_bounds():
+    s = ModelSession(_tiny(), _EncTok(eos=-1), torch.device("cpu"))
+    s.compute_spot(["a", "b"])
+    region = s.locate_cached(0.05)
+    res = s.region_usage(region, "hello world")
+    L = len(s.model.model.layers)
+    assert 0.0 <= res["overall"] <= 1.0
+    assert len(res["per_layer"]) == L and all(0.0 <= v <= 1.0 for v in res["per_layer"])
+    assert res["tokens"] and all(0.0 <= t["usage"] <= 1.0 and "text" in t for t in res["tokens"])
+    assert len(res["tokens"]) == len(s.tok.encode("hello world"))
+
+
+def test_region_usage_full_region_is_100pct():
+    # a region that selects EVERY weight → the spot rows are all rows → share must be ~1.0
+    s = ModelSession(_tiny(), _EncTok(eos=-1), torch.device("cpu"))
+    full = {n: torch.ones_like(p, dtype=torch.bool) for n, p in s.model.named_parameters() if _match(n)}
+    res = s.region_usage(full, "hello")
+    assert res["overall"] == pytest.approx(1.0, abs=1e-4)
+    assert all(t["usage"] == pytest.approx(1.0, abs=1e-4) for t in res["tokens"])
+
+
+def test_region_usage_empty_region():
+    s = ModelSession(_tiny(), _EncTok(eos=-1), torch.device("cpu"))
+    res = s.region_usage({}, "hello")
+    assert res["overall"] == 0.0 and res["tokens"] == []
+
+
+def test_control_region_matches_spot_counts_and_avoids_spot_positions():
+    s = ModelSession(_tiny(), _EncTok(eos=-1), torch.device("cpu"))
+    s.compute_spot(["a", "b"])
+    spot = s.locate_cached(0.05)
+    rnd = s.control_region("random", 0.05, seed=1)
+    bot = s.control_region("bottom", 0.05)
+    # same per-param selection count as the spot (matched control)
+    for name in spot:
+        assert int(rnd[name].sum()) == int(spot[name].sum())
+        assert int(bot[name].sum()) == int(spot[name].sum())
+    # bottom picks the LEAST-important positions → must be disjoint from the top-k spot (for k≤50%)
+    for name in spot:
+        assert not bool((spot[name] & bot[name]).any())
+
+
+def test_control_region_random_is_seed_deterministic():
+    s = ModelSession(_tiny(), _EncTok(eos=-1), torch.device("cpu"))
+    s.compute_spot(["a", "b"])
+    a = s.control_region("random", 0.05, seed=7)
+    b = s.control_region("random", 0.05, seed=7)
+    c = s.control_region("random", 0.05, seed=8)
+    name = next(iter(a))
+    assert bool((a[name] == b[name]).all())          # same seed → identical
+    assert not bool((a[name] == c[name]).all()) or a[name].sum() <= 1  # different seed → differs (unless trivially tiny)
+
+
+def test_control_region_none_without_spot():
+    s = ModelSession(_tiny(), _EncTok(eos=-1), torch.device("cpu"))
+    assert s.control_region("random") is None
+
+
+def test_concentration_curve_monotonic_and_bounded():
+    s = ModelSession(_tiny(), _EncTok(eos=-1), torch.device("cpu"))
+    s.compute_spot(["a", "b"])
+    cur = s.concentration_curve(points=50)
+    pts = cur["points"]
+    assert pts[0] == [0.0, 0.0]
+    xs = [p[0] for p in pts]
+    ys = [p[1] for p in pts]
+    assert xs == sorted(xs) and ys == sorted(ys)          # both cumulative → monotonic non-decreasing
+    assert 0.0 <= xs[-1] <= 1.0000001 and abs(ys[-1] - 1.0) < 1e-4  # ends at (≈1 of params, 1.0 of importance)
+    # concentration: the top 5% of params by importance hold MORE than 5% of total importance
+    import bisect
+    i = bisect.bisect_left(xs, 0.05)
+    assert ys[min(i, len(ys) - 1)] >= 0.05
+
+
+def test_concentration_curve_none_without_spot():
+    s = ModelSession(_tiny(), _EncTok(eos=-1), torch.device("cpu"))
+    assert s.concentration_curve() is None
+
+
+def test_get_importance_dedupes_extra_device_equal_to_home():
+    # extra_devices containing only the model's own device must NOT route into the parallel
+    # path (no replica, no threads) — it's a no-op, same as extra_devices=None.
+    s = ModelSession(_tiny(), _EncTok(eos=-1), torch.device("cpu"))
+    called = {"parallel": False}
+    orig = s._importance_parallel
+
+    def spy(*a, **k):
+        called["parallel"] = True
+        return orig(*a, **k)
+    s._importance_parallel = spy
+    s._get_importance(["a", "b"], extra_devices=["cpu"])
+    assert called["parallel"] is False
+
+
+@pytest.mark.skipif(torch.cuda.device_count() < 2, reason="needs 2+ CUDA GPUs")
+def test_get_importance_multi_gpu_matches_single_gpu():
+    torch.manual_seed(0)
+    cfg = LlamaConfig(
+        vocab_size=32, hidden_size=16, intermediate_size=32,
+        num_hidden_layers=2, num_attention_heads=2, num_key_value_heads=2,
+        max_position_embeddings=64,
+    )
+    cfg._attn_implementation = "eager"
+    base = LlamaForCausalLM(cfg).eval()
+    examples = ["a", "b", "c", "d"]
+
+    s1 = ModelSession(copy.deepcopy(base), _EncTok(eos=-1), torch.device("cuda:0"))
+    acc_single = s1._get_importance(examples)
+
+    s2 = ModelSession(copy.deepcopy(base), _EncTok(eos=-1), torch.device("cuda:0"))
+    acc_multi = s2._get_importance(examples, extra_devices=["cuda:1"])
+
+    assert set(acc_single) == set(acc_multi)
+    for name in acc_single:
+        assert torch.allclose(acc_single[name], acc_multi[name], atol=1e-3, rtol=1e-3)
+
+
+@pytest.mark.skipif(torch.cuda.device_count() < 2, reason="needs 2+ CUDA GPUs")
+def test_get_importance_multi_gpu_frees_replica_memory():
+    torch.manual_seed(0)
+    cfg = LlamaConfig(
+        vocab_size=32, hidden_size=16, intermediate_size=32,
+        num_hidden_layers=2, num_attention_heads=2, num_key_value_heads=2,
+        max_position_embeddings=64,
+    )
+    cfg._attn_implementation = "eager"
+    s = ModelSession(LlamaForCausalLM(cfg).eval(), _EncTok(eos=-1), torch.device("cuda:0"))
+    before = torch.cuda.memory_allocated(1)
+    s._get_importance(["a", "b"], extra_devices=["cuda:1"])
+    after = torch.cuda.memory_allocated(1)
+    assert after <= before + 1_000_000  # replica freed — no multi-MB leak on the extra GPU
+
+
+def test_generate_omits_spot_act_when_no_spot_computed():
+    # no compute_spot/locate_spot call yet → locate_cached is None → probe silently produces nothing
+    s = ModelSession(_tiny(), _Tok(eos=-1), torch.device("cpu"))
+    evs = list(s.generate(PROMPT, max_tokens=2, probes=("spot_activation",)))
+    assert all("spot_act" not in e for e in evs)
+
+
+def test_generate_yields_spot_act_restricted_to_selected_neurons():
+    s = ModelSession(_tiny(), _EncTok(eos=-1), torch.device("cpu"))
+    s.compute_spot(["a", "b"])  # populates _imp_cache so locate_cached(spot_topk) returns a region
+    modules = s._modules()
+    evs = list(s.generate(PROMPT, max_tokens=2, probes=("spot_activation",), spot_topk=0.05))
+    for e in evs:
+        sa = e["spot_act"]
+        assert sa["modules"] == modules
+        assert len(sa["grid"]) == 2 and all(len(row) == len(modules) for row in sa["grid"])
+        flat = [v for row in sa["grid"] for v in row]
+        assert all(v >= 0.0 for v in flat)
+        assert any(v > 0.0 for v in flat)  # top-5% always selects something in a tiny model
+
+
+def test_generate_uses_named_saved_region_without_recomputed_spot():
+    # mirrors the real workflow: a region saved in a *previous* session, no compute_spot this run
+    # (_imp_cache is None) — spot_region_name must still drive the probe from the saved mask.
+    s = ModelSession(_tiny(), _Tok(eos=-1), torch.device("cpu"))
+    list(s.generate(PROMPT, max_tokens=1, probes=()))  # populate _leaf_out via one forward pass
+    p = dict(s.model.named_parameters())[f"model.layers.0.{CELL}"]
+    mask = torch.zeros_like(p, dtype=torch.bool)
+    mask[0, 0] = True
+    s.save_region("java", {f"model.layers.0.{CELL}": mask})
+    assert s._imp_cache is None  # no spot computed this session
+    modules = s._modules()
+    evs = list(s.generate(PROMPT, max_tokens=2, probes=("spot_activation",), spot_region_name="java"))
+    for e in evs:
+        assert "spot_act" in e
+        assert e["spot_act"]["grid"][0][modules.index(CELL)] >= 0.0
+
+
+def test_spot_activation_grid_zero_for_untouched_module():
+    # a region with only one param masked → every other (layer, module) cell stays exactly 0.0
+    s = ModelSession(_tiny(), _Tok(eos=-1), torch.device("cpu"))
+    list(s.generate(PROMPT, max_tokens=1, probes=()))  # populate _leaf_out via one forward pass
+    p = dict(s.model.named_parameters())[f"model.layers.0.{CELL}"]
+    region = {f"model.layers.0.{CELL}": torch.zeros_like(p, dtype=torch.bool)}
+    region[f"model.layers.0.{CELL}"][0, 0] = True  # select exactly one weight
+    grid = s.spot_activation_grid(region)["grid"]
+    modules = s._modules()
+    for l, row in enumerate(grid):
+        for c, v in enumerate(row):
+            if l == 0 and modules[c] == CELL:
+                continue
+            assert v == 0.0
 
 
 class _EncTok(_Tok):
