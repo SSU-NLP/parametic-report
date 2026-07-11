@@ -232,6 +232,13 @@ pub fn run() {
             std::thread::spawn(move || {
                 std::thread::sleep(Duration::from_secs(8));
                 do_close_splash(&handle);
+                // Window is now visible. While it was hidden, WKWebView/WebView2 suspended JS timers,
+                // so the frontend's own 6s first-run-setup trigger (a setTimeout) never fired — the exact
+                // case the onboarding is FOR (kernel down ⇒ window stays hidden the full 8s). Nudge the
+                // frontend to run the setup check now that JS is live; event delivery isn't timer-gated.
+                if !kernel_running() {
+                    let _ = handle.emit("check-setup", "");
+                }
             });
             Ok(())
         })

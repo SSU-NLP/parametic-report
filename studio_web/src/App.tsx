@@ -1138,19 +1138,30 @@ export default function App() {
       if (pick) setSelectedPy(pick.path)
     }).catch((e) => { setPythons([]); toast(`[setup] ${e instanceof Error ? e.message : String(e)}`) })
   }
-  // 6s after mount: if the local kernel still isn't up and its deps are missing, open the setup overlay.
+  // If the local kernel is down and its deps are missing, open the setup overlay. Fired from TWO
+  // sources: (1) a 6s setTimeout — the fast path when the window is already visible; (2) the Rust
+  // `check-setup` event. The event is the RELIABLE path: the main window is hidden at boot and
+  // hidden-webview JS timers are suspended (see lib.rs), so when the kernel never comes up the window
+  // stays hidden the full 8s and the setTimeout never fires — exactly the first-run case this is for.
+  // Rust emits check-setup right after the 8s splash fallback shows the window, when JS is live again.
+  const maybeOpenSetup = async () => {
+    if (!inTauri()) return
+    if (kernelUpRef.current === true) return  // kernel already came up — nothing to do
+    if (isRemoteConnected()) { setRemoteStale(true); return }  // remote mode → banner, don't fight the SSH flow
+    try {
+      const st = await tauriInvokeValue<EnvStatus>('kernel_env_status')
+      if (!st.deps_ok) { setEnvStatus(st); setSetupOpen(true); rescan() }
+      // deps_ok but not up yet ⇒ transient outage; the "reconnecting…" status already covers it.
+    } catch { /* command unavailable — leave the normal reconnect flow alone */ }
+  }
   useEffect(() => {
     if (!inTauri()) return  // browser: unchanged
-    const t = window.setTimeout(async () => {
-      if (kernelUpRef.current === true) return  // kernel already came up — nothing to do
-      if (isRemoteConnected()) { setRemoteStale(true); return }  // remote mode → banner, don't fight the SSH flow
-      try {
-        const st = await tauriInvokeValue<EnvStatus>('kernel_env_status')
-        if (!st.deps_ok) { setEnvStatus(st); setSetupOpen(true); rescan() }
-        // deps_ok but not up yet ⇒ transient outage; the "reconnecting…" status already covers it.
-      } catch { /* command unavailable — leave the normal reconnect flow alone */ }
-    }, 6000)
-    return () => clearTimeout(t)
+    const t = window.setTimeout(() => { void maybeOpenSetup() }, 6000)
+    let unlisten: (() => void) | undefined
+    let cancelled = false
+    tauriListen('check-setup', () => { void maybeOpenSetup() })
+      .then((fn) => { if (cancelled) fn(); else unlisten = fn })
+    return () => { clearTimeout(t); cancelled = true; unlisten?.() }
   }, [])
   // kernel came up (fresh respawn or otherwise) ⇒ tear down the overlay/banner/installing state.
   useEffect(() => {
