@@ -20,6 +20,15 @@ async function tauriInvokeResult(cmd: string, args?: Record<string, unknown>): P
   const { invoke } = await import('@tauri-apps/api/core')
   await invoke(cmd, args)
 }
+// like tauriInvokeResult but returns the command's value — for query commands (kernel_env_status/discover_pythons/probe_python).
+async function tauriInvokeValue<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
+  if (!inTauri()) throw new Error('not running in the desktop app')
+  const { invoke } = await import('@tauri-apps/api/core')
+  return await invoke<T>(cmd, args)
+}
+// setup/onboarding contract (§0) — mirrors setup.rs PyInfo / EnvStatus.
+type PyInfo = { path: string; version: string; source: string; pip: boolean; missing: string[]; ready: boolean }
+type EnvStatus = { python_path: string | null; deps_ok: boolean; missing: string[] }
 async function tauriListen(event: string, cb: (payload: string) => void): Promise<() => void> {
   if (!inTauri()) return () => {}
   try {
@@ -28,7 +37,7 @@ async function tauriListen(event: string, cb: (payload: string) => void): Promis
   } catch { return () => {} }
 }
 
-const DEFAULT_WS = 'ws://localhost:8000/ws'
+const DEFAULT_WS = 'ws://127.0.0.1:8000/ws'  // IPv4 explicit — kernel binds 127.0.0.1 only; 'localhost' resolves to ::1 first on macOS and WKWebView won't fall back
 const SSH_TUNNEL_WS = 'ws://localhost:8422/ws'  // P7: local end of the Rust-owned SSH tunnel to a remote kernel
 const WS_URL = localStorage.getItem('ps_kernel_url') || DEFAULT_WS
 const WS_TOKEN = localStorage.getItem('ps_kernel_token') || ''
@@ -775,6 +784,16 @@ export default function App() {
   // kernel liveness: null=connecting, true=up, false=down (reconnecting with backoff)
   const [kernelUp, setKernelUp] = useState<boolean | null>(null)
   const [kernelStats, setKernelStats] = useState<{ rss_mb: number } | null>(null)
+  // first-run kernel setup (§0/T3): if the local kernel doesn't connect in ~6s and deps are missing,
+  // show an overlay to pick a Python + pip-install requirements-studio.txt, then respawn the kernel.
+  const [setupOpen, setSetupOpen] = useState(false)
+  const [envStatus, setEnvStatus] = useState<EnvStatus | null>(null)
+  const [pythons, setPythons] = useState<PyInfo[] | null>(null)  // null = scanning
+  const [selectedPy, setSelectedPy] = useState('')  // realpath of the selected candidate
+  const [installing, setInstalling] = useState(false)
+  const [installLog, setInstallLog] = useState<string[]>([])
+  const [installExit, setInstallExit] = useState<{ ok: boolean; code: number } | null>(null)
+  const [remoteStale, setRemoteStale] = useState(false)  // remote (SSH) kernel unreachable → banner, not the overlay
   // P16: GPU inventory — count + per-device mem/model occupancy, for the status bar and the load-device picker
   const [gpus, setGpus] = useState<{ count: number; devices: { index: number; name: string; mem_used_mb: number; mem_total_mb: number; models: string[] }[] } | null>(null)
   const [openDevice, setOpenDevice] = useState('')  // '' = Auto; else 'cuda:N' — picked in the "+ model" row
@@ -833,6 +852,8 @@ export default function App() {
   const splashClosed = useRef(false)  // fire close_splash exactly once (first kernelUp or 8s timeout)
   const authFailToasted = useRef(false)  // show the auth-failed toast once, not on every reconnect retry
   const openRef = useRef(open); openRef.current = open
+  const kernelUpRef = useRef(kernelUp); kernelUpRef.current = kernelUp  // read latest liveness inside the mount-once 6s trigger
+  const installLogRef = useRef<HTMLDivElement | null>(null)  // setup log box — auto-scroll to bottom on new pip lines
   const bootedRef = useRef(false)  // first catalog vs a reconnect resync — only the first adopts the kernel default
   function scheduleReconnect() {
     if (reconnectTimer.current != null) return
@@ -852,6 +873,12 @@ export default function App() {
       }
       probe.onerror = () => { try { probe.close() } catch { /* already closed */ } scheduleReconnect() }
     }, delay)
+  }
+  // after a kernel respawn: drop any 30s backoff so the fresh kernel is picked up in ~1s (not internals-changing — just resets the timer).
+  const resumeReconnect = () => {
+    reconnectAttempts.current = 0
+    if (reconnectTimer.current) { clearTimeout(reconnectTimer.current); reconnectTimer.current = null }
+    scheduleReconnect()
   }
   // webview-safe dialogs: inline inputs replace window.prompt, two-step "sure?" replaces window.confirm
   const [asking, setAsking] = useState<'hf' | 'editor' | 'path' | 'hf-dataset' | 'import-region' | null>(null)
@@ -1101,6 +1128,58 @@ export default function App() {
     }).then((fn) => { if (cancelled) fn(); else unlisten = fn })
     return () => { cancelled = true; unlisten?.() }
   }, [])
+  // T3: first-run kernel setup. Desktop app only — browser keeps today's reconnect-only behavior.
+  // rescan() re-probes the available Pythons and preselects the first ready one (else the first entry).
+  const rescan = () => {
+    setPythons(null)
+    tauriInvokeValue<PyInfo[]>('discover_pythons').then((list) => {
+      setPythons(list)
+      const pick = list.find((p) => p.ready) ?? list[0]
+      if (pick) setSelectedPy(pick.path)
+    }).catch((e) => { setPythons([]); toast(`[setup] ${e instanceof Error ? e.message : String(e)}`) })
+  }
+  // 6s after mount: if the local kernel still isn't up and its deps are missing, open the setup overlay.
+  useEffect(() => {
+    if (!inTauri()) return  // browser: unchanged
+    const t = window.setTimeout(async () => {
+      if (kernelUpRef.current === true) return  // kernel already came up — nothing to do
+      if (isRemoteConnected()) { setRemoteStale(true); return }  // remote mode → banner, don't fight the SSH flow
+      try {
+        const st = await tauriInvokeValue<EnvStatus>('kernel_env_status')
+        if (!st.deps_ok) { setEnvStatus(st); setSetupOpen(true); rescan() }
+        // deps_ok but not up yet ⇒ transient outage; the "reconnecting…" status already covers it.
+      } catch { /* command unavailable — leave the normal reconnect flow alone */ }
+    }, 6000)
+    return () => clearTimeout(t)
+  }, [])
+  // kernel came up (fresh respawn or otherwise) ⇒ tear down the overlay/banner/installing state.
+  useEffect(() => {
+    if (kernelUp) { setSetupOpen(false); setRemoteStale(false); setInstalling(false) }
+  }, [kernelUp])
+  // T3: pip install progress + completion (mount-once, same pattern as ssh-status; no-op outside Tauri).
+  useEffect(() => {
+    let unlisten: (() => void) | undefined
+    let cancelled = false
+    tauriListen('deps-progress', (line) => setInstallLog((l) => [...l.slice(-499), line]))
+      .then((fn) => { if (cancelled) fn(); else unlisten = fn })
+    return () => { cancelled = true; unlisten?.() }
+  }, [])
+  useEffect(() => {
+    let unlisten: (() => void) | undefined
+    let cancelled = false
+    tauriListen('deps-done', (payload) => {
+      let r: { ok: boolean; code: number }
+      try { r = JSON.parse(payload) } catch { return }
+      setInstalling(false)
+      setInstallExit(r)
+      if (r.ok) {
+        tauriInvokeResult('respawn_kernel').catch((e) => toast(`[setup] ${e instanceof Error ? e.message : String(e)}`))
+        resumeReconnect()  // kill the 30s backoff so the fresh kernel is picked up in ~1s
+      }
+    }).then((fn) => { if (cancelled) fn(); else unlisten = fn })
+    return () => { cancelled = true; unlisten?.() }
+  }, [])
+  useEffect(() => { const el = installLogRef.current; if (el) el.scrollTop = el.scrollHeight }, [installLog])
   useEffect(() => {
     if (!kernelUp) return
     const iv = setInterval(() => { sendTo(focused(), { type: 'stats' }); sendTo(focused(), { type: 'gpus' }) }, 15000)
@@ -1178,6 +1257,37 @@ export default function App() {
       })
       if (typeof picked === 'string') setSshKeyPath(picked)
     } catch { /* not in tauri / plugin unavailable */ }
+  }
+  // T3 setup actions — all Tauri-gated via the tauriInvoke* wrappers (throw/no-op in the browser).
+  const startInstall = () => {
+    setInstallLog([]); setInstallExit(null); setInstalling(true)
+    tauriInvokeResult('install_kernel_deps', { pythonPath: selectedPy })
+      .catch((e) => { setInstalling(false); toast(`[setup] ${e instanceof Error ? e.message : String(e)}`) })
+  }
+  const useThisPython = () => {
+    tauriInvokeResult('respawn_kernel', { pythonPath: selectedPy })
+      .then(() => resumeReconnect())
+      .catch((e) => toast(`[setup] ${e instanceof Error ? e.message : String(e)}`))
+  }
+  // native file picker for a custom Python (reuses browseSshKeyPath's dynamic-import pattern, no filter).
+  async function browsePython() {
+    if (!inTauri()) return
+    try {
+      const { open } = await import('@tauri-apps/plugin-dialog')
+      const picked = await open({ multiple: false, directory: false })
+      if (typeof picked !== 'string') return
+      const info = await tauriInvokeValue<PyInfo | null>('probe_python', { path: picked })
+      if (!info) { toast(`[setup] not a usable python: ${picked}`); return }
+      setPythons((list) => [info, ...(list ?? []).filter((p) => p.path !== info.path)])
+      setSelectedPy(info.path)
+    } catch (e) { toast(`[setup] ${e instanceof Error ? e.message : String(e)}`) }
+  }
+  // fall back to the local kernel: drop the remote/tunnel keys and reload.
+  const useLocalKernel = () => {
+    localStorage.removeItem('ps_kernel_url')
+    localStorage.removeItem('ps_kernel_token')
+    sessionStorage.removeItem('ps_tunnel_live')
+    window.location.reload()
   }
   // P7: SSH remote kernel connect/disconnect. Rust owns the tunnel + kernel lifecycle; we just
   // point WS_URL at the local tunnel port and reload once it reports success.
@@ -3257,6 +3367,101 @@ export default function App() {
           </div>
         )
       })()}
+      {setupOpen && (() => {
+        const sel = pythons?.find((p) => p.path === selectedPy) ?? null
+        return (
+          <div style={{ position: 'fixed', inset: 0, zIndex: 60, background: 'rgba(0,0,0,0.55)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+            <div style={{ width: 520, maxWidth: 'calc(100vw - 40px)', maxHeight: 'calc(100vh - 60px)', overflow: 'auto', background: 'var(--bg-1)', border: '1px solid var(--line-strong)', borderRadius: 14, boxShadow: '0 8px 32px rgba(0,0,0,0.45)', padding: 18 }}>
+              <strong style={{ color: 'var(--text-0)', fontSize: 15 }}>Kernel setup</strong>
+              <div style={{ ...hint, fontSize: 12, margin: '4px 0 14px' }}>
+                local kernel isn't starting — Python dependencies are missing
+                {envStatus && envStatus.missing.length > 0 && <><br />missing: {envStatus.missing.join(', ')}</>}
+              </div>
+
+              {pythons === null ? (
+                <div style={{ ...hint, fontSize: 12 }}>scanning…</div>
+              ) : pythons.length === 0 ? (
+                <div>
+                  <div style={{ ...hint, fontSize: 12, marginBottom: 8 }}>no Python found — install Python 3.10+ (e.g. brew install python) then rescan</div>
+                  <Btn onClick={rescan}>rescan</Btn>
+                </div>
+              ) : (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                  {pythons.map((p) => {
+                    const on = p.path === selectedPy
+                    return (
+                      <div key={p.path} onClick={() => !installing && setSelectedPy(p.path)}
+                        style={{ display: 'flex', alignItems: 'baseline', gap: 8, padding: '6px 8px', borderRadius: 10, cursor: installing ? 'default' : 'pointer',
+                          border: `1px solid ${on ? 'var(--accent)' : 'var(--line-strong)'}`, background: 'var(--bg-2)' }}>
+                        <span style={{ color: on ? 'var(--accent)' : 'var(--text-2)' }}>{on ? '●' : '○'}</span>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0, flex: 1 }}>
+                          <span className="mono" style={{ color: 'var(--text-1)', fontSize: 11.5, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{p.path}</span>
+                          <span style={{ ...hint, fontSize: 11 }}>
+                            {p.version} · {p.source}
+                            {p.ready
+                              ? <span style={{ color: 'var(--accent)' }}> · ready ✓</span>
+                              : <span style={{ color: 'var(--text-2)' }}> · missing: {(p.pip ? p.missing : ['pip', ...p.missing]).join(', ')}</span>}
+                          </span>
+                        </div>
+                      </div>
+                    )
+                  })}
+                </div>
+              )}
+
+              {pythons !== null && pythons.length > 0 && (
+                <div style={{ marginTop: 10, display: 'flex', gap: 8 }}>
+                  <Btn onClick={browsePython} disabled={installing}>Browse…</Btn>
+                  <Btn onClick={rescan} disabled={installing}>rescan</Btn>
+                </div>
+              )}
+
+              {sel && (
+                <div style={{ marginTop: 14 }}>
+                  {sel.ready ? (
+                    <Btn onClick={useThisPython} color="var(--accent)" disabled={!selectedPy || installing}>Use this Python</Btn>
+                  ) : (
+                    <>
+                      <Btn onClick={startInstall} color="var(--accent)" disabled={!selectedPy || installing}>{installing ? 'Installing…' : 'Install dependencies'}</Btn>
+                      <div style={{ ...hint, fontSize: 11, marginTop: 6 }}>~2GB download (torch) — may take several minutes</div>
+                    </>
+                  )}
+                </div>
+              )}
+
+              {(installLog.length > 0 || installing) && (
+                <div ref={installLogRef} className="mono" style={{ marginTop: 12, height: 180, overflow: 'auto', background: 'var(--bg-0)', border: '1px solid var(--line-strong)', borderRadius: 10, padding: 8, fontSize: 11, whiteSpace: 'pre-wrap', color: 'var(--text-1)' }}>
+                  {installLog.join('\n')}
+                </div>
+              )}
+
+              {installExit && !installExit.ok && (
+                <div style={{ marginTop: 12, padding: 10, border: '1px solid var(--line-strong)', borderRadius: 10, background: 'var(--bg-2)' }}>
+                  <div style={{ color: 'var(--text-0)', fontSize: 12 }}>pip failed (exit {installExit.code}) — see log above</div>
+                  <div style={{ ...hint, fontSize: 11, marginTop: 4 }}>externally-managed or offline? pick a different Python from the list</div>
+                </div>
+              )}
+
+              {!installing && installExit?.ok && (
+                <div style={{ ...hint, fontSize: 12, marginTop: 12 }}>starting kernel…</div>
+              )}
+
+              <div style={{ display: 'flex', gap: 14, marginTop: 16, ...hint, fontSize: 11 }}>
+                <span onClick={() => { tauriInvokeValue<EnvStatus>('kernel_env_status').then(setEnvStatus).catch(() => {}); rescan() }} style={{ cursor: 'pointer' }}>retry</span>
+                <span onClick={() => setSetupOpen(false)} style={{ cursor: 'pointer' }}>dismiss</span>
+                {localStorage.getItem('ps_kernel_url') && <span onClick={useLocalKernel} style={{ cursor: 'pointer' }}>use local kernel</span>}
+              </div>
+            </div>
+          </div>
+        )
+      })()}
+      {remoteStale && kernelUp === false && (
+        <div style={{ position: 'fixed', bottom: 40, left: '50%', transform: 'translateX(-50%)', zIndex: 55, background: 'var(--bg-1)', border: '1px solid var(--line-strong)', borderRadius: 10, boxShadow: '0 4px 16px rgba(0,0,0,0.4)', padding: '8px 12px', fontSize: 12, color: 'var(--text-1)', display: 'flex', gap: 12, alignItems: 'center' }}>
+          <span>remote kernel unreachable</span>
+          <span onClick={() => { resumeReconnect(); setRemoteStale(false) }} style={{ cursor: 'pointer', color: 'var(--accent)' }}>retry</span>
+          <span onClick={useLocalKernel} style={{ cursor: 'pointer', color: 'var(--accent)' }}>use local kernel</span>
+        </div>
+      )}
       {toasts.length > 0 && (
         <div className="toast-stack">
           {toasts.map((t) => <div key={t.id} className="toast" onClick={() => dismissToast(t.id)} title="dismiss">{t.text}</div>)}

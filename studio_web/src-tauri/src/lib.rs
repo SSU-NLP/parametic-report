@@ -8,14 +8,16 @@ use std::time::Duration;
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem, Submenu};
 use tauri::{Emitter, Manager};
 
+mod setup;
 mod ssh;
 use ssh::SshState;
 
 // The app owns the kernel: spawn on launch (unless one is already serving :8000 — dev/attach
 // mode), kill on exit. Lifecycle coupling is the whole point (STUDIO_PRODUCTION_PLAN P1').
-struct Kernel(Mutex<Option<Child>>);
+// `pub(crate)` so setup.rs (respawn_kernel) can reach the managed child.
+pub(crate) struct Kernel(pub(crate) Mutex<Option<Child>>);
 
-fn kernel_running() -> bool {
+pub(crate) fn kernel_running() -> bool {
     TcpStream::connect_timeout(
         &"127.0.0.1:8000".parse().unwrap(),
         Duration::from_millis(300),
@@ -23,7 +25,7 @@ fn kernel_running() -> bool {
     .is_ok()
 }
 
-fn studio_home() -> PathBuf {
+pub(crate) fn studio_home() -> PathBuf {
     std::env::var("PARAMETIC_STUDIO_HOME")
         .map(PathBuf::from)
         .unwrap_or_else(|_| {
@@ -37,7 +39,7 @@ fn studio_home() -> PathBuf {
 /// ~/.parametic_studio/config.json: {"python_path": "...", "kernel_dir": "...", "model": "..."}
 /// (system-python packaging: the kernel source lives in the repo checkout, python is the user's)
 /// python_path is optional — absent → try `python3`/`python` candidates at spawn time.
-fn load_config() -> (Option<String>, Option<PathBuf>, Option<String>) {
+pub(crate) fn load_config() -> (Option<String>, Option<PathBuf>, Option<String>) {
     let p = studio_home().join("config.json");
     if let Ok(mut f) = std::fs::File::open(&p) {
         let mut s = String::new();
@@ -78,7 +80,7 @@ fn bundled_kernel_dir(app: &tauri::AppHandle) -> Option<PathBuf> {
     }
 }
 
-fn spawn_kernel(app: &tauri::AppHandle) -> Option<Child> {
+pub(crate) fn spawn_kernel(app: &tauri::AppHandle) -> Option<Child> {
     if kernel_running() {
         log::info!("kernel already on :8000 — attach mode, not spawning");
         return None;
@@ -202,7 +204,12 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             close_splash,
             ssh::ssh_connect,
-            ssh::ssh_disconnect
+            ssh::ssh_disconnect,
+            setup::discover_pythons,
+            setup::probe_python,
+            setup::kernel_env_status,
+            setup::install_kernel_deps,
+            setup::respawn_kernel
         ])
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {

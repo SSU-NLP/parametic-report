@@ -37,7 +37,8 @@
     "active": true,
     "targets": "all",
     "resources": {
-      "resources/parametic_studio": "parametic_studio"
+      "resources/parametic_studio": "parametic_studio",
+      "resources/requirements-studio.txt": "requirements-studio.txt"
     },
     "windows": {
       "nsis": {
